@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://halo.dev/contracts/runtime.in.json",
+  "title": "runtime script input (setup/check/test)",
+  "type": "object",
+  "properties": {
+    "workdir": {
+      "type": "string",
+      "description": "Absolute worktree path."
+    },
+    "changed_files": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Narrowing for check/test (optional)."
+    }
+  },
+  "required": [
+    "workdir"
+  ],
+  "additionalProperties": false,
+  "description": "runtime script input, shared by setup/check/test (D1 §1.7)."
+}

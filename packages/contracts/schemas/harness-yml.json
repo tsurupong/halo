@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://halo.dev/contracts/harness-yml.json",
+  "title": ".harness.yml",
+  "type": "object",
+  "properties": {
+    "kinds": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "runtimes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Directory names under `runtime.d`.",
+            "minItems": 1
+          },
+          "prompt": {
+            "type": "string",
+            "description": "Path to the prompt template."
+          }
+        },
+        "required": [
+          "runtimes",
+          "prompt"
+        ],
+        "additionalProperties": false,
+        "description": "A single kind definition inside `.harness.yml` (D1 §1.8): which runtimes and prompt template a task kind resolves to."
+      },
+      "description": "Task kind definitions keyed by kind name.",
+      "minProperties": 1
+    }
+  },
+  "required": [
+    "kinds"
+  ],
+  "additionalProperties": false,
+  "description": "`.harness.yml` — required at the target repository root (D1 §1.8). Maps each `kind:<name>` label (default `code`) to its runtimes and prompt."
+}

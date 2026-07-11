@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://halo.dev/contracts/executor.in.json",
+  "title": "executor input",
+  "type": "object",
+  "properties": {
+    "prompt": {
+      "type": "string",
+      "description": "Prompt to run (context concatenated, prior failures re-injected)."
+    },
+    "workdir": {
+      "type": "string",
+      "description": "Absolute path of the disposable worktree."
+    },
+    "budget": {
+      "type": "object",
+      "properties": {
+        "max_turns": {
+          "type": "integer",
+          "description": "Turn ceiling.",
+          "default": 40
+        },
+        "timeout_sec": {
+          "type": "integer",
+          "description": "Timeout in seconds.",
+          "default": 900
+        }
+      },
+      "required": [
+        "max_turns",
+        "timeout_sec"
+      ],
+      "additionalProperties": false,
+      "description": "Execution budget for the executor."
+    }
+  },
+  "required": [
+    "prompt",
+    "workdir",
+    "budget"
+  ],
+  "additionalProperties": false,
+  "description": "executor input (D1 §1.3)."
+}

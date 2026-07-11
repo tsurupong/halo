@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://halo.dev/contracts/executor.out.json",
+  "title": "executor output",
+  "type": "object",
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": [
+        "done",
+        "stuck",
+        "timeout"
+      ],
+      "description": "Executor status; anything other than `done` routes to the failure path."
+    },
+    "summary": {
+      "type": "string",
+      "description": "Summary of the execution result."
+    },
+    "cost": {
+      "type": "object",
+      "additionalProperties": {},
+      "description": "Optional cost info (ccusage-equivalent) for observability."
+    }
+  },
+  "required": [
+    "status",
+    "summary"
+  ],
+  "additionalProperties": false,
+  "description": "executor output (D1 §1.3)."
+}

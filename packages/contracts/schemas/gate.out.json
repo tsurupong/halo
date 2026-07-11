@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://halo.dev/contracts/gate.out.json",
+  "title": "gate output (fail only)",
+  "type": "object",
+  "properties": {
+    "reason": {
+      "type": "string",
+      "description": "e.g. `coverage 87% < 90%`."
+    },
+    "hint": {
+      "type": "string",
+      "description": "e.g. `src/order.ts のテスト不足`."
+    },
+    "gate": {
+      "type": "string",
+      "description": "Name of the failing gate, e.g. `30-test`."
+    }
+  },
+  "required": [
+    "reason"
+  ],
+  "additionalProperties": false,
+  "description": "gate output, emitted on fail only (D1 §1.4)."
+}

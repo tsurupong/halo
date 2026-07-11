@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://halo.dev/contracts/sink.in.json",
+  "title": "sink input",
+  "type": "object",
+  "properties": {
+    "task_id": {
+      "type": "string"
+    },
+    "workdir": {
+      "type": "string",
+      "description": "Absolute worktree path of the artifact."
+    },
+    "summary": {
+      "type": "string",
+      "description": "executor's run summary."
+    }
+  },
+  "required": [
+    "task_id",
+    "workdir",
+    "summary"
+  ],
+  "additionalProperties": false,
+  "description": "sink input (D1 §1.5). Side effects only, no output."
+}

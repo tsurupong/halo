@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://halo.dev/contracts/task-source.out.json",
+  "title": "task-source output (op=next)",
+  "type": "object",
+  "properties": {
+    "task_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "`null` means no ready task; the core exits 0 immediately."
+    },
+    "title": {
+      "type": "string",
+      "description": "Task title."
+    },
+    "body": {
+      "type": "string",
+      "description": "Task body (requirement text)."
+    },
+    "kind": {
+      "type": "string",
+      "description": "`kind:<name>` label; defaults to `code`.",
+      "default": "code"
+    },
+    "spec_refs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "description": "A knowledge-graph node reference (D1 §4). Not a filesystem path.\n\nFormat: `kg://<node-type>/<node-id>` where node-type is one of `context` / `aggregate` / `term` / `document` / `decision` and node-id is a kebab-case slug unique within its type. loop-audit verifies existence.",
+        "format": "uri"
+      },
+      "description": "Frozen-requirement references as kg:// URIs; loop-audit verifies existence."
+    },
+    "write_set": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Parallel write-conflict avoidance (Phase 5, optional)."
+    }
+  },
+  "required": [
+    "task_id"
+  ],
+  "additionalProperties": false,
+  "description": "task-source output for `op=next` (D1 §1.1)."
+}

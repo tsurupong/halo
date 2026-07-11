@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://halo.dev/contracts/on-fail.in.json",
+  "title": "on-fail input",
+  "type": "object",
+  "properties": {
+    "task_id": {
+      "type": "string"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "retry_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "gate": {
+      "type": "string",
+      "description": "Failing gate name; `stuck`/`timeout` when executor-originated."
+    },
+    "workdir": {
+      "type": "string",
+      "description": "Absolute worktree path."
+    }
+  },
+  "required": [
+    "task_id",
+    "reason",
+    "retry_count"
+  ],
+  "additionalProperties": false,
+  "description": "on-fail input (D1 §1.6). Side effects only, no output."
+}

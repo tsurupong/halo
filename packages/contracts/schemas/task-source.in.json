@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://halo.dev/contracts/task-source.in.json",
+  "title": "task-source input",
+  "description": "task-source input, discriminated by `op` (D1 §1.1).",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "next"
+        }
+      },
+      "required": [
+        "op"
+      ],
+      "additionalProperties": false,
+      "description": "Fetch the next ready task (one)."
+    },
+    {
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "complete"
+        },
+        "task_id": {
+          "type": "string"
+        },
+        "pr_url": {
+          "type": "string",
+          "format": "uri"
+        }
+      },
+      "required": [
+        "op",
+        "task_id",
+        "pr_url"
+      ],
+      "additionalProperties": false,
+      "description": "Record task completion."
+    },
+    {
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "fail"
+        },
+        "task_id": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "retry_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "op",
+        "task_id",
+        "reason",
+        "retry_count"
+      ],
+      "additionalProperties": false,
+      "description": "Record task failure."
+    }
+  ]
+}

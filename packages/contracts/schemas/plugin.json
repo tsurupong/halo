@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://halo.dev/contracts/plugin.json",
+  "title": "plugin manifest",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Plugin identifier (e.g. `@halo/plugin-*`)."
+    },
+    "version": {
+      "type": "string",
+      "description": "The plugin's own semver.",
+      "pattern": "^\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$"
+    },
+    "port": {
+      "type": "string",
+      "enum": [
+        "task-source",
+        "context",
+        "executor",
+        "gate",
+        "sink",
+        "on-fail",
+        "runtime",
+        "trigger"
+      ],
+      "description": "The port this plugin belongs to."
+    },
+    "exec": {
+      "type": "string",
+      "description": "Relative path to the executable (bash / node / python all allowed)."
+    },
+    "order": {
+      "type": "integer",
+      "description": "Execution order (numeric-prefix equivalent). Defaults to the filename's numeric prefix when omitted."
+    },
+    "minAutonomy": {
+      "type": "string",
+      "enum": [
+        "L1",
+        "L2",
+        "L3"
+      ],
+      "description": "Autonomy filter for sinks etc. Undeclared = safest side (skipped < L3)."
+    },
+    "timeoutSec": {
+      "type": "integer",
+      "description": "Per-plugin execution timeout in seconds. Defaults to the port default.",
+      "minimum": 1
+    },
+    "env": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Environment variables injected at launch (name → default value / reference)."
+    }
+  },
+  "required": [
+    "name",
+    "version",
+    "port",
+    "exec"
+  ],
+  "additionalProperties": false,
+  "description": "plugin.json manifest (D1 §2). Every plugin declares this in its directory so the core has the metadata needed to launch it across the process boundary."
+}

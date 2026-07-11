@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://halo.dev/contracts/gate.in.json",
+  "title": "gate input",
+  "type": "object",
+  "properties": {
+    "task_id": {
+      "type": "string"
+    },
+    "workdir": {
+      "type": "string",
+      "description": "Absolute worktree path under inspection."
+    },
+    "changed_files": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "task_id",
+    "workdir",
+    "changed_files"
+  ],
+  "additionalProperties": false,
+  "description": "gate input (D1 §1.4)."
+}

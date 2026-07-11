@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://halo.dev/contracts/context.out.json",
+  "title": "context output",
+  "type": "object",
+  "properties": {
+    "fragments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "string",
+            "description": "e.g. `codegraph` / `knowledge` / `recent-failures`."
+          },
+          "content": {
+            "type": "string",
+            "description": "Text to inject."
+          },
+          "priority": {
+            "type": "integer",
+            "description": "Larger = higher priority; the core concatenates descending and truncates."
+          }
+        },
+        "required": [
+          "source",
+          "content",
+          "priority"
+        ],
+        "additionalProperties": false,
+        "description": "A context fragment, concatenated by the core in descending priority."
+      }
+    }
+  },
+  "required": [
+    "fragments"
+  ],
+  "additionalProperties": false,
+  "description": "context output (D1 §1.2). Input is the task-source `op=next` output."
+}
