@@ -68,4 +68,63 @@ describe('status (T26)', () => {
     await statusCommand(parseArgs([], {}), io(cap, true), { fs, now: NOW, spawn: noSpawn });
     expect(JSON.parse(cap.out()).stop).toBe(true);
   });
+
+  test('--profile resolves budget limits from the profile env file', async () => {
+    const fs = memFs({
+      files: {
+        '/repo/.halo/logs/iter_1.json': iterLog(1, 'passed', '2026-07-11T09:00:00Z'),
+        '/repo/.halo/profiles/nightly.env': 'DAILY_MAX_ITERATIONS=80\nDAILY_MAX_COST_USD=12\n',
+      },
+    });
+    const cap = captureStreams();
+    // limits を注入せず、--profile 経由でプロファイル env から解決させる。
+    await statusCommand(parseArgs(['--profile', 'nightly'], { valueFlags: ['profile'] }), io(cap, true), {
+      fs,
+      now: NOW,
+      spawn: noSpawn,
+    });
+    const out = JSON.parse(cap.out());
+    expect(out.budget.dailyMaxIterations).toBe(80);
+    expect(out.budget.dailyMaxCostUsd).toBe(12);
+    expect(out.budget.remainingIterations).toBe(79);
+  });
+
+  test('different --profile selects a different budget', async () => {
+    const fs = memFs({
+      files: {
+        '/repo/.halo/profiles/daytime-l1.env': 'DAILY_MAX_ITERATIONS=30\n',
+        '/repo/.halo/profiles/nightly.env': 'DAILY_MAX_ITERATIONS=80\n',
+      },
+    });
+    const cap = captureStreams();
+    await statusCommand(parseArgs(['--profile', 'daytime-l1'], { valueFlags: ['profile'] }), io(cap, true), {
+      fs,
+      now: NOW,
+      spawn: noSpawn,
+    });
+    expect(JSON.parse(cap.out()).budget.dailyMaxIterations).toBe(30);
+  });
+
+  test('missing profile file degrades gracefully to unlimited with a warning', async () => {
+    const fs = memFs();
+    const cap = captureStreams();
+    const code = await statusCommand(
+      parseArgs(['--profile', 'ghost'], { valueFlags: ['profile'] }),
+      io(cap, true),
+      { fs, now: NOW, spawn: noSpawn },
+    );
+    expect(code).toBe(EXIT.OK);
+    const out = JSON.parse(cap.out());
+    expect(out.budget.remainingIterations).toBeNull();
+    expect(cap.err()).toContain("profile 'ghost' not found");
+  });
+
+  test('no --profile leaves the budget unlimited', async () => {
+    const fs = memFs({
+      files: { '/repo/.halo/logs/iter_1.json': iterLog(1, 'passed', '2026-07-11T09:00:00Z') },
+    });
+    const cap = captureStreams();
+    await statusCommand(parseArgs([], {}), io(cap, true), { fs, now: NOW, spawn: noSpawn });
+    expect(JSON.parse(cap.out()).budget.remainingIterations).toBeNull();
+  });
 });

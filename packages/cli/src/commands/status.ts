@@ -8,6 +8,7 @@ import { listTriggers, type SpawnAdapter } from '../core-ext/triggers.js';
 import {
   checkBudget,
   isIterationLogName,
+  parseEnvFile,
   type BudgetStatus,
   type IterationLog,
   type BudgetLimits,
@@ -18,7 +19,7 @@ export interface StatusDeps {
   now: number;
   /** listTriggers 用 (status では spawn しないがコンテキスト整合のため受ける)。 */
   spawn: SpawnAdapter;
-  /** 予算上限 (プロファイル由来)。テストで注入。既定は無制限扱い。 */
+  /** 予算上限。テスト注入用の上書き。未指定時は --profile のプロファイル env から解決する。 */
   limits?: BudgetLimits;
 }
 
@@ -27,6 +28,42 @@ function haloDirOf(cwd: string): string {
 }
 function join(a: string, b: string): string {
   return `${a.replace(/\/$/, '')}/${b.replace(/^\//, '')}`;
+}
+
+/** プロファイル env の予算キー (DAILY_MAX_*) を BudgetLimits に写像する。純粋。 */
+export function parseBudgetLimits(env: Record<string, string>): BudgetLimits {
+  const limits: BudgetLimits = {};
+  const iter = Number(env.DAILY_MAX_ITERATIONS);
+  if (env.DAILY_MAX_ITERATIONS !== undefined && Number.isFinite(iter)) {
+    limits.dailyMaxIterations = iter;
+  }
+  const cost = Number(env.DAILY_MAX_COST_USD);
+  if (env.DAILY_MAX_COST_USD !== undefined && Number.isFinite(cost)) {
+    limits.dailyMaxCostUsd = cost;
+  }
+  return limits;
+}
+
+/**
+ * `--profile <name>` の env (.halo/profiles/<name>.env) から予算上限を解決する (D3 §2.5)。
+ * profile 未指定・ファイル不在・読み取り失敗はいずれも無制限扱い (graceful, status は非致命)。
+ * 不在時は io.warn で利用者に通知する。
+ */
+async function resolveProfileLimits(
+  profilesDir: string,
+  profile: string | undefined,
+  fs: CliFs,
+  io: Io,
+): Promise<BudgetLimits> {
+  if (profile === undefined) return {};
+  let body: string;
+  try {
+    body = await fs.readFile(join(profilesDir, `${profile}.env`));
+  } catch {
+    io.warn(`warning: profile '${profile}' not found in ${profilesDir}/; showing unlimited budget.`);
+    return {};
+  }
+  return parseBudgetLimits(parseEnvFile(body));
 }
 
 /** logs/ から最新 iter_N.json を読む (core に lastRun が無いため CLI 側で集約)。 */
@@ -56,15 +93,19 @@ export async function statusCommand(
   io: Io,
   deps: StatusDeps,
 ): Promise<ExitCode> {
-  void stringFlag(parsed, 'profile');
+  const profile = stringFlag(parsed, 'profile');
   const haloDir = haloDirOf(io.flags.cwd);
   const logDir = join(haloDir, 'logs');
+  const profilesDir = stringFlag(parsed, 'profiles-dir') ?? join(haloDir, 'profiles');
+
+  // limits: テスト注入 (deps.limits) 優先、無ければ --profile の env から解決 (D3 §2.5)。
+  const limits = deps.limits ?? (await resolveProfileLimits(profilesDir, profile, deps.fs, io));
 
   const budget: BudgetStatus = await checkBudget({
     logDir,
     fs: deps.fs,
     now: deps.now,
-    ...(deps.limits ?? {}),
+    ...limits,
   });
   const lastRun = await loadLastRun(logDir, deps.fs);
   const stopPresent = await deps.fs.exists(join(haloDir, 'STOP'));

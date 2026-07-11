@@ -761,6 +761,8 @@ executor は自らのスタックを stdout の `status` で表明する。
 - 生成には TS 型 → JSON Schema 変換（例: `ts-json-schema-generator` 相当）を用いる。生成コマンドと CI での乖離検出（生成物がコミット済みと一致するか）は D8 テスト戦略書で規定する。
 - TS プラグイン・コアは型定義を直接 import して**コンパイル時**に契約を守る。
 
+> **決定（`additionalProperties: false`）**: 生成される Schema は全 12 契約で `additionalProperties: false`（手書き例より厳格）とする。多言語プラグインの typo・未文書フィールドを早期検出することを優先する意図的な決定である。将来、前方互換が必要になった境界（例: `executor.out`）が生じた場合のみ、その契約に限って個別に緩和を検討する。
+
 ### 6.2 非 TS プラグインでの検証
 
 プラグインは任意言語であるため、bash / Python 等の非 TS プラグインは**実行時に JSON Schema で自己検証**する経路を提供する。

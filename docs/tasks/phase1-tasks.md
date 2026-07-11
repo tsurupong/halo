@@ -147,3 +147,18 @@ CLI はロジックを持たず core へ委譲（D3 §0, §6）。
 
 T01 → T02/T04 → T06 → T07 → T08 → T10 → T16 → T20 → T21 → T38。
 安全不変条件（T32 gate-loop-audit）は「初回の無人実行前に存在必須」（要件 §11.1）のため、M5 の中で優先度最上位。M4 の `run`（T23）と M5 の task-source/executor/gate/runtime/sink/on-fail/trigger が揃って初めて Phase 1 完了基準①の 1 サイクル無人起動が検証可能になる。
+
+---
+
+## 繰越（Phase 2 フォローアップ）
+
+Phase 1 で `packages/cli` 内に暫定配置した core-ext 4 モジュールは、Phase 2 で `packages/core` へ昇格する。D3 §6 委譲マップ整合のため、CLI は「引数→委譲」のみを持つ原則（D3 §0）へ収束させる。
+
+| 項目 | 現状（Phase 1） | Phase 2 での移設先 | 理由 |
+|---|---|---|---|
+| scaffold（`project init` / `doctor --fix` の骨格生成） | `packages/cli/src/core-ext/scaffold.ts` | `packages/core` | 生成物定義は CLI 非依存のドメインロジック。D3 §6 委譲マップは core を想定 |
+| killswitch（STOP 配置/除去） | `packages/cli/src/core-ext/killswitch.ts` | `packages/core` | 実行制御の中核。CLI は薄い委譲に留めるべき |
+| doctor（9 検査の probe 集約） | `packages/cli/src/core-ext/doctor.ts` | `packages/core` | 自己診断ロジックは core 責務。probe の OS 依存部のみ CLI に残す |
+| triggers（install/uninstall/list 委譲・discovery） | `packages/cli/src/core-ext/triggers.ts` | `packages/core` | trigger discovery は core の port 解決と同型。D1 §1.9 / D3 §2.3 整合 |
+
+> **前提**: Phase 1 では core に該当ヘルパが無いため CLI 側へ暫定配置した（各モジュール冒頭コメント参照）。移設時は既存の純粋関数/fs シーム構造を保ち、CLI 側は再エクスポート経由で後方互換を維持する。

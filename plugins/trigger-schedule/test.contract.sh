@@ -36,17 +36,27 @@ HALO_HOME="$HALO_HOME" bash "$DIR/fire" >/dev/null 2>&1
 HALO_HOME="$TMP/missing" bash "$DIR/fire" nightly >/dev/null 2>&1
 [[ $? -ne 0 ]] && echo "PASS  fire without halo bin -> nonzero" || { echo "FAIL  fire missing bin"; fail=1; }
 
-# --- schtasks.exe スタブ（install/uninstall 用） ---
+# --- schtasks.exe スタブ（install/uninstall 用）: /Create の全引数を記録する ---
 mkdir -p "$TMP/bin"
-cat >"$TMP/bin/schtasks.exe" <<'STUB'
+cat >"$TMP/bin/schtasks.exe" <<STUB
 #!/usr/bin/env bash
+for a in "\$@"; do [[ "\$a" == /Create ]] && { printf '%s\n' "\$*" > "$TMP/schtasks.create"; break; }; done
 exit 0
 STUB
 chmod +x "$TMP/bin/schtasks.exe"
 export PATH="$TMP/bin:$PATH"
 
-PATH="$TMP/bin:$PATH" bash "$DIR/install.sh" nightly >/dev/null 2>&1
+INSTALL_BIN="$HALO_HOME/node_modules/.bin/halo"
+PATH="$TMP/bin:$PATH" HALO_HOME="$HALO_HOME" HALO_BIN="$INSTALL_BIN" bash "$DIR/install.sh" nightly >/dev/null 2>&1
 [[ $? -eq 0 ]] && echo "PASS  install -> exit 0" || { echo "FAIL  install exit"; fail=1; }
+
+# --- install: TR 文字列へ HALO_BIN/HALO_HOME が永続化されているか（発火時フォールバック防止） ---
+CREATE_ARGS="$(cat "$TMP/schtasks.create" 2>/dev/null)"
+if [[ "$CREATE_ARGS" == *"HALO_HOME=\"$HALO_HOME\""* && "$CREATE_ARGS" == *"HALO_BIN=\"$INSTALL_BIN\""* ]]; then
+  echo "PASS  install persists HALO_BIN/HALO_HOME into TR string"
+else
+  echo "FAIL  TR string missing env: [$CREATE_ARGS]"; fail=1
+fi
 
 PATH="$TMP/bin:$PATH" bash "$DIR/uninstall.sh" nightly >/dev/null 2>&1
 [[ $? -eq 0 ]] && echo "PASS  uninstall -> exit 0" || { echo "FAIL  uninstall exit"; fail=1; }
