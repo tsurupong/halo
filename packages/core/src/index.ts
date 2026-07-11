@@ -9,3 +9,5 @@ export * from './discovery.js';
 export * from './runPort.js';
 export * from './budget.js';
 export * from './autonomy.js';
+export * from './preflight.js';
+export * from './loop.js';
