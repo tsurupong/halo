@@ -1,0 +1,7 @@
+{
+  "name": "@halo/plugin-on-fail-record",
+  "version": "1.0.0",
+  "port": "on-fail",
+  "exec": "./record.sh",
+  "order": 10
+}

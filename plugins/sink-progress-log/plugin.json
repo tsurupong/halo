@@ -1,0 +1,8 @@
+{
+  "name": "@halo/plugin-sink-progress-log",
+  "version": "1.0.0",
+  "port": "sink",
+  "exec": "./log.sh",
+  "order": 20,
+  "minAutonomy": "L1"
+}

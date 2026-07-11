@@ -1,0 +1,7 @@
+{
+  "name": "@halo/plugin-executor-claude",
+  "version": "1.0.0",
+  "port": "executor",
+  "exec": "./run.sh",
+  "timeoutSec": 960
+}

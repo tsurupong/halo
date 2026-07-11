@@ -1,0 +1,7 @@
+{
+  "name": "@halo/plugin-gate-runtime-check-typecheck",
+  "version": "1.0.0",
+  "port": "gate",
+  "exec": "./run.sh",
+  "order": 10
+}
