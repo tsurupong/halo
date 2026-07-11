@@ -394,8 +394,8 @@ Node/TypeScript の成果物を扱う runtime 束。3 スクリプト。
 set -uo pipefail
 workdir="$(jq -r '.workdir' < /dev/stdin)"
 cd "$workdir"
-pnpm exec tsc --noEmit    2>&1 >&2 || exit 2   # 診断は stderr へ、fail は exit 2
-pnpm exec eslint .        2>&1 >&2 || exit 2
+pnpm exec tsc --noEmit    >&2 2>&1 || exit 2   # 診断は stderr へ、fail は exit 2
+pnpm exec eslint .        >&2 2>&1 || exit 2
 exit 0
 ```
 

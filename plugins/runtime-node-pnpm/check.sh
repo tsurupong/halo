@@ -12,6 +12,6 @@ if [[ -z "$workdir" ]]; then
 fi
 cd "$workdir" || { echo "runtime-node-pnpm/check: cd 失敗: $workdir" >&2; exit 2; }
 
-pnpm exec tsc --noEmit 2>&1 >&2 || exit 2
-pnpm exec eslint .     2>&1 >&2 || exit 2
+pnpm exec tsc --noEmit >&2 2>&1 || exit 2
+pnpm exec eslint .     >&2 2>&1 || exit 2
 exit 0

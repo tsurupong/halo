@@ -12,6 +12,7 @@ trap 'rm -rf "$TMP"' EXIT
 mkdir -p "$TMP/bin"
 cat >"$TMP/bin/pnpm" <<'STUB'
 #!/usr/bin/env bash
+echo "pnpm stub stdout noise: $*"
 echo "pnpm stub called: $*" >&2
 exit "${STUB_EXIT:-0}"
 STUB
@@ -24,12 +25,17 @@ INPUT="$(jq -cn --arg w "$TMP/wt" '{workdir:$w, changed_files:["src/a.ts"]}')"
 fail=0
 run_case() {
   local script="$1" expect="$2" stub_exit="$3" label="$4"
-  STUB_EXIT="$stub_exit" bash "$DIR/$script" <<<"$INPUT" >/dev/null 2>&1
+  local out
+  out="$(STUB_EXIT="$stub_exit" bash "$DIR/$script" <<<"$INPUT" 2>/dev/null)"
   local got=$?
   if [[ "$got" -eq "$expect" ]]; then
     echo "PASS  $label ($script exit=$got)"
   else
     echo "FAIL  $label ($script expected=$expect got=$got)"; fail=1
+  fi
+  # stdout は JSON 契約チャネル: runtime スクリプトは何も書いてはならない（D1 §3.2）
+  if [[ -n "$out" ]]; then
+    echo "FAIL  $label stdout must be empty, got: $out"; fail=1
   fi
 }
 

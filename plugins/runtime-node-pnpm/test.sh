@@ -12,5 +12,5 @@ if [[ -z "$workdir" ]]; then
 fi
 cd "$workdir" || { echo "runtime-node-pnpm/test: cd 失敗: $workdir" >&2; exit 2; }
 
-pnpm exec vitest run 2>&1 >&2 || exit 2
+pnpm exec vitest run >&2 2>&1 || exit 2
 exit 0

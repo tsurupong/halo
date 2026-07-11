@@ -5,6 +5,7 @@
 set -euo pipefail
 
 PROFILE="${1:?profile required}"
+[[ "$PROFILE" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "invalid profile name: $PROFILE" >&2; exit 1; }
 TASK_NAME="HALO_${PROFILE}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FIRE="$SCRIPT_DIR/fire"

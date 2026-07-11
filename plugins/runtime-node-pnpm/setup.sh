@@ -20,5 +20,5 @@ if [[ -n "${PNPM_STORE_DIR:-}" ]]; then
 fi
 
 # オフライン優先（ネットワーク非依存・ハードリンク共有）。
-pnpm install --offline --frozen-lockfile "${store_args[@]}" 2>&1 >&2 || exit 2
+pnpm install --offline --frozen-lockfile "${store_args[@]}" >&2 2>&1 || exit 2
 exit 0
