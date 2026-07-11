@@ -5,7 +5,7 @@
 | 項目 | 内容 |
 |---|---|
 | 対象ポート | ④ gate / ⑤ sink / ⑥ on-fail |
-| 典拠 | [HALO要件定義書](../HALO要件定義書.md) §4.2④⑤⑥・§7・§11、[ADR-0004](../adr/0004-self-modification-prohibition.md)、[ADR-0006](../adr/0006-autonomy-levels.md) |
+| 典拠 | [HALO要件定義書](../../../docs/HALO要件定義書.md) §4.2④⑤⑥・§7・§11、[ADR-0004](../adr/0004-self-modification-prohibition.md)、[ADR-0006](../adr/0006-autonomy-levels.md) |
 | 関連ADR | [ADR-0001 ポート＆アダプタ／統一コントラクト](../adr/0001-ports-and-adapters-unified-contract.md)、[ADR-0002 使い捨てworktree](../adr/0002-disposable-worktree.md) |
 | ステータス | 詳細設計 |
 

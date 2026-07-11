@@ -14,11 +14,6 @@ env:
   NODE_VERSION: '22'
   PNPM_VERSION: '10.14.0'
 
-# Repo layout: docs/ (設計書・要件定義書) と product/ (実装) に分離。ビルド系は product/ 配下。
-defaults:
-  run:
-    working-directory: product
-
 jobs:
   # ── ① core unit tests + coverage (coverage is WARN, never blocks — D8 §5.2/§11.2) ──
   unit:
@@ -33,7 +28,6 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
-          cache-dependency-path: product/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r build
       # Unit layer excludes the regression + contract files (their own jobs own them).
@@ -57,7 +51,6 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
-          cache-dependency-path: product/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r build
       - name: loop regression
@@ -76,7 +69,6 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
-          cache-dependency-path: product/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r build
       - name: plugin contract test
