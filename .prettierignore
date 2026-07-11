@@ -1,0 +1,10 @@
+node_modules/
+dist/
+coverage/
+packages/*/schemas/
+
+# Prose docs are not code-formatted.
+*.md
+docs/
+.remember/
+pnpm-lock.yaml

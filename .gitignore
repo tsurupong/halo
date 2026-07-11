@@ -1,0 +1,16 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Test / coverage
+coverage/
+
+# HALO local state (never committed; see 要件 §8.2)
+.halo/
+
+# Logs and temp
+*.log
+.DS_Store
