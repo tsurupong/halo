@@ -44,9 +44,16 @@ importers:
       '@halo/core':
         specifier: workspace:*
         version: link:../core
+    devDependencies:
+      '@types/node':
+        specifier: ^22.20.1
+        version: 22.20.1
 
   packages/contracts:
     devDependencies:
+      '@types/node':
+        specifier: ^22.20.1
+        version: 22.20.1
       ajv:
         specifier: ^8.20.0
         version: 8.20.0
@@ -59,6 +66,10 @@ importers:
       '@halo/contracts':
         specifier: workspace:*
         version: link:../contracts
+    devDependencies:
+      '@types/node':
+        specifier: ^22.20.1
+        version: 22.20.1
 
 packages:
 

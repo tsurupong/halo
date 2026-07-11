@@ -18,5 +18,8 @@
   },
   "dependencies": {
     "@halo/contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1"
   }
 }
