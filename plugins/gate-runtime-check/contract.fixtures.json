@@ -1,0 +1,20 @@
+{
+  "description": "gate-runtime-check (10-typecheck / 30-test) documented I/O (D8 §3.2). Shared gate contract.",
+  "cases": [
+    {
+      "schema": "gate.in.json",
+      "expect": "valid",
+      "data": { "task_id": "42", "workdir": "/tmp/wt", "changed_files": [] }
+    },
+    {
+      "schema": "gate.out.json",
+      "expect": "valid",
+      "data": {
+        "reason": "coverage 87% < 90%",
+        "hint": "src/order.ts のテスト不足",
+        "gate": "30-test"
+      }
+    },
+    { "schema": "gate.out.json", "expect": "invalid", "data": { "hint": "no reason" } }
+  ]
+}

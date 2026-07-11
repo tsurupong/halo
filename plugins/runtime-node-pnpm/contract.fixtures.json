@@ -1,0 +1,12 @@
+{
+  "description": "runtime-node-pnpm documented input (D8 §3.2). Shared by setup/check/test; no stdout output.",
+  "cases": [
+    { "schema": "runtime.in.json", "expect": "valid", "data": { "workdir": "/tmp/wt" } },
+    {
+      "schema": "runtime.in.json",
+      "expect": "valid",
+      "data": { "workdir": "/tmp/wt", "changed_files": ["src/a.ts", "src/b.ts"] }
+    },
+    { "schema": "runtime.in.json", "expect": "invalid", "data": { "changed_files": ["src/a.ts"] } }
+  ]
+}

@@ -1,0 +1,78 @@
+# HALO CI (T38, D8 §5). PR-required jobs are the three zero-billing / deterministic
+# layers (D8 §5.1 table): unit, loop-regression, contract (+ schema-drift, §3.3).
+# The paid, non-deterministic E2E dry-run (D8 §4/§5.1 row 4) is NOT run here — it is
+# a manual / pre-release smoke (see test/e2e/smoke.md, scripts/e2e-dry-run.sh).
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+env:
+  # WSL2/runner: keep everything on the default (ext4-equivalent) FS (D1 §1.7).
+  NODE_VERSION: '22'
+  PNPM_VERSION: '10.14.0'
+
+jobs:
+  # ── ① core unit tests + coverage (coverage is WARN, never blocks — D8 §5.2/§11.2) ──
+  unit:
+    name: unit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r build
+      # Unit layer excludes the regression + contract files (their own jobs own them).
+      - name: unit tests
+        run: pnpm vitest run --exclude '**/loop.regression.test.ts' --exclude '**/plugin-contract.test.ts' --exclude '**/schema-drift.test.ts'
+      # Coverage is advisory in Phase 1 — report but do not fail the job (要件 §11.2).
+      - name: coverage (warn-only)
+        continue-on-error: true
+        run: pnpm vitest run --coverage --exclude '**/loop.regression.test.ts' --exclude '**/plugin-contract.test.ts' --exclude '**/schema-drift.test.ts'
+
+  # ── ② loop regression (fixture executor = fixed JSON, zero billing — D8 §2) ──
+  loop-regression:
+    name: loop-regression
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r build
+      - name: loop regression
+        run: pnpm vitest run loop.regression
+
+  # ── ③ contract + schema drift (distributed schemas vs plugin I/O and TS types) ──
+  contract:
+    name: contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r build
+      - name: plugin contract test
+        run: pnpm test:contract
+      # Schema drift (D8 §3.3): committed schemas/*.json must match TS-type regeneration.
+      - name: schema drift
+        run: pnpm vitest run schema-drift

@@ -1,0 +1,31 @@
+{
+  "description": "on-fail-record documented input (D8 §3.2). Side effects only, no output.",
+  "cases": [
+    {
+      "schema": "on-fail.in.json",
+      "expect": "valid",
+      "data": {
+        "task_id": "42",
+        "reason": "gate 30-test failed",
+        "retry_count": 1,
+        "gate": "30-test",
+        "workdir": "/tmp/wt"
+      }
+    },
+    {
+      "schema": "on-fail.in.json",
+      "expect": "valid",
+      "data": { "task_id": "42", "reason": "executor stuck", "retry_count": 0 }
+    },
+    {
+      "schema": "on-fail.in.json",
+      "expect": "invalid",
+      "data": { "task_id": "42", "retry_count": 1 }
+    },
+    {
+      "schema": "on-fail.in.json",
+      "expect": "invalid",
+      "data": { "task_id": "42", "reason": "x", "retry_count": -1 }
+    }
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "description": "executor-claude documented I/O (D8 §3.2). status enum + summary required; exit judged by status, not code.",
+  "cases": [
+    {
+      "schema": "executor.in.json",
+      "expect": "valid",
+      "data": {
+        "prompt": "do the thing",
+        "workdir": "/tmp/wt",
+        "budget": { "max_turns": 40, "timeout_sec": 900 }
+      }
+    },
+    {
+      "schema": "executor.in.json",
+      "expect": "invalid",
+      "data": { "prompt": "no workdir", "budget": { "max_turns": 40, "timeout_sec": 900 } }
+    },
+    {
+      "schema": "executor.in.json",
+      "expect": "invalid",
+      "data": { "prompt": "p", "workdir": "/tmp/wt", "budget": { "max_turns": 40 } }
+    },
+    {
+      "schema": "executor.out.json",
+      "expect": "valid",
+      "data": { "status": "done", "summary": "patch applied, all green" }
+    },
+    {
+      "schema": "executor.out.json",
+      "expect": "valid",
+      "data": { "status": "stuck", "summary": "cannot resolve", "cost": { "usd_estimate": 0.12 } }
+    },
+    {
+      "schema": "executor.out.json",
+      "expect": "invalid",
+      "data": { "status": "nope", "summary": "x" }
+    },
+    { "schema": "executor.out.json", "expect": "invalid", "data": { "status": "done" } }
+  ]
+}

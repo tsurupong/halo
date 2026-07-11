@@ -5,7 +5,7 @@ import type { CliFs } from './core-ext/fs.js';
 import type { SpawnAdapter, SpawnResult, TriggerContext } from './core-ext/triggers.js';
 import type { CommandProbe, DoctorProbes } from './core-ext/doctor.js';
 import type { RunHooks } from './commands/run.js';
-import { runtimeError } from './exit-codes.js';
+import { createRunHooks } from './core-ext/run-wiring.js';
 
 /** bash アダプタ script を実行する SpawnAdapter (D1 §1.9)。 */
 export function nodeSpawnAdapter(): SpawnAdapter {
@@ -99,18 +99,10 @@ export function nodeDoctorProbes(cwd: string, fs: CliFs, spawn: SpawnAdapter): D
 }
 
 /**
- * 既定 RunHooks。preflight/loop の完全配線は M5 (executor/runtime/ports) に依存する。
- * M4 時点では未配線であることを明示的な runtime error で示す (黙って握り潰さない)。
+ * 既定 RunHooks (M5/M6 配線済み)。core の discovery / preflight / loop / runPort を
+ * 対象リポジトリの `.halo/ports/*.d` に対して結線する。実 I/O シームの束ねは
+ * run-wiring が担い、ここはその既定 (node) 構成を返すだけ (D3 §0/§6, D2 §2)。
  */
 export function defaultRunHooks(): RunHooks {
-  const notWired = (phase: string) => (): never => {
-    throw runtimeError(`run.${phase} は M5 ランタイム配線 (executor/runtime/ports) が必要です`, {
-      hint: 'M5 実装後に既定 hooks を core.preflight / core.runLoop へ結線する',
-    });
-  };
-  return {
-    preflightLight: notWired('preflightLight') as RunHooks['preflightLight'],
-    preflightHeavy: notWired('preflightHeavy') as RunHooks['preflightHeavy'],
-    runLoop: notWired('runLoop') as RunHooks['runLoop'],
-  };
+  return createRunHooks();
 }
