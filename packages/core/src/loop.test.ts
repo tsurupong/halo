@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ContextOut } from '@halo/contracts';
 import type { DiscoveredPlugin } from './discovery.js';
-import type { RunPortResult } from './runPort.js';
+import { RunPortError, type RunPortResult } from './runPort.js';
 import type { IterationInput, Logger } from './logger.js';
 import {
   buildPrompt,
@@ -59,6 +59,8 @@ function harness(opts: {
   config?: Partial<LoopDeps['config']>;
   isStopPresent?: LoopDeps['isStopPresent'];
   isBudgetOk?: LoopDeps['isBudgetOk'];
+  preflightHeavy?: LoopDeps['preflightHeavy'];
+  resolvePrUrl?: LoopDeps['resolvePrUrl'];
 }): Harness {
   const logs: IterationInput[] = [];
   const calls: Array<{ name: string; stdin: unknown }> = [];
@@ -92,6 +94,8 @@ function harness(opts: {
     removeWorktree: (workdir) => {
       removed.push(workdir);
     },
+    ...(opts.preflightHeavy ? { preflightHeavy: opts.preflightHeavy } : {}),
+    ...(opts.resolvePrUrl ? { resolvePrUrl: opts.resolvePrUrl } : {}),
   };
   return { deps, logs, calls, removed };
 }
@@ -224,6 +228,8 @@ describe('runLoop', () => {
     });
     const h = harness({
       ports,
+      // A PR url was produced → op=complete is expected to fire (see L1 test below).
+      resolvePrUrl: () => 'https://example/pr/1',
       respond: (name, stdin, i) => {
         if (name === 'ts') {
           if ((stdin as { op: string }).op === 'complete') return res();
@@ -358,6 +364,186 @@ describe('runLoop', () => {
     });
     const result = await runLoop(h.deps);
     expect(result.endReason).toBe('TIMEOUT');
+  });
+
+  // H1: a RunPortError from the executor must not escape and crash the loop.
+  it('folds an executor spawn failure to the failure path instead of crashing (H1)', async () => {
+    const ports = emptyPorts({
+      taskSource: [plug('task-source', 'ts')],
+      executor: [plug('executor', 'ex')],
+      gate: [plug('gate', 'g')],
+      onFail: [plug('on-fail', 'rec')],
+    });
+    const h = harness({
+      ports,
+      respond: (name, _stdin, i) => {
+        if (name === 'ts') return i === 0 ? jsonRes({ task_id: '1' }) : jsonRes({ task_id: null });
+        if (name === 'ex') throw new RunPortError('spawn ENOENT');
+        return res();
+      },
+    });
+    const result = await runLoop(h.deps);
+    expect(result.endReason).toBe('NO_TASK');
+    expect(result.iterations[0]).toEqual(expect.objectContaining({ executorStatus: 'error', outcome: 'failed' }));
+    expect(h.calls.some((c) => c.name === 'rec')).toBe(true); // on-fail still recorded
+    expect(h.removed).toEqual(['/wt/1']); // worktree cleaned up
+  });
+
+  // H1: a gate spawn failure folds to a safe-side failing gate (logical-AND fails closed).
+  it('folds a gate spawn failure to a failing gate without crashing (H1)', async () => {
+    const ports = emptyPorts({
+      taskSource: [plug('task-source', 'ts')],
+      executor: [plug('executor', 'ex')],
+      gate: [plug('gate', 'g')],
+      onFail: [plug('on-fail', 'rec')],
+    });
+    const h = harness({
+      ports,
+      respond: (name, _stdin, i) => {
+        if (name === 'ts') return i === 0 ? jsonRes({ task_id: '1' }) : jsonRes({ task_id: null });
+        if (name === 'ex') return jsonRes({ status: 'done', summary: 'ok' });
+        if (name === 'g') throw new RunPortError('spawn ENOENT');
+        return res();
+      },
+    });
+    const result = await runLoop(h.deps);
+    expect(result.endReason).toBe('NO_TASK');
+    expect(result.iterations[0]).toEqual(expect.objectContaining({ outcome: 'failed' }));
+    expect(result.iterations[0]?.gateFailure?.reason).toContain("gate 'g' failed to run");
+  });
+
+  // M1: each plugin's manifest timeoutSec is forwarded to the runner opts.
+  it('forwards each plugin manifest timeoutSec to the runner (M1)', async () => {
+    const ts = plug('task-source', 'ts');
+    ts.manifest.timeoutSec = 12;
+    const gate = plug('gate', 'g');
+    gate.manifest.timeoutSec = 34;
+    const ports = emptyPorts({ taskSource: [ts], executor: [plug('executor', 'ex')], gate: [gate] });
+    const seen = new Map<string, number | undefined>();
+    const h = harness({
+      ports,
+      respond: (name, _stdin, i) => {
+        if (name === 'ts') return i === 0 ? jsonRes({ task_id: '1' }) : jsonRes({ task_id: null });
+        if (name === 'ex') return jsonRes({ status: 'done', summary: 'ok' });
+        return res({ exitCode: 0 });
+      },
+    });
+    const inner = h.deps.runner;
+    h.deps.runner = async (plugin, stdin, opts) => {
+      if (!seen.has(plugin.name)) seen.set(plugin.name, opts?.timeoutSec);
+      return inner(plugin, stdin, opts);
+    };
+    await runLoop(h.deps);
+    expect(seen.get('ts')).toBe(12);
+    expect(seen.get('g')).toBe(34);
+  });
+
+  // M2: the executor process wall sits a grace margin past the budget timeout.
+  it('gives the executor process timeout a grace margin over the budget (M2)', async () => {
+    const ports = emptyPorts({ taskSource: [plug('task-source', 'ts')], executor: [plug('executor', 'ex')], gate: [] });
+    let execTimeoutSec: number | undefined;
+    const h = harness({
+      ports,
+      config: { executorTimeoutSec: 900, executorTimeoutGraceSec: 30 },
+      respond: (name, _stdin, i) => {
+        if (name === 'ts') return i === 0 ? jsonRes({ task_id: '1' }) : jsonRes({ task_id: null });
+        return jsonRes({ status: 'done', summary: 'ok' });
+      },
+    });
+    const inner = h.deps.runner;
+    h.deps.runner = async (plugin, stdin, opts) => {
+      if (plugin.name === 'ex') execTimeoutSec = opts?.timeoutSec;
+      return inner(plugin, stdin, opts);
+    };
+    await runLoop(h.deps);
+    expect(execTimeoutSec).toBe(930); // 900 budget + 30 grace
+  });
+
+  // M3: a global heavy-preflight failure ends the loop as ABORTED_ENV, not escalated.
+  it('ends the loop with ABORTED_ENV when heavy preflight fails globally (M3)', async () => {
+    const ports = emptyPorts({
+      taskSource: [plug('task-source', 'ts')],
+      executor: [plug('executor', 'ex')],
+      onFail: [plug('on-fail', 'rec')],
+    });
+    const h = harness({
+      ports,
+      preflightHeavy: () => ({ proceed: false, reason: 'DIRTY_WORKTREE' }),
+      respond: (name) => (name === 'ts' ? jsonRes({ task_id: '1' }) : res()),
+    });
+    const result = await runLoop(h.deps);
+    expect(result.endReason).toBe('ABORTED_ENV');
+    expect(result.endDetail).toContain('DIRTY_WORKTREE');
+    expect(result.iterations).toEqual([expect.objectContaining({ outcome: 'aborted_env' })]);
+    // Env fault is not a task failure: no on-fail, no executor run.
+    expect(h.calls.some((c) => c.name === 'rec')).toBe(false);
+    expect(h.calls.some((c) => c.name === 'ex')).toBe(false);
+  });
+
+  // M4: a broken task-source ends TASK_SOURCE_ERROR, distinct from a healthy NO_TASK.
+  it('ends TASK_SOURCE_ERROR on a non-pass task-source exit (M4)', async () => {
+    const ports = emptyPorts({ taskSource: [plug('task-source', 'ts')], executor: [plug('executor', 'ex')] });
+    const h = harness({ ports, respond: () => res({ exitCode: 1, stdout: 'garbage' }) });
+    const result = await runLoop(h.deps);
+    expect(result.endReason).toBe('TASK_SOURCE_ERROR');
+    expect(result.endDetail).toContain('task-source');
+  });
+
+  it('ends TASK_SOURCE_ERROR when the task-source spawn throws (M4)', async () => {
+    const ports = emptyPorts({ taskSource: [plug('task-source', 'ts')], executor: [plug('executor', 'ex')] });
+    const h = harness({
+      ports,
+      respond: (name) => {
+        if (name === 'ts') throw new RunPortError('spawn ENOENT');
+        return res();
+      },
+    });
+    const result = await runLoop(h.deps);
+    expect(result.endReason).toBe('TASK_SOURCE_ERROR');
+  });
+
+  // L1: at L1 (report-only, empty pr_url) op=complete is NOT called; task left in-progress.
+  it('does not call op=complete at L1 when no PR url was produced (L1)', async () => {
+    const ports = emptyPorts({
+      taskSource: [plug('task-source', 'ts')],
+      executor: [plug('executor', 'ex')],
+      gate: [],
+      sink: [plug('sink', 'log', 'L1')],
+    });
+    const h = harness({
+      ports,
+      config: { autonomy: 'L1' },
+      respond: (name, _stdin, i) => {
+        if (name === 'ts') return i === 0 ? jsonRes({ task_id: '1' }) : jsonRes({ task_id: null });
+        if (name === 'ex') return jsonRes({ status: 'done', summary: 'ok' });
+        return res();
+      },
+    });
+    const result = await runLoop(h.deps);
+    expect(result.iterations[0]?.outcome).toBe('passed');
+    expect(h.calls.some((c) => c.name === 'ts' && (c.stdin as { op?: string }).op === 'complete')).toBe(false);
+    expect(h.calls.some((c) => c.name === 'log')).toBe(true); // sink still fired
+  });
+
+  // L2: a stuck executor's reason is re-injected into the next attempt's prompt.
+  it('re-injects the executor failure reason into the next prompt (L2)', async () => {
+    const ports = emptyPorts({
+      taskSource: [plug('task-source', 'ts')],
+      executor: [plug('executor', 'ex')],
+      gate: [plug('gate', 'g')],
+    });
+    const h = harness({
+      ports,
+      respond: (name, _stdin, i) => {
+        if (name === 'ts') return i < 2 ? jsonRes({ task_id: '1' }) : jsonRes({ task_id: null });
+        if (name === 'ex') return i === 0 ? jsonRes({ status: 'stuck', summary: 'blocked on X' }) : jsonRes({ status: 'done', summary: 'ok' });
+        return res({ exitCode: 0 });
+      },
+    });
+    const result = await runLoop(h.deps);
+    expect(result.iterations[0]?.outcome).toBe('failed');
+    expect(result.iterations[1]?.prompt).toContain('executor stuck');
+    expect(result.iterations[1]?.prompt).toContain('blocked on X');
   });
 
   it('writes one iteration log per executed iteration', async () => {

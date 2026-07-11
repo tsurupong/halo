@@ -39,10 +39,28 @@ export const LOOP_DEFAULTS = {
   maxTurns: 40,
   /** Executor `timeout_sec` (D1 §1.3 default 900). */
   executorTimeoutSec: 900,
+  /**
+   * Grace (seconds) the executor's process-level wall gets over its budget
+   * `timeout_sec` (D2 §3.3): the process timeout must be the *last resort*, firing
+   * only after the adapter had a chance to declare its own `status:"timeout"`.
+   */
+  executorTimeoutGraceSec: 30,
 } as const;
 
-/** The five terminal conditions of D2 §2.7 — every one exits the loop cleanly. */
-export type LoopEndReason = 'STOP' | 'BUDGET_EXCEEDED' | 'NO_TASK' | 'MAX_ITER' | 'TIMEOUT';
+/**
+ * Terminal conditions of D2 §2.7 — every one exits the loop cleanly. Beyond the
+ * original five, `TASK_SOURCE_ERROR` distinguishes a broken task-source from a
+ * healthy idle `NO_TASK` (M4), and `ABORTED_ENV` marks a global environment
+ * failure surfaced by PreflightHeavy (dirty worktree, low disk, stale graph — M3).
+ */
+export type LoopEndReason =
+  | 'STOP'
+  | 'BUDGET_EXCEEDED'
+  | 'NO_TASK'
+  | 'MAX_ITER'
+  | 'TIMEOUT'
+  | 'TASK_SOURCE_ERROR'
+  | 'ABORTED_ENV';
 
 /** Thrown for a configuration error the loop must not silently continue past (D2 §2.7). */
 export class LoopError extends Error {
@@ -245,6 +263,8 @@ export interface LoopConfig {
   contextTokenLimit?: number;
   maxTurns?: number;
   executorTimeoutSec?: number;
+  /** Seconds added to the executor budget to derive its process-level wall (D2 §3.3, M2). */
+  executorTimeoutGraceSec?: number;
 }
 
 /** Everything the driver needs; all side effects are injected (D2 §2 委譲). */
@@ -286,6 +306,8 @@ export interface IterationSummary {
 export interface LoopResult {
   endReason: LoopEndReason;
   iterations: IterationSummary[];
+  /** Human-readable detail for a non-clean end (TASK_SOURCE_ERROR / ABORTED_ENV); the caller logs it. */
+  endDetail?: string;
 }
 
 interface TaskState {
@@ -305,18 +327,27 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
   const tokenLimit = cfg.contextTokenLimit ?? LOOP_DEFAULTS.contextTokenLimit;
   const maxTurns = cfg.maxTurns ?? LOOP_DEFAULTS.maxTurns;
   const execTimeout = cfg.executorTimeoutSec ?? LOOP_DEFAULTS.executorTimeoutSec;
+  const execGrace = cfg.executorTimeoutGraceSec ?? LOOP_DEFAULTS.executorTimeoutGraceSec;
   const estimate = deps.estimateTokens ?? estimateTokensDefault;
   const profile = cfg.profileName ?? 'default';
 
   if (deps.ports.taskSource.length === 0) throw new LoopError("no enabled plugin for single port 'task-source'");
   if (deps.ports.executor.length === 0) throw new LoopError("no enabled plugin for single port 'executor'");
 
+  const executor = deps.ports.executor[0]!;
+  // The executor's process-level wall (D2 §3.3, M2): the budget `timeout_sec` is
+  // what the adapter uses to self-declare `status:"timeout"`; the process kill must
+  // sit a grace margin *past* it so it is the last resort, never a preemption. An
+  // explicit manifest `timeoutSec` (M1) wins when it is larger than that margin.
+  const execProcessTimeout = Math.max(executor.manifest.timeoutSec ?? 0, execTimeout + execGrace);
+
   const startMs = deps.now();
   const iterations: IterationSummary[] = [];
   const taskStates = new Map<string, TaskState>();
   let iter = 0;
 
-  const finish = (endReason: LoopEndReason): LoopResult => ({ endReason, iterations });
+  const finish = (endReason: LoopEndReason, endDetail?: string): LoopResult =>
+    endDetail != null ? { endReason, iterations, endDetail } : { endReason, iterations };
 
   for (;;) {
     // Terminal checks at the iteration boundary (D2 §2.7 #4, #5).
@@ -328,21 +359,27 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
     if (await deps.isStopPresent()) return finish('STOP');
     if (!(await deps.isBudgetOk())) return finish('BUDGET_EXCEEDED');
 
-    // Next (single strategy, D2 §3.6): the ready check of §4.1 #4.
-    const task = await runTaskSourceNext(deps);
-    if (task === null || task.task_id === null) return finish('NO_TASK');
-    const taskId = task.task_id;
+    // Next (single strategy, D2 §3.6): the ready check of §4.1 #4. A broken
+    // task-source (non-pass exit / garbage stdout / spawn failure) is a distinct
+    // terminal condition from a healthy idle `NO_TASK` (M4) — end loudly, not clean.
+    const next = await runTaskSourceNext(deps);
+    if (next.kind === 'error') return finish('TASK_SOURCE_ERROR', next.reason);
+    if (next.kind === 'none') return finish('NO_TASK');
+    const task = next.task;
+    const taskId = task.task_id!;
     const state = taskStates.get(taskId) ?? { retryCount: 0 };
 
     const startedAt = new Date(deps.now()).toISOString();
 
-    // PreflightHeavy (D2 §4.2): abort-and-record this task without stopping the loop.
+    // PreflightHeavy (D2 §4.2): a failure here (dirty worktree, low disk, stale
+    // graph) is a *global* environment fault, not a fault of this task — running on
+    // through every ready task would mislabel them all as `escalated`. Record this
+    // iteration as `aborted_env` and end the loop (M3), like a light-stage stop.
     const heavy = deps.preflightHeavy ? await deps.preflightHeavy(task) : ({ proceed: true } as HeavyDecision);
     if (!heavy.proceed) {
-      await runBestEffort(deps.ports.onFail, deps.runner, onFailInput(taskId, `preflight: ${heavy.reason}`, state.retryCount));
-      await record(deps, { iter, startedAt, profile, task, outcome: 'escalated' });
-      iterations.push({ iter, taskId, outcome: 'escalated', retryCount: state.retryCount });
-      continue;
+      await record(deps, { iter, startedAt, profile, task, outcome: 'aborted_env' });
+      iterations.push({ iter, taskId, outcome: 'aborted_env', retryCount: state.retryCount });
+      return finish('ABORTED_ENV', `preflight: ${heavy.reason}`);
     }
 
     const workdir = await deps.createWorktree(task);
@@ -354,14 +391,23 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
       // BuildPrompt with the previous failure re-injected (D2 §2.4).
       const prompt = buildPrompt(task, fragments, state.lastFailure);
 
-      // Execute (single strategy). Classify by stdout status (D2 §2.3).
+      // Execute (single strategy). Classify by stdout status (D2 §2.3). A spawn
+      // failure (RunPortError: ENOENT etc.) must not escape and crash the loop —
+      // fold it to the safe side (`error` → failure path), D1 §3.1 (H1).
       const execIn: ExecutorIn = { prompt, workdir, budget: { max_turns: maxTurns, timeout_sec: execTimeout } };
-      const execResult = await deps.runner(deps.ports.executor[0]!, execIn, { timeoutSec: execTimeout });
-      const exec = classifyExecutor(execResult);
+      let exec: ExecClassification;
+      try {
+        const execResult = await deps.runner(executor, execIn, { timeoutSec: execProcessTimeout });
+        exec = classifyExecutor(execResult);
+      } catch {
+        exec = { outcome: 'error' };
+      }
 
       if (exec.outcome !== 'done') {
         // Executor failure path (stuck / timeout / crash) → OnFail, retry (D2 §2.3).
+        // Retain the reason so the next attempt's prompt sees why it failed (L2).
         state.retryCount += 1;
+        state.lastFailure = { reason: executorFailureReason(exec) };
         taskStates.set(taskId, state);
         await runBestEffort(
           deps.ports.onFail,
@@ -390,8 +436,12 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
       if (verdict.passed) {
         // Sink (best-effort, autonomy-filtered, D2 §2.5 / §3.6) then Complete.
         await runSinks(deps, { task_id: taskId, workdir, summary: exec.out?.summary ?? '' });
+        // Only report completion when a PR URL was actually produced (D1 §1.5, L1).
+        // At L1 (report-only, no PR-producing sink) `resolvePrUrl` yields '' → the
+        // task is left in-progress for the operator's task-source rather than being
+        // force-completed with an empty pr_url.
         const prUrl = deps.resolvePrUrl ? deps.resolvePrUrl(task, workdir) : '';
-        await runTaskSourceComplete(deps, taskId, prUrl);
+        if (prUrl !== '') await runTaskSourceComplete(deps, taskId, prUrl);
         taskStates.delete(taskId);
         await record(deps, { iter, startedAt, profile, task, outcome: 'passed', executor: toExecutorRecord(exec), gates: verdict.results });
         iterations.push({ iter, taskId, outcome: 'passed', prompt, executorStatus: 'done', retryCount: state.retryCount });
@@ -418,17 +468,34 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
 
 // --- port strategy helpers (D2 §3.6) ----------------------------------------
 
-async function runTaskSourceNext(deps: LoopDeps): Promise<TaskSourceOut | null> {
-  const res = await deps.runner(deps.ports.taskSource[0]!, { op: 'next' });
-  // Fold a task-source error to NO_TASK (安全側に倒す): stop rather than run blind.
-  if (classifyExit(res) !== 'pass') return null;
+/** Outcome of one task-source `op=next` (M4): a task, a healthy idle, or a fault. */
+type NextResult =
+  | { kind: 'task'; task: TaskSourceOut }
+  | { kind: 'none' }
+  | { kind: 'error'; reason: string };
+
+async function runTaskSourceNext(deps: LoopDeps): Promise<NextResult> {
+  const ts = deps.ports.taskSource[0]!;
+  let res: RunPortResult;
+  try {
+    res = await deps.runner(ts, { op: 'next' }, portOpts(ts));
+  } catch (err) {
+    // A spawn failure is a broken task-source, NOT an idle queue (M4).
+    return { kind: 'error', reason: `task-source spawn failed: ${errText(err)}` };
+  }
+  // A non-pass exit or unparseable stdout is a fault, distinct from a valid
+  // `{task_id:null}` idle — end with TASK_SOURCE_ERROR rather than silent NO_TASK.
+  if (classifyExit(res) !== 'pass') return { kind: 'error', reason: `task-source exited non-pass (exit ${res.exitCode ?? 'signal'})` };
   const parsed = parseJsonStdout<TaskSourceOut>(res.stdout);
-  return parsed.ok ? parsed.value : null;
+  if (!parsed.ok) return { kind: 'error', reason: `task-source stdout invalid: ${parsed.error}` };
+  if (parsed.value.task_id == null) return { kind: 'none' };
+  return { kind: 'task', task: parsed.value };
 }
 
 async function runTaskSourceComplete(deps: LoopDeps, taskId: string, prUrl: string): Promise<void> {
+  const ts = deps.ports.taskSource[0]!;
   try {
-    await deps.runner(deps.ports.taskSource[0]!, { op: 'complete', task_id: taskId, pr_url: prUrl });
+    await deps.runner(ts, { op: 'complete', task_id: taskId, pr_url: prUrl }, portOpts(ts));
   } catch {
     /* best-effort: a complete failure must not crash the loop */
   }
@@ -438,7 +505,7 @@ async function runContext(deps: LoopDeps, task: TaskSourceOut): Promise<ContextO
   const outs: ContextOut[] = [];
   for (const plugin of deps.ports.context) {
     try {
-      const res = await deps.runner(plugin, task);
+      const res = await deps.runner(plugin, task, portOpts(plugin));
       const parsed = parseJsonStdout<ContextOut>(res.stdout);
       if (parsed.ok && Array.isArray(parsed.value.fragments)) outs.push(parsed.value);
     } catch {
@@ -451,7 +518,13 @@ async function runContext(deps: LoopDeps, task: TaskSourceOut): Promise<ContextO
 async function runGates(deps: LoopDeps, gateIn: GateIn): Promise<GateRun[]> {
   const runs: GateRun[] = [];
   for (const plugin of deps.ports.gate) {
-    runs.push({ name: plugin.name, result: await deps.runner(plugin, gateIn) });
+    // A gate spawn failure must not escape and crash the loop — fold it to a
+    // safe-side failing GateRun so the logical-AND fails closed (H1, D2 §3.1).
+    try {
+      runs.push({ name: plugin.name, result: await deps.runner(plugin, gateIn, portOpts(plugin)) });
+    } catch (err) {
+      runs.push({ name: plugin.name, result: spawnFailureResult(`gate '${plugin.name}' failed to run: ${errText(err)}`) });
+    }
   }
   return runs;
 }
@@ -464,11 +537,29 @@ async function runSinks(deps: LoopDeps, sinkIn: SinkIn): Promise<void> {
 async function runBestEffort(plugins: readonly DiscoveredPlugin[], runner: PortRunner, stdin: unknown): Promise<void> {
   for (const plugin of plugins) {
     try {
-      await runner(plugin, stdin);
+      await runner(plugin, stdin, portOpts(plugin));
     } catch {
       /* best-effort: one plugin's failure must not affect the others (D2 §3.6) */
     }
   }
+}
+
+function errText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/** Runner opts carrying the plugin's manifest `timeoutSec` when set (M1). Pure. */
+function portOpts(plugin: DiscoveredPlugin): { timeoutSec?: number } {
+  return plugin.manifest.timeoutSec != null ? { timeoutSec: plugin.manifest.timeoutSec } : {};
+}
+
+/**
+ * Synthesize a {@link RunPortResult} for a spawn failure, carrying the reason as a
+ * `GateOut`-shaped stdout with a non-pass exit so {@link classifyExit} folds it to
+ * `error` and {@link evaluateGates} surfaces the reason (H1). Pure.
+ */
+function spawnFailureResult(reason: string): RunPortResult {
+  return { exitCode: null, signal: null, stdout: JSON.stringify({ reason }), stderr: '', timedOut: false, durationMs: 0 };
 }
 
 // --- log + shape helpers ----------------------------------------------------
@@ -490,6 +581,12 @@ function onFailInput(
 
 function outcomeForFailure(retryCount: number, threshold: number): Outcome {
   return retryCount >= threshold ? 'escalated' : 'failed';
+}
+
+/** Re-injectable reason for a non-`done` executor run (L2): status plus any summary. */
+function executorFailureReason(exec: ExecClassification): string {
+  const summary = exec.out?.summary;
+  return summary ? `executor ${exec.outcome}: ${summary}` : `executor ${exec.outcome}`;
 }
 
 function toExecutorRecord(exec: ExecClassification): ExecutorRecord {

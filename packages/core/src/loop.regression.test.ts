@@ -73,18 +73,23 @@ function rig(ports: Partial<LoopPorts>, over: Omit<Partial<LoopDeps>, 'config'> 
     createWorktree: (task) => `/wt/${task.task_id}`,
     removeWorktree: () => undefined,
     ...(over.preflightHeavy ? { preflightHeavy: over.preflightHeavy } : {}),
+    ...(over.resolvePrUrl ? { resolvePrUrl: over.resolvePrUrl } : {}),
   };
   return { deps, logs };
 }
 
 describe('loop regression (fixture plugins, zero billing)', () => {
   it('happy path: task → execute → gate pass → sink → complete → NO_TASK', async () => {
-    const { deps, logs } = rig({
-      taskSource: [mock('task-source', 'ts', 'task-source.sh', { TS_REPEAT: '1' })],
-      executor: [mock('executor', 'ex', 'executor.sh', { EXEC_STATUS: 'done' })],
-      gate: [mock('gate', 'g', 'gate.sh', { GATE_MODE: 'pass' })],
-      sink: [mock('sink', 'log', 'sink.sh', {}, 'L1')],
-    });
+    const { deps, logs } = rig(
+      {
+        taskSource: [mock('task-source', 'ts', 'task-source.sh', { TS_REPEAT: '1' })],
+        executor: [mock('executor', 'ex', 'executor.sh', { EXEC_STATUS: 'done' })],
+        gate: [mock('gate', 'g', 'gate.sh', { GATE_MODE: 'pass' })],
+        sink: [mock('sink', 'log', 'sink.sh', {}, 'L1')],
+      },
+      // A PR url is produced → op=complete fires (M4/L1: complete gated on a real PR url).
+      { resolvePrUrl: () => 'https://example/pr/1' },
+    );
     const result = await runLoop(deps);
     expect(result.endReason).toBe('NO_TASK');
     expect(result.iterations).toEqual([expect.objectContaining({ taskId: '1', outcome: 'passed' })]);

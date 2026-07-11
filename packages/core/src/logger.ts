@@ -41,7 +41,7 @@ export interface TaskRecord {
   retryCount?: number;
 }
 
-export type Outcome = 'passed' | 'failed' | 'escalated' | 'no_task' | 'stopped';
+export type Outcome = 'passed' | 'failed' | 'escalated' | 'no_task' | 'stopped' | 'aborted_env';
 
 /** Structured input the loop hands to the logger for one iteration. */
 export interface IterationInput {
