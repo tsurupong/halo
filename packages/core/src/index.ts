@@ -1,3 +1,7 @@
 // @halo/core — loop / runPort / preflight / budget (TS).
-// Real modules land in M3 (T11+). Scaffold only.
+// Wave 1 (M3 T11-T13): config / logger / lock. Remaining modules land in T14+.
 export const HALO_CORE_VERSION = '0.0.0';
+
+export * from './logger.js';
+export * from './config.js';
+export * from './lock.js';

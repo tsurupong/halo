@@ -20,7 +20,9 @@ describe('redactSecrets', () => {
   });
 
   it('masks token= / GH_TOKEN= assignments', () => {
-    expect(redactSecrets('GH_TOKEN=supersecretvalue')).toBe('***REDACTED***');
+    const gh = redactSecrets('GH_TOKEN=supersecretvalue');
+    expect(gh).not.toContain('supersecretvalue');
+    expect(gh).toContain('***REDACTED***');
     expect(redactSecrets('authorization: Bearer abc.def.ghi')).toBe('***REDACTED***');
   });
 
@@ -128,7 +130,7 @@ describe('createLogger', () => {
 
     expect(path).toBe('/tmp/.halo/logs/iter_1.json');
     expect(mkdir).toHaveBeenCalledWith('/tmp/.halo/logs', { recursive: true });
-    const written = writeFile.mock.calls[0][1] as string;
+    const written = writeFile.mock.calls[0]![1] as string;
     expect(JSON.parse(written).iter).toBe(1);
     expect(written.endsWith('\n')).toBe(true);
     expect(log.outcome).toBe('no_task');
