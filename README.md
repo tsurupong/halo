@@ -79,4 +79,4 @@ Phase 1 (monorepo scaffold, contracts, core, CLI, reference plugins, test setup)
 
 ## License
 
-TBD (preparing for OSS release).
+[MIT](./LICENSE)
