@@ -1,45 +1,45 @@
-# ADR-0004: 自己改変の禁止（安全不変条件）
+# ADR-0004: Prohibition of Self-Modification (Safety Invariant)
 
 **Date**: 2026-07-09
 **Status**: accepted
-**Deciders**: 本人（HALO要件定義書 v1.8 §11.1 より記録）
+**Deciders**: Owner (recorded from HALO Requirements Specification v1.8 §11.1)
 
 ## Context
 
-自律ループがハーネス自身のルール（プロンプト・ゲート・設定）を書き換えられると、品質ゲートの意味が消失する。特に dogfooding（HALO で HALO を開発）導入時、「ルールを書き換える主体」と「ルールに縛られる主体」が同一化する構造的危険がある。
+If the autonomous loop can rewrite the harness's own rules (prompts, gates, configuration), the meaning of the quality gates disappears. In particular, when introducing dogfooding (developing HALO with HALO), there is a structural danger that "the subject that rewrites the rules" and "the subject bound by the rules" become one and the same.
 
 ## Decision
 
-loop-audit gate で CLAUDE.md / PROMPT.md / .harness.yml / テストファイルへのエージェントによる変更を fail とする。dogfooding 導入後もハーネス自身の変更は恒久的に自律度 L2 上限（人間承認必須）とする。これらは初回の無人実行**前**に存在しなければならない。
+In the loop-audit gate, treat agent modifications to CLAUDE.md / PROMPT.md / .harness.yml / test files as fail. Even after introducing dogfooding, changes to the harness itself are permanently capped at autonomy level L2 (human approval required). These must exist **before** the first unattended run.
 
 ## Alternatives Considered
 
-### 代替案1: 自己改変を許可し、変更をレビューで捕捉
-- **Pros**: ハーネスの自己改善が自動化される
-- **Cons**: テスト改変・ゲート緩和による「合格の偽装」を事後検出に頼ることになる
-- **Why not**: 安全不変条件は事前制御（Guides）で確定ブロックすべき。事後制御では1回の突破が致命傷になり得る
+### Alternative 1: Permit self-modification and catch changes in review
+- **Pros**: Self-improvement of the harness is automated.
+- **Cons**: We end up relying on after-the-fact detection to catch "faked passes" via test tampering or gate loosening.
+- **Why not**: Safety invariants should be definitively blocked by ex-ante control (Guides). With ex-post control, a single breach can be fatal.
 
-### 代替案2: 改変検出のみ（警告して続行）
-- **Pros**: 誤検出時にループが止まらない
-- **Cons**: 警告は無人運転では誰も読まない
-- **Why not**: 無人稼働が前提のため、fail + 差し戻しでなければ意味がない
+### Alternative 2: Detection only (warn and continue)
+- **Pros**: The loop does not stop on false positives.
+- **Cons**: Warnings are read by no one during unattended operation.
+- **Why not**: Because unattended operation is the premise, it is meaningless unless it fails + rejects.
 
 ## Consequences
 
 ### Positive
-- テスト削除・カバレッジ閾値改変・lint 抑制追加による「見かけの合格」を構造的に遮断
-- sign の採用（PROMPT.md への追記）が人間判断に固定され、プロンプト汚染を防ぐ
+- Structurally blocks "apparent passes" via test deletion, coverage-threshold tampering, or added lint suppressions.
+- Adopting a sign (appending to PROMPT.md) is fixed to human judgment, preventing prompt contamination.
 
 ### Negative
-- ハーネス改善タスクは常に人間レビューを要し、完全無人化の対象外となる（意図的な制約）
+- Harness-improvement tasks always require human review and are excluded from full automation (an intentional constraint).
 
 ### Risks
-- loop-audit 自体の検査漏れ → git diff ベースの静的検査を**列挙式**で明文化し、検査対象を確定管理する。**検査項目の正は [D4 セキュリティ設計書 §4](../design/d4-security-design.md)**（本 ADR はその要約）。v1.8 時点の正は **7 項目**:
-  1. **spec_refs 実在** — task の `spec_refs`（`kg://` ノード ID）がナレッジグラフに実在するか照会（read-only）。※ v1.5 の `test -f specs/*.md` は廃止
-  2. **テストファイル不変**（削除・変更を fail、新規追加は許可）
-  3. **エスケープハッチ新規ゼロ**（`eslint-disable` / `as any` / `@ts-ignore` の新規追加を禁止）
-  4. **カバレッジ閾値不変**（下方変更を禁止）
-  5. **自己改変なし**（`CLAUDE.md` / `PROMPT.md` / `.harness.yml` / テストファイルへの書込を fail）
-  6. **diff 1500 行以内**
-  7. **グラフファイルのハッシュ照合**（ループ開始時と一致するか照合し、実行中の直接改変を検出）
-- ①の検査方式変更（`specs/` ファイルの `test -f` → グラフノード実在照会）と⑦の追加は、`specs/`→ナレッジグラフ一元化に伴う（ADR-0011 参照。v1.5 系は 6 項目・`specs/` 前提だった）。
+- Inspection gaps in loop-audit itself → the git-diff-based static checks are documented **enumeratively**, keeping the inspection targets under definitive management. **The authoritative list of checks is [D4 Security Design §4](../design/d4-security-design.md)** (this ADR is a summary of it). As of v1.8, the authoritative set is **7 items**:
+  1. **spec_refs exist** — query whether the task's `spec_refs` (`kg://` node IDs) actually exist in the knowledge graph (read-only). Note: the v1.5 `test -f specs/*.md` is abolished.
+  2. **Test files unchanged** (deletion/modification fails; new additions permitted).
+  3. **Zero new escape hatches** (new additions of `eslint-disable` / `as any` / `@ts-ignore` prohibited).
+  4. **Coverage threshold unchanged** (downward changes prohibited).
+  5. **No self-modification** (writes to `CLAUDE.md` / `PROMPT.md` / `.harness.yml` / test files fail).
+  6. **diff within 1500 lines**.
+  7. **Graph file hash verification** (compare against the hash at loop start to detect direct modification during execution).
+- The change of check ① from `test -f` on `specs/` files to a graph-node-existence query, and the addition of ⑦, accompany the consolidation of `specs/` into the knowledge graph (see ADR-0011; the v1.5 line had 6 items and presupposed `specs/`).

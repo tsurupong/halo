@@ -1,385 +1,385 @@
-# D2. コア詳細設計書（HALO Core Design）
+# D2. Core Detailed Design (HALO Core Design)
 
-| 項目 | 内容 |
+| Item | Content |
 |---|---|
-| 文書バージョン | 1.0 |
-| 前提 | HALO要件定義書 v1.8 / D1 コントラクト仕様書 |
-| 位置づけ | `packages/core` の実装仕様（公開 docs/architecture） |
-| 公開/私有 | 公開（OSS） |
-| ステータス | Phase 1 実装と並走（実装から抽出する形でよい） |
+| Document version | 1.0 |
+| Prerequisites | HALO Requirements Specification v1.8 / D1 Contract Specification |
+| Positioning | Implementation spec for `packages/core` (public docs/architecture) |
+| Public/Private | Public (OSS) |
+| Status | Runs in parallel with Phase 1 implementation (may be extracted from the implementation) |
 
-> 本書は要件定義書 §3（全体アーキテクチャ）・§4.3（コアループ）・§4.4（起動層）・§8（ディレクトリ構成）・§11（設計判断の分類）と、D1 コントラクト仕様書（プロセス境界の I/O 型・実行規約）を前提に、`packages/core` の内部設計を実装可能な粒度へ落とす。D1 が「プロセス境界のコントラクト（stdin JSON / stdout JSON / 終了コード）」を規定するのに対し、本書は **コア内部（TypeScript）のモジュール構造とアルゴリズム**を規定する。両者が矛盾する場合は D1 と要件定義書が優先する。
+> This document builds on Requirements Specification §3 (Overall Architecture), §4.3 (Core Loop), §4.4 (Launch Layer), §8 (Directory Structure), §11 (Classification of Design Decisions), and the D1 Contract Specification (I/O types and execution conventions at process boundaries), reducing the internal design of `packages/core` to an implementable granularity. Whereas D1 defines "the contracts at process boundaries (stdin JSON / stdout JSON / exit codes)," this document defines **the module structure and algorithms inside the core (TypeScript)**. Where the two conflict, D1 and the Requirements Specification take precedence.
 >
-> **v1.5 → v1.8 の再構成**: v1.5 期の素材（設計書 01 / 02）はコアを bash（`core/loop.sh` + `core/helpers.sh`）で記述していた。v1.8 ではコアを **TypeScript（npm 配布・`npx halo` / トリガーは `node_modules/.bin/halo` 絶対パス直叩き）** で実装する。本書は bash 前提（`helpers.sh` の関数群・`source`・`jq` マージ等）を除去し、TypeScript モジュールの責務として再構成する。プラグインの実装言語は引き続き任意であり（D1 §0）、コアはプロセス境界越しにのみプラグインと通信する。
+> **Restructuring from v1.5 → v1.8**: The v1.5-era materials (Design Documents 01 / 02) described the core in bash (`core/loop.sh` + `core/helpers.sh`). In v1.8 the core is implemented in **TypeScript (npm-distributed, `npx halo` / triggers invoke the absolute path `node_modules/.bin/halo` directly)**. This document removes the bash assumptions (the `helpers.sh` function set, `source`, `jq` merges, etc.) and restructures them as the responsibilities of TypeScript modules. The implementation language of plugins remains arbitrary (D1 §0), and the core communicates with plugins only across process boundaries.
 >
-> **初期値の扱い**: 数値パラメータ（retry 上限 3 / max-turns 40 / timeout 900 秒 / MAX_ITER 20 / diff 1500 行等）は要件 §11.2 に従い **調整可能な初期値** として扱い、コア内にハードコードせず後述 §9 の設定経路（プロファイル・`plugin.json`・環境変数）から注入する。本書中で「初期値」と明記した値は確定値ではない。
+> **Treatment of initial values**: Numeric parameters (retry limit 3 / max-turns 40 / timeout 900 sec / MAX_ITER 20 / diff 1500 lines, etc.) are treated as **adjustable initial values** per Requirements §11.2. They are not hard-coded into the core but injected from the configuration paths described in §9 below (profiles, `plugin.json`, environment variables). Values explicitly labeled "initial value" in this document are not fixed values.
 
 ---
 
-## 1. モジュール分割
+## 1. Module Decomposition
 
-`packages/core` は 9 個の内部モジュールに分割する。各モジュールは高凝集・低結合とし、副作用（プロセス起動・ファイル I/O・時刻取得）を持つのは限られたモジュールに閉じる。純粋関数として書けるロジック（プロンプト組立・fragments マージ・順序ソート・予算集計）は副作用から分離し、単体テスト可能にする（テスト方針は D8）。
+`packages/core` is divided into 9 internal modules. Each module is high-cohesion and low-coupling, and side effects (process launch, file I/O, time retrieval) are confined to a limited set of modules. Logic that can be written as pure functions (prompt assembly, fragment merging, order sorting, budget aggregation) is separated from side effects to make it unit-testable (the testing policy is D8).
 
-### 1.1 モジュール一覧と責務
+### 1.1 Module List and Responsibilities
 
-| # | モジュール | 責務 | 主な副作用 | 依存先 |
+| # | Module | Responsibility | Main side effects | Dependencies |
 |---|---|---|---|---|
-| 1 | `config` | プロファイル・環境変数・`.harness.yml`・`plugin.json` の読み込みと正規化。実行時設定（AUTONOMY / MAX_ITER / 予算上限 / タスクフィルタ / 各種初期値）を単一の設定オブジェクトへ確定する | ファイル読取 | logger |
-| 2 | `discovery` | `ports/<port>.d/` 配下のプラグイン走査、`order` ソート、有効化判定、`.harness.yml` の上向き探索・解決 | ファイル走査 | config, logger |
-| 3 | `runPort` | プラグイン 1 個の起動（spawn）、stdin への JSON 投入、stdout の JSON 受領、`timeoutSec` 強制、stderr のログ回送、終了コード伝播 | プロセス起動 | logger |
-| 4 | `loop` | コアループの状態機械（§2）。next → context → execute → gate → sink/onFail の駆動、retry 判定、5 種の終了条件 | なし（他モジュールへ委譲） | 全モジュール |
-| 5 | `preflight` | 2 段プリフライト（軽量・重量、§4）。STOP / lock / ready 有無 / 予算残 / 作業ツリー clean / グラフ鮮度同期 | ファイル読取・git | config, budget, lock, discovery |
-| 6 | `budget` | 日次予算の都度計測（§5）。`logs/` の当日実績を集計し残量を判定 | ファイル読取・時刻 | config, logger |
-| 7 | `autonomy` | 現在の AUTONOMY と各 sink の `minAutonomy` を突き合わせ、実行対象 sink をフィルタ（§2.5・D1 §1.5） | なし | config |
-| 8 | `lock` | 多重起動防止の排他ロック（`$TMPDIR/halo.lock`）。取得・解放・残留検出 | ファイルロック | logger |
-| 9 | `logger` | 構造化ログ（`logs/iter_N.json`）への書込、stderr 回送先の提供、gate 通過率の記録 | ファイル書込 | config |
+| 1 | `config` | Loading and normalizing profiles, environment variables, `.harness.yml`, and `plugin.json`. Resolves runtime settings (AUTONOMY / MAX_ITER / budget limits / task filters / various initial values) into a single configuration object | File reads | logger |
+| 2 | `discovery` | Scanning plugins under `ports/<port>.d/`, `order` sorting, enablement determination, and upward search/resolution of `.harness.yml` | File scanning | config, logger |
+| 3 | `runPort` | Launching (spawning) a single plugin, feeding JSON to stdin, receiving JSON from stdout, enforcing `timeoutSec`, forwarding stderr to logs, propagating the exit code | Process launch | logger |
+| 4 | `loop` | The state machine of the core loop (§2). Drives next → context → execute → gate → sink/onFail, retry determination, and the 5 termination conditions | None (delegates to other modules) | All modules |
+| 5 | `preflight` | Two-stage preflight (light / heavy, §4). STOP / lock / ready presence / remaining budget / clean working tree / graph freshness sync | File reads, git | config, budget, lock, discovery |
+| 6 | `budget` | Just-in-time measurement of the daily budget (§5). Aggregates the day's actuals from `logs/` and determines the remaining amount | File reads, time | config, logger |
+| 7 | `autonomy` | Matches the current AUTONOMY against each sink's `minAutonomy` and filters the sinks to execute (§2.5 / D1 §1.5) | None | config |
+| 8 | `lock` | Exclusive lock to prevent concurrent launches (`$TMPDIR/halo.lock`). Acquire, release, stale detection | File lock | logger |
+| 9 | `logger` | Writing to structured logs (`logs/iter_N.json`), providing the stderr forwarding destination, recording the gate pass rate | File writes | config |
 
-> **CLI との関係**: CLI（`packages/cli`）は「ロジックを持たない」原則（D3）に従い、これらコアモジュールの公開関数を呼ぶだけの薄い委譲層である。トリガー（`fire`）は CLI を呼ぶ唯一の入口であり、コアはトリガー種別を知らない（要件 §4.4）。
+> **Relationship to the CLI**: The CLI (`packages/cli`) follows the "holds no logic" principle (D3) and is a thin delegation layer that merely calls the public functions of these core modules. Triggers (`fire`) are the sole entry point that invokes the CLI, and the core knows nothing about trigger types (Requirements §4.4).
 
-### 1.2 グローバル状態ゼロの徹底
+### 1.2 Enforcing Zero Global State
 
-要件 §8.2 の「マシングローバル状態を持たない」を実装で担保する。コアは静的変数・シングルトンに永続状態を持たず、実行時状態は次の外部に委ねる。
+The requirement in §8.2 that the harness "holds no machine-global state" is guaranteed in the implementation. The core holds no persistent state in static variables or singletons; runtime state is entrusted to the following external locations.
 
-| 状態 | 真実の源 | コア内での扱い |
+| State | Source of truth | Handling within the core |
 |---|---|---|
-| タスク進行（ready / in-progress / retry） | GitHub（Issue ラベル・コメント） | task-source プラグイン越しに読み書き。コアは保持しない |
-| 排他 | OS の flock（`$TMPDIR/halo.lock`） | `lock` モジュールが起動時取得・終了時解放 |
-| 予算 | `logs/` の当日実績（台帳を持たない） | `budget` が都度集計（§5） |
-| worktree | OS tmpdir（`$TMPDIR/halo-wt-issue-N/`） | 生成→破棄で完結（§8） |
-| グラフ鮮度 | main の HEAD と前回インデックス時点 | preflight 重量段で照合（§4） |
+| Task progress (ready / in-progress / retry) | GitHub (Issue labels and comments) | Read/written via the task-source plugin. The core does not retain it |
+| Exclusion | OS flock (`$TMPDIR/halo.lock`) | The `lock` module acquires it at launch and releases it at termination |
+| Budget | The day's actuals in `logs/` (no ledger) | `budget` aggregates just-in-time (§5) |
+| worktree | OS tmpdir (`$TMPDIR/halo-wt-issue-N/`) | Complete within create → destroy (§8) |
+| Graph freshness | main's HEAD and the point of the last index | Checked in the preflight heavy stage (§4) |
 
 ---
 
-## 2. loop の状態機械
+## 2. The loop State Machine
 
-`loop` モジュールは要件 §4.3 の擬似コードを TypeScript の状態機械として実装する。1 イテレーション 1 タスク（フレッシュコンテキスト原則、要件 §3.2）を厳守し、イテレーション間の状態はコアのメモリではなく **ファイル / git / GitHub** に永続化する。
+The `loop` module implements the pseudocode of Requirements §4.3 as a TypeScript state machine. It strictly enforces one task per iteration (the fresh-context principle, Requirements §3.2), and inter-iteration state is persisted not in the core's memory but in **files / git / GitHub**.
 
-### 2.1 状態遷移
+### 2.1 State Transitions
 
 ```
                 ┌─────────────────────────────────────────────┐
-                │  iteration 開始（iter = 1..MAX_ITER）        │
+                │  iteration start (iter = 1..MAX_ITER)        │
                 └───────────────┬─────────────────────────────┘
                                 ▼
-                   [PreflightLight]  STOP / lock / ready有無 / 予算残
-                    │ 停止条件該当 → 終了（§2.4）
+                   [PreflightLight]  STOP / lock / ready presence / remaining budget
+                    │ termination condition met → terminate (§2.4)
                     ▼
                    [Next]  task-source op=next
-                    │ task_id == null → 終了（TASK_EMPTY）
+                    │ task_id == null → terminate (TASK_EMPTY)
                     ▼
-                   [PreflightHeavy]  作業ツリー clean / グラフ鮮度同期
+                   [PreflightHeavy]  clean working tree / graph freshness sync
                     ▼
-                   [Context]  context.d 全実行 → fragments マージ
+                   [Context]  run all of context.d → merge fragments
                     ▼
                    [BuildPrompt]  task + ctx + last_gate_failure
                     ▼
-                   [Execute]  executor（単一・先頭のみ）
-                    │ status != done（stuck/timeout）─────┐
+                   [Execute]  executor (single, first only)
+                    │ status != done (stuck/timeout)─────┐
                     ▼ status == done                       │
-                   [Gate]  gate.d 全実行（論理 AND）        │
-                    │ fail（いずれか exit 2）──────────────┤
-                    ▼ pass（全 exit 0）                     │
-                   [Sink]  autonomy フィルタ後の副作用       │
+                   [Gate]  run all of gate.d (logical AND) │
+                    │ fail (any exit 2)──────────────────┤
+                    ▼ pass (all exit 0)                    │
+                   [Sink]  side effects after autonomy filter│
                     ▼                                       ▼
-                   [Complete]  task-source op=complete    [OnFail]  on-fail 全実行
-                    │  last_gate_failure = 空               │  last_gate_failure 保持
-                    │                                       │  retry_count 加算
+                   [Complete]  task-source op=complete    [OnFail]  run all on-fail
+                    │  last_gate_failure = empty            │  retain last_gate_failure
+                    │                                       │  increment retry_count
                     └───────────────┬───────────────────────┘
                                     ▼
-                          次 iteration へ（フレッシュコンテキスト）
+                          to next iteration (fresh context)
 ```
 
-### 2.2 各状態の処理
+### 2.2 Processing of Each State
 
-| 状態 | 処理 | 委譲先 | 判定 |
+| State | Processing | Delegated to | Determination |
 |---|---|---|---|
-| PreflightLight | STOP ファイル / lock / ready 有無 / 日次予算残（§4.1） | preflight, lock, budget | 停止条件該当で即終了 |
-| Next | `{"op":"next"}` を task-source（先頭 1 個）へ | runPort | `task_id == null` → 終了 |
-| PreflightHeavy | 作業ツリー clean / ディスク残量 / グラフ鮮度同期（§4.2） | preflight | 異常時は当該タスクを実行せず記録 |
-| Context | context.d 全実行、`fragments` を priority 降順連結、トークン上限で切詰め（§2.6） | runPort（各）, discovery | 常に success 扱い（個別失敗はスキップ） |
-| BuildPrompt | task 情報・連結 context・前回 gate fail の reason/hint を結合しプロンプト生成 | （純粋関数） | — |
-| Execute | executor（先頭 1 個）へ prompt/workdir/budget を投入 | runPort | stdout の `status`（§2.3） |
-| Gate | gate.d 全実行、1 つでも exit 2 なら全体 fail（論理 AND） | runPort（各） | 終了コード（0/2） |
-| Sink | autonomy フィルタ後、合格時のみ副作用を実行（ベストエフォート） | runPort（各）, autonomy | 個別失敗は他へ波及しない |
-| Complete | `{"op":"complete", task_id, pr_url}` を task-source へ | runPort | 副作用のみ |
-| OnFail | on-fail 全実行（記録・エスカレーション・sign 候補） | runPort（各） | ベストエフォート |
+| PreflightLight | STOP file / lock / ready presence / remaining daily budget (§4.1) | preflight, lock, budget | Immediate termination if a termination condition is met |
+| Next | Send `{"op":"next"}` to the task-source (first single one) | runPort | `task_id == null` → terminate |
+| PreflightHeavy | Clean working tree / disk space / graph freshness sync (§4.2) | preflight | On anomaly, do not execute the task and record it |
+| Context | Run all of context.d, concatenate `fragments` in descending priority order, truncate at the token limit (§2.6) | runPort (each), discovery | Always treated as success (individual failures are skipped) |
+| BuildPrompt | Combine task info, concatenated context, and the reason/hint of the previous gate fail to generate a prompt | (pure function) | — |
+| Execute | Feed prompt/workdir/budget to the executor (first single one) | runPort | The `status` in stdout (§2.3) |
+| Gate | Run all of gate.d; if even one exits 2, the whole fails (logical AND) | runPort (each) | Exit code (0/2) |
+| Sink | After the autonomy filter, execute side effects only on pass (best effort) | runPort (each), autonomy | Individual failures do not propagate to others |
+| Complete | Send `{"op":"complete", task_id, pr_url}` to the task-source | runPort | Side effects only |
+| OnFail | Run all on-fail (record, escalate, sign candidate) | runPort (each) | Best effort |
 
-### 2.3 executor status による分岐
+### 2.3 Branching by executor status
 
-executor の合否は終了コードではなく **stdout の `status`** で判定する（D1 §1.3・§3.1）。
+The executor's pass/fail is determined not by the exit code but by **the `status` in stdout** (D1 §1.3 / §3.1).
 
-| status | 意味 | loop の遷移 |
+| status | Meaning | loop transition |
 |---|---|---|
-| `done` | 正常終了 | Gate へ進む |
-| `stuck` | 論理的な行き詰まり（STUCK マーカー検出） | OnFail 経路。retry_count 加算 |
-| `timeout` | `budget.timeout_sec` 超過 | OnFail 経路。retry_count 加算 |
-| （プロセス異常終了） | エラー | 安全側に倒して失敗経路（OnFail）へ |
+| `done` | Normal completion | Proceed to Gate |
+| `stuck` | Logical dead end (STUCK marker detected) | OnFail path. Increment retry_count |
+| `timeout` | `budget.timeout_sec` exceeded | OnFail path. Increment retry_count |
+| (abnormal process exit) | Error | Fall to the safe side and take the failure path (OnFail) |
 
-> STUCK マーカー（エージェント自己申告）から `status: "stuck"` への変換は executor アダプタの責務であり（D1 §5.2）、コアは `status` 値のみを見る。マーカーの検出詳細は Phase 1 実装から抽出する（D1 §5.2 保留）。
+> Converting a STUCK marker (agent self-report) into `status: "stuck"` is the responsibility of the executor adapter (D1 §5.2); the core looks only at the `status` value. The details of marker detection are to be extracted from the Phase 1 implementation (D1 §5.2 pending).
 
-### 2.4 gate fail の再注入（retry 判定）
+### 2.4 Re-injection of gate fail (retry determination)
 
-gate fail は 2 経路で次イテレーションへ再注入される（学習経路の中核、要件 §3.2）。
+A gate fail is re-injected into the next iteration via two paths (the core of the learning path, Requirements §3.2).
 
-1. **直近 reason の即時再注入**: 最初に fail した gate の出力（`reason` / `hint` / `gate`）を loop が保持し、同一タスクの次イテレーションで BuildPrompt の入力（「前回の失敗」節）として渡す。retry_count に応じた注入戦略の変更（「前回と別方針で」等）は context.d プラグイン側の拡張余地とする（要件 §11.2、コアは reason を渡すだけ）。
-2. **失敗カタログ経由の中期再注入**: on-fail `10-record-failure` が `failure-catalog.md` へ追記し、context.d（`30-recent-failures`）が後続イテレーションで読み取る。
+1. **Immediate re-injection of the most recent reason**: The loop retains the output (`reason` / `hint` / `gate`) of the first gate that failed and passes it as input to BuildPrompt (the "previous failure" section) in the next iteration of the same task. Changing the injection strategy based on retry_count (e.g., "use a different approach than last time") is left as an extension point on the context.d plugin side (Requirements §11.2; the core merely passes the reason).
+2. **Medium-term re-injection via the failure catalog**: on-fail `10-record-failure` appends to `failure-catalog.md`, and context.d (`30-recent-failures`) reads it in subsequent iterations.
 
-**retry_count の判定**: retry_count の管理（インクリメント・閾値到達判定・`needs-human` 付与）は task-source / on-fail プラグインの責務であり、真実の源は GitHub（Issue コメント・ラベル）である。コアは on-fail 入力に `retry_count` を渡すのみで、閾値（**初期値 3**、要件 §11.2）自体を持たない。閾値到達時は on-fail `20-escalate` が `needs-human` を付与し、次の `op=next` で当該タスクが払い出されなくなることで再注入ループが打ち切られる（無限ループ遮断）。
+**Determination of retry_count**: Management of retry_count (incrementing, threshold-reached determination, granting `needs-human`) is the responsibility of the task-source / on-fail plugins, and the source of truth is GitHub (Issue comments and labels). The core merely passes `retry_count` to the on-fail input and does not itself hold the threshold (**initial value 3**, Requirements §11.2). When the threshold is reached, on-fail `20-escalate` grants `needs-human`, and the task is no longer dispensed at the next `op=next`, which cuts off the re-injection loop (infinite-loop interruption).
 
-### 2.5 sink の autonomy フィルタ
+### 2.5 The sink autonomy filter
 
-Sink 状態では `autonomy` モジュールが各 sink の `plugin.json` の `minAutonomy`（D1 §2）と現在の AUTONOMY を突き合わせ、現在値未満の sink をスキップする。`minAutonomy` 未宣言の sink は最も安全側（L3 とみなし L1/L2 ではスキップ、D1 §2）。
+In the Sink state, the `autonomy` module matches each sink's `plugin.json` `minAutonomy` (D1 §2) against the current AUTONOMY and skips sinks below the current value. A sink that has not declared `minAutonomy` is treated on the safest side (regarded as L3, i.e., skipped at L1/L2, D1 §2).
 
-| AUTONOMY | 有効な sink（初期構成） |
+| AUTONOMY | Enabled sinks (initial configuration) |
 |---|---|
-| L1 | `20-progress-log` のみ |
-| L2 | `20-progress-log` / `10-git-commit` / `15-create-pr`（**draft PR**） |
-| L3 | L2 の全 sink + `15-create-pr`（**通常 PR**、本文 `Closes #番号`） |
+| L1 | `20-progress-log` only |
+| L2 | `20-progress-log` / `10-git-commit` / `15-create-pr` (**draft PR**) |
+| L3 | All L2 sinks + `15-create-pr` (**normal PR**, body `Closes #number`) |
 
-`15-create-pr` は `minAutonomy: "L2"` で有効化され、`AUTONOMY` env を読んで L2 では draft PR・L3 では通常 PR を作り分ける（単一 sink で分岐、D1 §1.5）。自律度は累積的（L3 ⊇ L2 ⊇ L1）。
+`15-create-pr` is enabled at `minAutonomy: "L2"` and reads the `AUTONOMY` env to differentiate between a draft PR at L2 and a normal PR at L3 (branching within a single sink, D1 §1.5). Autonomy is cumulative (L3 ⊇ L2 ⊇ L1).
 
-> v1.5 素材はメタコメント `# min-autonomy: L3` を宣言としていたが、v1.8 では `plugin.json` の `minAutonomy` フィールドに統一する（D1 §2）。コアは `plugin.json` を読んでフィルタする。
+> The v1.5 materials used the meta-comment `# min-autonomy: L3` as the declaration, but v1.8 unifies this into the `minAutonomy` field of `plugin.json` (D1 §2). The core reads `plugin.json` and filters.
 
-### 2.6 context のマージ（純粋関数）
+### 2.6 Merging context (pure function)
 
-context.d 全プラグインの `fragments` を結合し、`priority` 降順に安定ソート、トークン上限（要件 §3.2 原則4、**100k 未満**を初期値）で切り詰めた単一の `{ fragments: [...] }` を生成する。**`priority` は D1 §1.2 の規定に従い「大きいほど優先」であり、降順（大きい priority が先頭）に連結する**（v1.5 素材の一部記述と逆向きのため、本書は D1 を正とする）。個別プラグインの失敗・不正 JSON はそのプラグインを空 fragments 扱いにしてスキップし、他は続行する（コンテキスト欠落は gate で検出される前提、D1 §1.2）。この結合・切詰めロジックは副作用を持たない純粋関数として実装する。
+Combine the `fragments` of all context.d plugins, stably sort them in descending `priority` order, truncate at the token limit (Requirements §3.2 Principle 4, initial value **under 100k**), and produce a single `{ fragments: [...] }`. **Per D1 §1.2, `priority` means "larger is higher priority," so they are concatenated in descending order (largest priority first)** (this is the opposite of some descriptions in the v1.5 materials; this document takes D1 as authoritative). A failure or malformed JSON from an individual plugin causes that plugin to be treated as empty fragments and skipped while the others continue (on the premise that missing context is detected by the gate, D1 §1.2). This combine/truncate logic is implemented as a pure function without side effects.
 
-### 2.7 終了条件（5 種）
+### 2.7 Termination Conditions (5 kinds)
 
-loop は次の 5 条件のいずれかで終了する。いずれも **安全側に倒す（副作用を出さない）** を原則とし、exit 0 で正常終了する。
+The loop terminates on any one of the following 5 conditions. All follow the principle of **falling to the safe side (producing no side effects)** and terminate normally with exit 0.
 
-| # | 終了条件 | 検出点 | 終了コード | 備考 |
+| # | Termination condition | Detection point | Exit code | Notes |
 |---|---|---|---|---|
-| 1 | **STOP キルスイッチ** | 各イテレーション冒頭（PreflightLight）で `.halo/STOP` を確認 | 0 | 人間が配置するキルスイッチ（要件 §4.4）。STUCK とは別機構 |
-| 2 | **日次予算超過** | PreflightLight で `budget` が残量なしと判定 | 0 | 起動しても走らせない（§5） |
-| 3 | **ready タスク 0 件** | Next で task-source が `{"task_id": null}` + exit 0 | 0 | ポーリング型の「タスク存在駆動」を成立させる中核 |
-| 4 | **MAX_ITER 到達** | ループカウンタが上限（**初期値 20**）に到達 | 0 | プロファイルの TIMEOUT と併せた総量制御 |
-| 5 | **実行時間上限（TIMEOUT）** | イテレーション境界で経過時間がプロファイル TIMEOUT を超過 | 0 | ポーリング間隔との整合・資源占有防止（要件 §4.4） |
+| 1 | **STOP kill switch** | Check `.halo/STOP` at the start of each iteration (PreflightLight) | 0 | A kill switch placed by a human (Requirements §4.4). A separate mechanism from STUCK |
+| 2 | **Daily budget exceeded** | In PreflightLight, `budget` determines there is no remaining amount | 0 | Launch but do not run (§5) |
+| 3 | **Zero ready tasks** | In Next, the task-source returns `{"task_id": null}` + exit 0 | 0 | The core that makes polling-type "task-existence-driven" operation hold |
+| 4 | **MAX_ITER reached** | The loop counter reaches the limit (**initial value 20**) | 0 | Total-volume control combined with the profile's TIMEOUT |
+| 5 | **Execution time limit (TIMEOUT)** | At an iteration boundary, elapsed time exceeds the profile TIMEOUT | 0 | Consistency with the polling interval and prevention of resource occupation (Requirements §4.4) |
 
-> **構成不備は別扱い**: 単一ポート（task-source / executor）のプラグインが 0 件、または必須構成（`.harness.yml`）欠如は「終了条件」ではなく **エラー**として扱う。前者はコア停止（サイレント続行しない）、後者は当該タスクを実行せず `needs-human`（要件 §4.2③・D1 §1.8）。
+> **Configuration defects are handled separately**: Zero plugins for a single port (task-source / executor), or the absence of the required configuration (`.harness.yml`), is not a "termination condition" but an **error**. The former stops the core (no silent continuation), and the latter does not execute the task and applies `needs-human` (Requirements §4.2③ / D1 §1.8).
 
 ---
 
-## 3. runPort 仕様
+## 3. runPort Specification
 
-`runPort` はプラグイン 1 個をプロセスとして起動し、D1 の実行規約（stdin JSON / stdout JSON / 終了コード / stderr）を強制する唯一のモジュールである。ポート種別ごとの実行戦略（単一 / 全実行 / マージ / 論理 AND / ベストエフォート）は loop 側が組み立て、runPort は「1 プロセスの起動と契約強制」に責務を限定する。
+`runPort` is the sole module that launches a single plugin as a process and enforces D1's execution conventions (stdin JSON / stdout JSON / exit code / stderr). The execution strategy per port type (single / run-all / merge / logical AND / best-effort) is assembled on the loop side, and runPort limits its responsibility to "launching one process and enforcing the contract."
 
-### 3.1 プロセス起動（spawn）
+### 3.1 Process Launch (spawn)
 
-| 項目 | 仕様 |
+| Item | Specification |
 |---|---|
-| 起動方式 | プラグインの `exec`（`plugin.json`）を子プロセスとして spawn。shell を介さず引数配列で起動する（インジェクション回避） |
-| 実行言語 | 任意（bash / Python / Node）。コアは実行体を叩くだけでプラグインの言語を知らない（D1 §0） |
-| 作業ディレクトリ | プラグインの配置ディレクトリ、または対象タスクの workdir（ポートに応じ loop が指定） |
-| 環境変数 | `plugin.json` の `env` を注入（`${...}` 参照はコアが解決）。無人実行では PATH を Linux 側のみへ洗い直したうえで渡す（要件 §6.1、Windows パス継承問題の回避） |
+| Launch method | Spawn the plugin's `exec` (`plugin.json`) as a child process. Launch with an argument array without going through a shell (avoiding injection) |
+| Execution language | Arbitrary (bash / Python / Node). The core merely invokes the executable and does not know the plugin's language (D1 §0) |
+| Working directory | The plugin's location directory, or the workdir of the target task (specified by the loop depending on the port) |
+| Environment variables | Inject `plugin.json`'s `env` (`${...}` references are resolved by the core). In unattended execution, PATH is scrubbed to the Linux side only before being passed (Requirements §6.1, avoiding the Windows path inheritance problem) |
 
 ### 3.2 stdin / stdout
 
-| 方向 | 仕様 |
+| Direction | Specification |
 |---|---|
-| stdin | 入力 JSON オブジェクトを 1 個、シリアライズして子プロセスの stdin へ書き込み、EOF で閉じる |
-| stdout | 出力を要求するポート（task-source next / context / executor / gate fail 時）は stdout を全量バッファし 1 個の JSON としてパース。**stdout は JSON 専用チャネル**であり、パース失敗は当該ポート規約に従い処理（context: スキップ、gate: 安全側 fail 等、D1 §6.2 コア側境界検証） |
-| 境界検証 | 受領した stdout を D1 配布の JSON Schema に照らして検証し、スキーマ違反はポート規約に従い扱う（D1 §6.2） |
+| stdin | Serialize one input JSON object and write it to the child process's stdin, then close with EOF |
+| stdout | For ports that require output (task-source next / context / executor / gate on fail), buffer the entire stdout and parse it as one JSON. **stdout is a JSON-only channel**, and parse failures are handled per the relevant port convention (context: skip, gate: fail on the safe side, etc., D1 §6.2 core-side boundary validation) |
+| Boundary validation | Validate the received stdout against the JSON Schema distributed with D1, and handle schema violations per the port convention (D1 §6.2) |
 
-### 3.3 timeoutSec の強制
+### 3.3 Enforcing timeoutSec
 
-各プラグインの実行タイムアウトは `plugin.json` の `timeoutSec`（未指定時はポート既定の初期値）で決まり、runPort が **プロセス側で強制**する。
+Each plugin's execution timeout is determined by `plugin.json`'s `timeoutSec` (when unspecified, the port's default initial value), and runPort **enforces it on the process side**.
 
-- タイムアウト到達時、子プロセスへ終了シグナルを送り（猶予後に強制終了）、当該実行を失敗として扱う。
-- executor の `budget.timeout_sec`（**初期値 900**）はプロンプト実行そのもののタイムアウトであり、executor アダプタが `{"status":"timeout"}` を返す経路（D1 §1.3）と、runPort のプロセスタイムアウトは二重の防護とする。runPort のタイムアウトはアダプタが応答しない異常時の最終防壁。
+- When the timeout is reached, a termination signal is sent to the child process (with a forced kill after a grace period), and that execution is treated as a failure.
+- The executor's `budget.timeout_sec` (**initial value 900**) is the timeout for the prompt execution itself, and the path where the executor adapter returns `{"status":"timeout"}` (D1 §1.3) and runPort's process timeout form double protection. runPort's timeout is the last line of defense for the abnormal case where the adapter does not respond.
 
-### 3.4 stderr のログ回送
+### 3.4 Forwarding stderr to Logs
 
-stderr は診断・ログ専用でありコントラクト上の意味を持たない（D1 §3.3）。
+stderr is for diagnostics and logs only and has no contractual meaning (D1 §3.3).
 
-- runPort は子プロセスの stderr を捕捉し、`logger` を通じて当該イテレーションの構造化ログ（`logs/iter_N.json`）へ退避する。
-- stderr の内容で合否は判定しない（判定は終了コード / status）。プラグインは人間可読な進捗・警告を stderr へ自由に書いてよい。
+- runPort captures the child process's stderr and, via `logger`, saves it to the structured log of that iteration (`logs/iter_N.json`).
+- Pass/fail is not determined by the content of stderr (determination is by exit code / status). Plugins may freely write human-readable progress and warnings to stderr.
 
-### 3.5 終了コードの扱い
+### 3.5 Handling of Exit Codes
 
-runPort は子プロセスの終了コードを呼び出し元（loop）へ伝播する。意味づけ（pass/fail/error）は D1 §3.1 に従い loop 側が行う。
+runPort propagates the child process's exit code to the caller (loop). The interpretation (pass/fail/error) is done on the loop side per D1 §3.1.
 
-| 終了コード | 意味 | loop での典型処理 |
+| Exit code | Meaning | Typical processing in loop |
 |---|---|---|
-| 0 | pass / 正常 | 成功として続行 |
-| 2 | fail | gate: 差し戻し、runtime check/test: fail |
-| その他（1 含む） | エラー（異常終了） | 安全側に倒して fail 扱い。単一ポートのプラグイン不在はコア停止 |
+| 0 | pass / normal | Continue as success |
+| 2 | fail | gate: send back, runtime check/test: fail |
+| Other (including 1) | Error (abnormal termination) | Fall to the safe side and treat as fail. The absence of a single-port plugin stops the core |
 
-### 3.6 ポート種別ごとの実行戦略（loop が組み立てる）
+### 3.6 Execution Strategy per Port Type (assembled by the loop)
 
-runPort（単発）を組み合わせて loop が実現する 4 戦略。v1.5 素材の `run_port` / `run_ports_merge` / `run_ports_all` / `run_ports_each` に相当するが、v1.8 では loop モジュール内の関数として TypeScript 化する。
+The 4 strategies the loop realizes by combining runPort (single-shot). These correspond to the v1.5 materials' `run_port` / `run_ports_merge` / `run_ports_all` / `run_ports_each`, but v1.8 turns them into TypeScript as functions within the loop module.
 
-| 戦略 | 対象ポート | 挙動 | 判定 |
+| Strategy | Target ports | Behavior | Determination |
 |---|---|---|---|
-| 単一 | task-source / executor | `order` 先頭の 1 個のみ実行 | 戻り JSON / status を loop が解釈 |
-| マージ | context | 全実行し fragments を priority 降順連結・切詰め（§2.6） | 常に success（個別失敗はスキップ） |
-| 論理 AND | gate | 全実行、1 つでも exit 2 なら全体 fail。最初の fail の reason を保持し再注入 | 終了コード（0/2） |
-| ベストエフォート | sink / on-fail | 全実行、個別失敗が他へ波及しない。sink は autonomy フィルタ後 | 副作用のみ |
+| Single | task-source / executor | Run only the first one by `order` | The loop interprets the returned JSON / status |
+| Merge | context | Run all; concatenate fragments in descending priority order and truncate (§2.6) | Always success (individual failures are skipped) |
+| Logical AND | gate | Run all; if even one exits 2, the whole fails. Retain the reason of the first fail and re-inject | Exit code (0/2) |
+| Best effort | sink / on-fail | Run all; individual failures do not propagate to others. sink runs after the autonomy filter | Side effects only |
 
 ---
 
-## 4. プリフライト 2 段の判定順序
+## 4. Two-Stage Preflight Determination Order
 
-高頻度ポーリング起動と両立させるため、プリフライトを軽量段（毎回・数秒）と重量段（タスクが実在した時のみ）に分割する（要件 §4.4）。loop の状態機械上、軽量段は Next の前（各イテレーション冒頭）、重量段は Next で task_id を得た後に走る。
+To be compatible with high-frequency polling launches, preflight is split into a light stage (every time, a few seconds) and a heavy stage (only when a task actually exists) (Requirements §4.4). In the loop state machine, the light stage runs before Next (at the start of each iteration), and the heavy stage runs after Next obtains a task_id.
 
-### 4.1 軽量段（毎回・数秒）
+### 4.1 Light Stage (every time, a few seconds)
 
-ready タスクが 0 件でも毎回走るため、コストの低い検査のみを置き、1 つでも該当したら即終了（副作用なし）する。**判定順序**は「安価かつ停止すべき度合いの高い順」とする。
+Since it runs every time even when there are zero ready tasks, it places only low-cost checks and terminates immediately (no side effects) if even one applies. The **determination order** is "cheapest and highest priority to stop first."
 
-| 順 | 検査 | 該当時の挙動 | 委譲先 |
+| Order | Check | Behavior when applicable | Delegated to |
 |---|---|---|---|
-| 1 | STOP ファイル存在（`.halo/STOP`） | 即 exit 0（キルスイッチ） | preflight |
-| 2 | lock 取得（`$TMPDIR/halo.lock`、flock） | 取得失敗（多重起動）は即 exit 0 | lock |
-| 3 | 日次予算残（`logs/` 当日実績、§5） | 残量なしは即 exit 0 | budget |
-| 4 | ready タスク有無（task-source `op=next`） | `task_id == null` は即 exit 0 | runPort |
+| 1 | STOP file exists (`.halo/STOP`) | Immediate exit 0 (kill switch) | preflight |
+| 2 | lock acquisition (`$TMPDIR/halo.lock`, flock) | Acquisition failure (concurrent launch) → immediate exit 0 | lock |
+| 3 | Remaining daily budget (`logs/` day's actuals, §5) | No remaining amount → immediate exit 0 | budget |
+| 4 | ready task presence (task-source `op=next`) | `task_id == null` → immediate exit 0 | runPort |
 
-> 順序の根拠: STOP は人間の明示停止意図であり最優先。lock はコスト最小の多重起動遮断。予算は task-source 起動（プロセス spawn）より安価に判定できるため ready 判定より前に置く。ready 判定は task-source プロセスを起動するため最後。
+> Rationale for the order: STOP is a human's explicit intent to stop and has top priority. lock is the lowest-cost interruption of concurrent launches. The budget can be determined more cheaply than launching the task-source (process spawn), so it is placed before the ready check. The ready check launches the task-source process, so it is last.
 >
-> 実装注記: lock は起動時に一度だけ取得し保持し続ける（§1.2 の起動時取得・終了時解放）。毎イテレーションの軽量段が実際に再チェックするのは STOP と予算残の 2 つであり（`runLoop` は `isStopPresent` / `isBudgetOk` を反復呼び出しする）、lock の再取得は行わない。上表の #2 は起動時の一度きりの取得を指す。
+> Implementation note: The lock is acquired once at launch and held (the launch-time acquisition / termination-time release of §1.2). What the light stage of each iteration actually rechecks is the two items STOP and remaining budget (`runLoop` repeatedly calls `isStopPresent` / `isBudgetOk`), and the lock is not re-acquired. #2 in the table above refers to the one-time acquisition at launch.
 
-### 4.2 重量段（タスクが実在した時のみ・1 回）
+### 4.2 Heavy Stage (only when a task actually exists, once)
 
-軽量段を通過し task_id を得た後にのみ走る。実タスクがあるときだけコストを払う。
+Runs only after passing the light stage and obtaining a task_id. It pays the cost only when there is an actual task.
 
-| 順 | 検査 | 該当時の挙動 | 委譲先 |
+| Order | Check | Behavior when applicable | Delegated to |
 |---|---|---|---|
-| 1 | git 作業ツリー clean | 未コミット変更があれば当該起動を中止（記録） | preflight |
-| 2 | ディスク残量 | 閾値未満は中止（worktree 生成不可） | preflight |
-| 3 | クレジット probe | headless の消費レート実測（要件 §6.2）。異常時は中止 | preflight |
-| 4 | グラフ鮮度同期 | main が前回インデックスから進んでいれば再インデックス→陳腐化検出→`kind:docs` 自動起票（案A、要件 §5.1・§10） | preflight（グラフは私有プラグイン管轄） |
+| 1 | git working tree clean | If there are uncommitted changes, abort this launch (record) | preflight |
+| 2 | Disk space | Below the threshold, abort (worktree cannot be created) | preflight |
+| 3 | Credit probe | Measure the headless consumption rate (Requirements §6.2). Abort on anomaly | preflight |
+| 4 | Graph freshness sync | If main has advanced from the last index, re-index → detect staleness → auto-file a `kind:docs` issue (Plan A, Requirements §5.1 / §10) | preflight (the graph is under the jurisdiction of a private plugin) |
 
-> **mcp.json の生成タイミング**: executor に渡す `.halo/mcp.json` は `ports/mcp.d/*.json` をマージして生成する（D1 §1.10）。生成は重量段で 1 回行い（軽量段では不要）、`--strict-mcp-config` により唯一の MCP ソースとする。v1.5 素材の `jq` マージは v1.8 では config/discovery モジュールによる deep-merge（後勝ち・番号順）で実装する。
+> **Timing of mcp.json generation**: The `.halo/mcp.json` passed to the executor is generated by merging `ports/mcp.d/*.json` (D1 §1.10). Generation is done once in the heavy stage (unnecessary in the light stage), and `--strict-mcp-config` makes it the sole MCP source. The v1.5 materials' `jq` merge is implemented in v1.8 as a deep-merge by the config/discovery module (last-wins, numeric order).
 
 ---
 
-## 5. budget の都度計測アルゴリズム
+## 5. The budget Just-in-Time Measurement Algorithm
 
-要件 §4.4・§8.2 に従い、日次予算は **台帳を持たず実行時に都度計測** する。真実の源は `logs/` 配下の当日実績であり、コアは集計結果と上限（プロファイルで指定、初期値は据え置き）を比較して残量を判定する。
+Per Requirements §4.4 / §8.2, the daily budget is **measured just-in-time at runtime without a ledger**. The source of truth is the day's actuals under `logs/`, and the core compares the aggregation result with the limit (specified in the profile; the initial value is left as-is) to determine the remaining amount.
 
-### 5.1 アルゴリズム
+### 5.1 Algorithm
 
 ```
 budgetRemaining(now, profile):
-  today        = ローカル日付(now)                       # 日境界はローカルタイムゾーン
-  logs         = logs/iter_*.json のうち mtime/記録日時が today のもの
-  usedIters    = count(logs)                             # 当日のイテレーション実行数
-  usedCost     = sum(logs[].cost.usd)                    # 記録があれば加算（可観測性用・任意）
-  limitIters   = profile.DAILY_MAX_ITERATIONS            # 初期値（プロファイル定義）
-  limitCost    = profile.DAILY_MAX_COST_USD              # 初期値（任意・未設定可）
-  ok = usedIters < limitIters AND (limitCost 未設定 OR usedCost < limitCost)
+  today        = local date(now)                        # the day boundary is the local timezone
+  logs         = those in logs/iter_*.json whose mtime/recorded time is today
+  usedIters    = count(logs)                             # number of iterations run today
+  usedCost     = sum(logs[].cost.usd)                    # add if recorded (for observability, optional)
+  limitIters   = profile.DAILY_MAX_ITERATIONS            # initial value (profile-defined)
+  limitCost    = profile.DAILY_MAX_COST_USD              # initial value (optional, may be unset)
+  ok = usedIters < limitIters AND (limitCost unset OR usedCost < limitCost)
   return ok
 ```
 
-### 5.2 設計上の注意
+### 5.2 Design Notes
 
-| 項目 | 方針 |
+| Item | Policy |
 |---|---|
-| 集計対象 | `logs/iter_N.json`（要件 §6.3 の構造化ログ）。1 ファイル = 1 イテレーションを基本単位とする |
-| 日境界 | ローカルタイムゾーンの暦日。夜間バッチが日付をまたぐ場合の扱いは初期値として「実行時刻の暦日」とし、実測後に調整可能 |
-| コスト計測 | executor 出力の `cost.usd`（ccusage 相当、任意）を加算。未記録の場合はイテレーション数のみで判定（コスト上限は補助的） |
-| 二重防護 | 予算は「起動しても即終了」の総量制御であり、`--max-turns` / iteration timeout / MAX_ITER（要件 §6.2）と組み合わせて暴走を多層で防ぐ |
-| グローバル状態ゼロ | 台帳（累積カウンタファイル等）を持たないことで、複数プロジェクト・撤去容易性（`.halo/` 削除で完結）を担保する |
+| Aggregation target | `logs/iter_N.json` (the structured logs of Requirements §6.3). One file = one iteration is the basic unit |
+| Day boundary | Calendar day in the local timezone. The handling when a nightly batch crosses the date boundary is, as an initial value, "the calendar day of the execution time," adjustable after measurement |
+| Cost measurement | Add the executor output's `cost.usd` (ccusage-equivalent, optional). When unrecorded, determine by iteration count only (the cost limit is auxiliary) |
+| Double protection | The budget is total-volume control of "launch but terminate immediately," combined with `--max-turns` / iteration timeout / MAX_ITER (Requirements §6.2) to prevent runaway in multiple layers |
+| Zero global state | By not holding a ledger (cumulative counter file, etc.), we guarantee multi-project support and ease of removal (complete by deleting `.halo/`) |
 
-> `DAILY_MAX_ITERATIONS` / `DAILY_MAX_COST_USD` は要件 §11.2 の思想に沿う **調整可能な初期値** であり、プロファイル（§9）で与える。コアに固定値を埋め込まない。
-
----
-
-## 6. discovery の走査・ソート・有効化判定
-
-`discovery` モジュールは `ports/<port>.d/` を走査し、有効なプラグインを `order` 昇順に列挙する。要件 §3.2 の「ディレクトリ規約による活性化（conf.d 方式）」を実装する。
-
-### 6.1 走査対象
-
-プラグインは要件 §8.2 の `.halo/ports/<port>.d/` 配下に置かれる（公開見本は `node_modules/@halo/plugin-*`、私有は `.halo/ports/` に配置・有効化リンク）。discovery は各ポートディレクトリを走査し、`plugin.json` を持つエントリを候補とする。
-
-| ポート | 単位 | エントリ |
-|---|---|---|
-| task-source / context / executor / gate / sink / on-fail | 単一ファイル（実行体 + `plugin.json`） | `plugin.json` の `exec` |
-| runtime / trigger | サブディレクトリ束 | runtime: `setup`/`check`/`test`、trigger: `install`/`uninstall`/`fire`（固定名） |
-| mcp.d | 構成断片（`*.json`） | ポート非該当（executor へマージ供給） |
-
-### 6.2 order ソート
-
-- 実行順は `plugin.json` の `order`（整数）昇順。`order` 省略時はファイル名の数字プレフィックス（`NN-name`）に従う。
-- 番号が同一の場合は名前順で**決定的**に解決する（非決定を作らない）。安定ソートを用いる。
-- 番号は **10 刻み**を基本とし、間への挿入余地を残す運用とする。
-- runtime / trigger は番号プレフィックスを付けない。選択は runtime = `.harness.yml` の宣言、trigger = install による（順序ではないため、D1 §1.7・§1.9）。
-
-### 6.3 有効化判定
-
-| 判定 | 有効化 | 無効化（残して OFF） |
-|---|---|---|
-| 存在 | `ports/<port>.d/` に置く | ディレクトリから削除 |
-| 実行可否 | 実行可能な実行体 + 妥当な `plugin.json` を持つ | `.disabled` 等での退避、または実行体を除去 |
-
-効果測定のための ON/OFF はディレクトリ操作のみで行い（要件 §3.2 原則2「1 変数ずつ測る」）、コア・discovery は無変更である。単一ポート（task-source / executor）で有効候補が 0 件の場合はコア停止（構成不備、§2.7）。
+> `DAILY_MAX_ITERATIONS` / `DAILY_MAX_COST_USD` are **adjustable initial values** in line with the philosophy of Requirements §11.2 and are given by the profile (§9). No fixed value is embedded in the core.
 
 ---
 
-## 7. 上向き探索（.harness.yml）の解決規則
+## 6. discovery Scanning, Sorting, and Enablement Determination
 
-`.harness.yml` は対象リポジトリのルートに**必須**の宣言であり（D1 §1.8）、kind から runtime 群とプロンプトテンプレートを決定する。discovery はこれを上向き探索で解決する。
+The `discovery` module scans `ports/<port>.d/` and enumerates enabled plugins in ascending `order`. It implements the "activation by directory convention (conf.d style)" of Requirements §3.2.
 
-### 7.1 探索規則
+### 6.1 Scan Targets
 
-| 項目 | 規則 |
+Plugins are placed under `.halo/ports/<port>.d/` of Requirements §8.2 (public samples are `node_modules/@halo/plugin-*`, private ones are placed in `.halo/ports/` with an enablement link). discovery scans each port directory and treats entries that have a `plugin.json` as candidates.
+
+| Port | Unit | Entry |
+|---|---|---|
+| task-source / context / executor / gate / sink / on-fail | Single file (executable + `plugin.json`) | The `exec` of `plugin.json` |
+| runtime / trigger | Subdirectory bundle | runtime: `setup`/`check`/`test`, trigger: `install`/`uninstall`/`fire` (fixed names) |
+| mcp.d | Configuration fragment (`*.json`) | Not a port (merged and supplied to the executor) |
+
+### 6.2 order Sorting
+
+- Execution order is ascending by `plugin.json`'s `order` (integer). When `order` is omitted, it follows the numeric prefix of the filename (`NN-name`).
+- When numbers are identical, resolve **deterministically** by name (no non-determinism is created). Use a stable sort.
+- Numbers are basically in **increments of 10**, an operation that leaves room for insertion in between.
+- runtime / trigger do not have a numeric prefix. Selection is by runtime = the `.harness.yml` declaration and trigger = install (not order, D1 §1.7 / §1.9).
+
+### 6.3 Enablement Determination
+
+| Determination | Enabled | Disabled (kept but OFF) |
+|---|---|---|
+| Existence | Placed in `ports/<port>.d/` | Deleted from the directory |
+| Executability | Has an executable executable + valid `plugin.json` | Evacuated with `.disabled` etc., or the executable removed |
+
+ON/OFF for measuring effect is done by directory operations only (Requirements §3.2 Principle 2 "measure one variable at a time"), and the core / discovery is unchanged. If there are zero enabled candidates for a single port (task-source / executor), the core stops (configuration defect, §2.7).
+
+---
+
+## 7. Resolution Rules for Upward Search (.harness.yml)
+
+`.harness.yml` is a **required** declaration at the root of the target repository (D1 §1.8) and determines the runtime group and prompt template from the kind. discovery resolves it by upward search.
+
+### 7.1 Search Rules
+
+| Item | Rule |
 |---|---|
-| 起点 | コア実行時のカレント（対象リポジトリ内の任意ディレクトリを許容） |
-| 探索方向 | 起点から親方向へ、`.harness.yml` を発見するまで上る（リポジトリルートに 1 個存在する前提） |
-| 停止 | リポジトリルート（`.git` 検出）または filesystem ルートで打ち切り |
-| 不在時 | 発見できなければタスクを実行せず `needs-human`（暗黙の runtime 自動検出は行わない、D1 §1.8・要件 §4.2③） |
+| Start point | The current directory at core execution time (any directory within the target repository is allowed) |
+| Search direction | Ascend from the start point toward the parent until `.harness.yml` is found (assuming one exists at the repository root) |
+| Stop | Terminate at the repository root (`.git` detected) or the filesystem root |
+| When absent | If it cannot be found, do not execute the task and apply `needs-human` (no implicit auto-detection of the runtime, D1 §1.8 / Requirements §4.2③) |
 
-### 7.2 kind 解決
+### 7.2 kind Resolution
 
-1. Issue の `kind:<name>` ラベル（無指定時は `code`）を取得する。
-2. `.harness.yml` の `kinds.<name>` を引き、`runtimes`（1 つ以上）と `prompt`（テンプレートパス）を得る。
-3. 該当 kind が未定義、または `runtimes` の各要素が `runtime.d/<name>/` に実在しないいずれの場合も `needs-human`（再現性優先）。
-4. `runtimes` が複数の場合、gate 実行順・部分失敗の扱いは要件 §11.3 で保留。本設計では単一 runtime を前提とし、複数指定時は配列順に setup/check/test を実行する素朴実装に留める。
+1. Obtain the Issue's `kind:<name>` label (when unspecified, `code`).
+2. Look up `.harness.yml`'s `kinds.<name>` and obtain `runtimes` (one or more) and `prompt` (template path).
+3. If the corresponding kind is undefined, or if any element of `runtimes` does not actually exist in `runtime.d/<name>/`, apply `needs-human` (reproducibility first).
+4. When `runtimes` are multiple, the gate execution order and the handling of partial failures are pending in Requirements §11.3. This design assumes a single runtime, and for multiple specifications it stays with a naive implementation that runs setup/check/test in array order.
 
 ---
 
-## 8. worktree ライフサイクル
+## 8. worktree Lifecycle
 
-1 Issue = 1 ブランチ = 1 worktree。AI の作業はすべて生滅する worktree 内で行い、人間の作業ディレクトリと物理分離する（要件 §8.2）。フレッシュコンテキスト原則をファイルシステムへも適用し、後始末を「削除一発」に単純化する（cleanup バグを構造的に排除）。
+One Issue = one branch = one worktree. All of the AI's work is done inside an ephemeral worktree, physically separated from the human's working directory (Requirements §8.2). It applies the fresh-context principle to the filesystem as well, simplifying cleanup to "a single delete" (structurally eliminating cleanup bugs).
 
-### 8.1 命名規則と配置
+### 8.1 Naming Convention and Placement
 
-| 項目 | 規則 |
+| Item | Rule |
 |---|---|
-| 配置 | `$TMPDIR/halo-wt-issue-N/`（OS tmpdir 直下）。リポジトリ内入れ子を避け、lint/glob の誤検出を構造的に回避（要件 §8.2 揮発物） |
-| 命名 | `halo-wt-issue-<N>`（`<N>` は Issue 番号）。ブランチは `feature/issue-<N>` |
-| ブランチ | 同一ブランチの二重チェックアウトは git が禁止するため、並列時の衝突防止を無料で得る |
+| Placement | `$TMPDIR/halo-wt-issue-N/` (directly under the OS tmpdir). Avoids nesting within the repository, structurally avoiding false positives in lint/glob (Requirements §8.2 volatile artifacts) |
+| Naming | `halo-wt-issue-<N>` (`<N>` is the Issue number). The branch is `feature/issue-<N>` |
+| Branch | Since git prohibits double-checkout of the same branch, we get collision prevention during parallelism for free |
 
-> **v1.5 → v1.8 の配置変更**: v1.5 素材は worktree を `~/halo/wt/issue-N`（`/home` 配下固定）に置いていたが、v1.8 要件 §8.2 は **OS tmpdir（`$TMPDIR/halo-wt-issue-N/`）** を揮発物の置き場と定める。ただしリンクベース依存共有（pnpm store / uv cache / CARGO_TARGET_DIR）は同一ファイルシステム内でのみ有効なため（要件 §4.2⑦・D1 §1.7 WSL2 配置制約）、`$TMPDIR` と各ストア・cache は同一 FS（WSL2 の ext4 側）に置く必要がある。`/mnt/c/` 配下への配置は禁止。
+> **Placement change from v1.5 → v1.8**: The v1.5 materials placed the worktree at `~/halo/wt/issue-N` (fixed under `/home`), but v1.8 Requirements §8.2 defines the **OS tmpdir (`$TMPDIR/halo-wt-issue-N/`)** as the location for volatile artifacts. However, since link-based dependency sharing (pnpm store / uv cache / CARGO_TARGET_DIR) is effective only within the same filesystem (Requirements §4.2⑦ / D1 §1.7 WSL2 placement constraint), `$TMPDIR` and each store/cache must be on the same FS (the ext4 side of WSL2). Placement under `/mnt/c/` is prohibited.
 
-### 8.2 状態遷移（生成→破棄）
+### 8.2 State Transitions (create → destroy)
 
-| 状態 | 処理 | 対応 loop 状態 |
+| State | Processing | Corresponding loop state |
 |---|---|---|
-| Created | `git worktree add $TMPDIR/halo-wt-issue-<N> -b feature/issue-<N>` | Next 後・PreflightHeavy |
-| KindResolved | `.harness.yml` の kind 解決（§7）。不在/未定義は NeedsHuman | Context 前 |
-| SetUp | 採用 runtime 群の `setup`（env 注入・依存実体化・キャッシュ外出し） | Context 前 |
-| Running | executor 実行。サンドボックス書込境界を worktree に一致させる（要件 §6.1、D4 管轄） | Execute |
-| GateEval | 作業ツリーの未コミット diff を gate へ | Gate |
-| Failing→Running | gate reason を再注入し再実行（retry_count < 閾値） | Gate fail → 次 iter |
-| Passed→Sink | 合格。commit / PR 作成（autonomy フィルタ後） | Sink |
-| Removed | pass（PR 作成後）/ fail 確定 / needs-human いずれも `git worktree remove --force` で痕跡ごと削除 | イテレーション終端 |
+| Created | `git worktree add $TMPDIR/halo-wt-issue-<N> -b feature/issue-<N>` | After Next / PreflightHeavy |
+| KindResolved | kind resolution of `.harness.yml` (§7). Absent/undefined → NeedsHuman | Before Context |
+| SetUp | `setup` of the adopted runtime group (env injection, dependency materialization, cache externalization) | Before Context |
+| Running | executor execution. Match the sandbox write boundary to the worktree (Requirements §6.1, under D4's jurisdiction) | Execute |
+| GateEval | Pass the working tree's uncommitted diff to the gate | Gate |
+| Failing→Running | Re-inject the gate reason and re-run (retry_count < threshold) | Gate fail → next iter |
+| Passed→Sink | Passed. commit / PR creation (after the autonomy filter) | Sink |
+| Removed | On pass (after PR creation) / confirmed fail / needs-human, all deleted along with traces via `git worktree remove --force` | Iteration end |
 
-> 実装注記: KindResolved・SetUp（kind 解決と runtime setup）の順序保証は `createWorktree` シーム（CLI 側で worktree 生成と併せて実体化）が担い、`runLoop` 本体はこれらを状態として持たない。コアが受け取るのは実体化済み worktree の絶対パスのみで、kind 解決／runtime 選択が Context 実行前に完了していることは CLI/`createWorktree` の責務である（§1.2 委譲）。
+> Implementation note: The order guarantee of KindResolved / SetUp (kind resolution and runtime setup) is handled by the `createWorktree` seam (materialized on the CLI side together with worktree creation), and the `runLoop` body itself does not hold these as states. What the core receives is only the absolute path of the already-materialized worktree, and completing kind resolution / runtime selection before Context execution is the responsibility of the CLI / `createWorktree` (§1.2 delegation).
 
-### 8.3 破棄の一元化
+### 8.3 Centralization of Destruction
 
-- 合格しない限り sink（commit / PR）が走らないため、不良成果物が外部へ出る導線は **gate 通過を唯一の関門**として一元化される。
-- fail 確定・needs-human・stuck/timeout のいずれでも、変更は使い捨て worktree 内に閉じ、`git worktree remove --force` で削除される。コアは worktree の中身を人間作業ディレクトリへ持ち出さない。
-- worktree はグローバル状態を持たない揮発物であり（要件 §8.2）、残骸が生じた場合の掃除は doctor（D3）とランブック（D7）の管轄とする。
+- Since the sink (commit / PR) does not run unless it passes, the conduit by which defective artifacts leak outside is centralized with **gate passage as the sole gateway**.
+- Whether confirmed fail, needs-human, or stuck/timeout, changes are confined to the disposable worktree and deleted with `git worktree remove --force`. The core does not carry the worktree's contents out to the human's working directory.
+- The worktree is a volatile artifact with no global state (Requirements §8.2), and cleanup when debris arises is under the jurisdiction of doctor (D3) and the runbook (D7).
 
 ---
 
-## 付録 A. モジュール依存図
+## Appendix A. Module Dependency Diagram
 
 ```
                      ┌──────────┐
-                     │   loop   │  状態機械（§2）
+                     │   loop   │  state machine (§2)
                      └────┬─────┘
         ┌──────────┬──────┼───────┬──────────┬─────────┐
         ▼          ▼      ▼       ▼          ▼         ▼
@@ -388,27 +388,25 @@ budgetRemaining(now, profile):
    └────┬────┘ └───┬───┘ └──┬───┘ └───┬────┘ └───┬───┘ └───┬────┘
         │  ┌───────┴────────┐ │         │         │         │
         ▼  ▼                ▼ ▼         ▼         ▼         ▼
-    ┌──────┐            ┌────────┐   （config は discovery / budget /
-    │ lock │            │ logger │     preflight から参照される）
+    ┌──────┐            ┌────────┐   (config is referenced by discovery /
+    │ lock │            │ logger │     budget / preflight)
     └──────┘            └────────┘
 ```
 
-## 付録 B. v1.5 素材からの主な変更点
+## Appendix B. Main Changes from the v1.5 Materials
 
-| 項目 | v1.5 素材（bash） | v1.8（本書・TypeScript） |
+| Item | v1.5 materials (bash) | v1.8 (this document, TypeScript) |
 |---|---|---|
-| コア実装 | `core/loop.sh` + `core/helpers.sh`（bash・約 20 行 + 30 行） | `packages/core` の 9 モジュール（TS） |
-| ポート実行関数 | `run_port` / `run_ports_merge` / `run_ports_all` / `run_ports_each`（helpers.sh） | runPort（単発）+ loop 内の 4 戦略関数（§3.6） |
-| 自律度宣言 | sink 冒頭メタコメント `# min-autonomy: L3` | `plugin.json` の `minAutonomy`（§2.5・D1 §2） |
-| worktree 配置 | `~/halo/wt/issue-N`（/home 固定） | `$TMPDIR/halo-wt-issue-N`（要件 §8.2、同一 FS 制約は維持） |
-| mcp.json 生成 | `jq -s` マージ | config/discovery による deep-merge（§4.2） |
-| 配布 | ローカルスクリプト | npm 配布（`npx halo` / `.bin/halo` 絶対パス直叩き） |
-| lock | `flock /tmp/harness.lock` | `lock` モジュール（`$TMPDIR/halo.lock`） |
+| Core implementation | `core/loop.sh` + `core/helpers.sh` (bash, ~20 lines + 30 lines) | The 9 modules of `packages/core` (TS) |
+| Port execution functions | `run_port` / `run_ports_merge` / `run_ports_all` / `run_ports_each` (helpers.sh) | runPort (single-shot) + the 4 strategy functions within loop (§3.6) |
+| Autonomy declaration | Sink-leading meta-comment `# min-autonomy: L3` | `plugin.json`'s `minAutonomy` (§2.5 / D1 §2) |
+| worktree placement | `~/halo/wt/issue-N` (fixed to /home) | `$TMPDIR/halo-wt-issue-N` (Requirements §8.2, same-FS constraint retained) |
+| mcp.json generation | `jq -s` merge | deep-merge by config/discovery (§4.2) |
+| Distribution | Local scripts | npm distribution (`npx halo` / direct invocation of the `.bin/halo` absolute path) |
+| lock | `flock /tmp/harness.lock` | The `lock` module (`$TMPDIR/halo.lock`) |
 
-## 付録 C. 参照
+## Appendix C. References
 
-- HALO要件定義書 v1.8 §3（全体アーキテクチャ）・§4.3（コアループ）・§4.4（起動層・プリフライト 2 段・安全装置）・§6（非機能）・§8（ディレクトリ構成）・§11（設計判断の分類）
-- D1 コントラクト仕様書（9 ポート I/O 型・`plugin.json`・実行規約・kg:// URI・STUCK マーカー・JSON Schema 生成）
-- D3 CLI 仕様書（コア関数への委譲・doctor・プロファイル形式）／ D4 セキュリティ設計書（サンドボックス・自己改変防止）／ D8 テスト戦略書（純粋関数の単体テスト・ループ回帰）
-</content>
-</invoke>
+- HALO Requirements Specification v1.8 §3 (Overall Architecture), §4.3 (Core Loop), §4.4 (Launch Layer, two-stage preflight, safety mechanisms), §6 (Non-functional), §8 (Directory Structure), §11 (Classification of Design Decisions)
+- D1 Contract Specification (9-port I/O types, `plugin.json`, execution conventions, kg:// URI, STUCK marker, JSON Schema generation)
+- D3 CLI Specification (delegation to core functions, doctor, profile format) / D4 Security Design (sandbox, self-modification prevention) / D8 Test Strategy (unit testing of pure functions, loop regression)

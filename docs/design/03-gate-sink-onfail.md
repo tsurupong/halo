@@ -1,267 +1,267 @@
-# 詳細設計書 03: gate / sink / on-fail
+# Detailed Design 03: gate / sink / on-fail
 
-> **v1.8 追随改訂済み（コア TS 化・specs/ 廃止を反映）**。loop-audit は v1.8 §11.1 に従い **7 項目**（旧 6 項目）。①spec_refs は `specs/` ファイルの `test -f` ではなく**ナレッジグラフのノード実在照会**へ、⑦**グラフハッシュ照合**を追加。権威表は [D4 セキュリティ設計書 §4](./d4-security-design.md) にあり、本書 §2 はそれに追随する。
+> **Updated to follow v1.8 (reflecting the migration of the core to TS and the removal of `specs/`)**. Per v1.8 §11.1, loop-audit now has **7 items** (previously 6). ① `spec_refs` is now checked by **querying node existence in the knowledge graph** rather than by `test -f` against `specs/` files, and ⑦ **graph-hash verification** has been added. The authoritative table is in [D4 Security Design §4](./d4-security-design.md); §2 of this document follows it.
 
-| 項目 | 内容 |
+| Item | Content |
 |---|---|
-| 対象ポート | ④ gate / ⑤ sink / ⑥ on-fail |
-| 典拠 | [HALO要件定義書](../../../docs/HALO要件定義書.md) §4.2④⑤⑥・§7・§11、[ADR-0004](../adr/0004-self-modification-prohibition.md)、[ADR-0006](../adr/0006-autonomy-levels.md) |
-| 関連ADR | [ADR-0001 ポート＆アダプタ／統一コントラクト](../adr/0001-ports-and-adapters-unified-contract.md)、[ADR-0002 使い捨てworktree](../adr/0002-disposable-worktree.md) |
-| ステータス | 詳細設計 |
+| Target ports | ④ gate / ⑤ sink / ⑥ on-fail |
+| Source | [HALO Requirements Definition](../../../docs/HALO要件定義書.md) §4.2④⑤⑥, §7, §11, [ADR-0004](../adr/0004-self-modification-prohibition.md), [ADR-0006](../adr/0006-autonomy-levels.md) |
+| Related ADRs | [ADR-0001 Ports & Adapters / Unified Contract](../adr/0001-ports-and-adapters-unified-contract.md), [ADR-0002 Disposable worktree](../adr/0002-disposable-worktree.md) |
+| Status | Detailed design |
 
-本書は成果物の合否判定（gate）・合格後の副作用（sink）・失敗時処理（on-fail）の3ポートを詳細設計する。3ポートはコアループの後半を構成し、要件定義書 §4.3 のコアループ擬似コードにおける `run_ports_all gate` → `run_ports_each sink` / `last_gate_failure` 再注入 → on-fail の順で駆動される。すべてのプラグインは統一コントラクト（stdin/stdout の JSON + 終了コード、ADR-0001）に従う。
+This document details the design of three ports: the pass/fail judgment of artifacts (gate), the side effects after passing (sink), and the handling of failures (on-fail). These three ports make up the latter half of the core loop, and in the core loop pseudocode of Requirements §4.3 they are driven in the order `run_ports_all gate` → `run_ports_each sink` / re-injection of `last_gate_failure` → on-fail. All plugins follow the unified contract (JSON over stdin/stdout + exit codes, ADR-0001).
 
 ---
 
-## 1. gate ポート（合否判定）
+## 1. gate port (pass/fail judgment)
 
-### 1.1 コントラクトと gate.d 番号順実行
+### 1.1 Contract and numbered-order execution of gate.d
 
-要件定義書 §4.2④ に基づき、gate プラグインの入出力を定める。
+Based on Requirements §4.2④, the input/output of gate plugins is defined as follows.
 
 ```
-入力(stdin): {"task_id": "T-012", "workdir": "/home/user/wt/issue-12", "changed_files": ["src/order.ts", "src/order.test.ts"]}
-判定: exit 0 = pass / exit 2 = fail（Claude Code hooks と同一規約）
-出力(fail時のみ, stdout): {"gate": "50-loop-audit", "reason": "diff 1720 行 > 1500", "hint": "Issue をサブタスクに分割せよ"}
+input(stdin): {"task_id": "T-012", "workdir": "/home/user/wt/issue-12", "changed_files": ["src/order.ts", "src/order.test.ts"]}
+decision: exit 0 = pass / exit 2 = fail (same convention as Claude Code hooks)
+output(fail only, stdout): {"gate": "50-loop-audit", "reason": "diff 1720 lines > 1500", "hint": "Split the Issue into subtasks"}
 ```
 
-- コアは `ports/gate.d/` 配下のファイルを**数字プレフィックスの昇順**で全実行する。番号順は「安いゲートを先に、高いゲートを後に」の原則で並べる（早期 fail でコスト節約）。初期並びは要件定義書 §8 のとおり `10-typecheck` → `20-lint` → `30-test` → `40-ai-review` → `50-loop-audit`。
-- **exit 2 規約**: 合否は終了コードで表現する。`exit 0`=pass、`exit 2`=fail。それ以外（1 や 127 等）はプラグイン自体の実行エラーとして扱い、コアは on-fail の対象（`reason` に「gate 実行エラー」を格納）とする。exit 2 のみが「成果物が基準を満たさない」を意味する。この二値規約は Claude Code の hooks（PreToolUse/Stop）と同一であり、gate プラグインをそのまま hook としても流用できる。
-- **全実行 vs 早期打ち切り**: コアは原則として gate.d を最後まで全実行し、fail した全ゲートの reason を収集する（1周で複数の是正点を AI に返すため）。ただし前段が fail したまま後段（特に高コストな `40-ai-review`）を走らせても無意味な場合に備え、各ゲートは前段 fail 情報を無視して独立に判定できること（ゲート間に依存を持たせない）を設計制約とする。運用上のコスト最適化として「1つでも fail したら `40-ai-review` はスキップ」の早期打ち切りをコアのオプション（環境変数 `GATE_FAIL_FAST`）で選べるようにするが、既定は全実行とする。
+- The core runs all files under `ports/gate.d/` in **ascending order of their numeric prefix**. The numeric order follows the principle of "cheap gates first, expensive gates later" (fail early to save cost). The initial ordering is as in Requirements §8: `10-typecheck` → `20-lint` → `30-test` → `40-ai-review` → `50-loop-audit`.
+- **exit 2 convention**: Pass/fail is expressed by the exit code. `exit 0` = pass, `exit 2` = fail. Any other code (1, 127, etc.) is treated as an execution error of the plugin itself, and the core makes it a target of on-fail (storing "gate execution error" in `reason`). Only exit 2 means "the artifact does not meet the criteria." This binary convention is identical to Claude Code's hooks (PreToolUse/Stop), so a gate plugin can be reused as-is as a hook.
+- **Full execution vs. early termination**: As a rule, the core runs gate.d all the way to the end and collects the reasons of all failed gates (so that multiple corrective points can be returned to the AI in a single round). However, to handle cases where running a later gate (especially the costly `40-ai-review`) is pointless while an earlier one has failed, it is a design constraint that each gate must be able to judge independently, ignoring earlier fail information (no dependencies between gates). As an operational cost optimization, the core offers an option (the `GATE_FAIL_FAST` environment variable) to select early termination of "skip `40-ai-review` if any gate has failed," but the default is full execution.
 
-### 1.2 fail 時 JSON 仕様（reason / hint）
+### 1.2 fail-time JSON specification (reason / hint)
 
-fail したゲートは stdout に単一の JSON オブジェクトを出力する。
+A failed gate outputs a single JSON object to stdout.
 
-| フィールド | 型 | 必須 | 意味 |
+| Field | Type | Required | Meaning |
 |---|---|---|---|
-| `gate` | string | 必須 | 発火したゲートのファイル名（番号込み。例 `30-test`） |
-| `reason` | string | 必須 | 機械可読寄りの失敗事実。数値を含める（例 `coverage 87% < 90%`）。次イテレーションのプロンプトに再注入される中核 |
-| `hint` | string | 任意 | 是正の方向づけ（例 `src/order.ts のテスト不足`）。命令ではなくヒント。AI の自律判断を過度に縛らない |
-| `evidence` | string[] | 任意 | 判定根拠（spec 行の引用・失敗テスト名・エラーログ抜粋）。`40-ai-review` では後述の証拠要求のため実質必須 |
+| `gate` | string | Required | File name of the gate that fired (including the number, e.g. `30-test`) |
+| `reason` | string | Required | The failure fact, leaning machine-readable. Include numbers (e.g. `coverage 87% < 90%`). This is the core content re-injected into the next iteration's prompt |
+| `hint` | string | Optional | Direction for correction (e.g. `insufficient tests for src/order.ts`). A hint, not a command. Does not overly constrain the AI's autonomous judgment |
+| `evidence` | string[] | Optional | Basis for the judgment (spec-line quotes, failing test names, error-log excerpts). Effectively required for `40-ai-review` due to the evidence requirement described below |
 
-- コアは fail した全ゲートの JSON を配列に集約し `gate_failure.json` に永続化する。要件定義書 §4.3 の `last_gate_failure=$(cat gate_failure.json)` がこれを読み、次周回の `build_prompt` で「前回の gate 差し戻し」ブロックとしてプロンプトへ再注入する。
-- 再注入フォーマットは `reason` を主、`hint` を副として提示し、AI に「同じ失敗を繰り返させない」ことを狙う。`evidence` は AI が是正箇所を特定するための一次情報として添付する。
+- The core aggregates the JSON of all failed gates into an array and persists it to `gate_failure.json`. In Requirements §4.3, `last_gate_failure=$(cat gate_failure.json)` reads this, and `build_prompt` in the next round re-injects it into the prompt as the "previous gate rejection" block.
+- The re-injection format presents `reason` primarily and `hint` secondarily, aiming to keep the AI from "repeating the same failure." `evidence` is attached as primary information for the AI to pinpoint the location to fix.
 
-### 1.3 gate.d の初期構成と runtime 委譲
+### 1.3 Initial composition of gate.d and delegation to runtime
 
-| ファイル | 種別 | 実体 |
+| File | Type | Substance |
 |---|---|---|
-| `10-typecheck.sh` | runtime 委譲 | 採用 runtime の `check.sh`（型検査部）へ委譲する薄いラッパー |
-| `20-lint.sh` | runtime 委譲 | 採用 runtime の `check.sh`（lint 部）へ委譲 |
-| `30-test.sh` | runtime 委譲 | 採用 runtime の `test.sh` へ委譲（exit 2 = fail をそのまま伝播） |
-| `40-ai-review.sh` | evaluator gate | 独立コンテキストの評価エージェント（§3） |
-| `50-loop-audit.sh` | 静的検査 | git diff ベースの7項目検査（§2）。安全不変条件のため初日から必須 |
+| `10-typecheck.sh` | runtime delegation | A thin wrapper delegating to the adopted runtime's `check.sh` (the type-check portion) |
+| `20-lint.sh` | runtime delegation | Delegates to the adopted runtime's `check.sh` (the lint portion) |
+| `30-test.sh` | runtime delegation | Delegates to the adopted runtime's `test.sh` (propagating exit 2 = fail as-is) |
+| `40-ai-review.sh` | evaluator gate | An evaluation agent with an independent context (§3) |
+| `50-loop-audit.sh` | static check | 7-item check based on git diff (§2). Required from day one as a safety invariant |
 
-`10`〜`30` は実コマンドを持たず、`.harness.yml` で解決された runtime の `check.sh`/`test.sh` へ委譲する（要件定義書 §4.2⑦）。gate 側は「どの言語か」を知らない。
+`10` through `30` hold no actual commands; they delegate to the runtime's `check.sh`/`test.sh` resolved by `.harness.yml` (Requirements §4.2⑦). The gate side does not know "which language" is in use.
 
 ---
 
-## 2. loop-audit（50-loop-audit）の7項目静的検査
+## 2. The 7-item static check of loop-audit (50-loop-audit)
 
-要件定義書 §11.1 と ADR-0004 に基づく。loop-audit は**安全不変条件**であり、初回の無人実行**前**に存在しなければならない（Phase 1 初日から必須）。判定はすべて **git diff ベースの静的検査**で行い、AI の意図や出力の意味は解釈しない（決定的であること）。
+Based on Requirements §11.1 and ADR-0004. loop-audit is a **safety invariant** and must exist **before** the first unattended run (required from day one of Phase 1). All judgments are performed by **git-diff-based static checks**, without interpreting the AI's intent or the meaning of its output (it must be deterministic).
 
-> **項目数の権威（v1.8）**: v1.8 §11.1 が権威であり、正は **7 項目**（本表を正とする）。権威表は [D4 §4](./d4-security-design.md) にあり本書はそれに一致させる。v1.5 系（6 項目・specs/ 前提）からの差分は 2 点: ①spec_refs 実在の検査方式が「`test -f specs/*.md`」から「**ナレッジグラフのノード実在照会**」へ変わった（specs/ 廃止、ADR-0011）、⑦**「グラフファイルのハッシュがループ開始時と一致」を追加**した（実行中のグラフ改変検出）。
+> **Authority for the item count (v1.8)**: v1.8 §11.1 is authoritative, and the correct count is **7 items** (this table is authoritative). The authoritative table is in [D4 §4](./d4-security-design.md), and this document is aligned to it. There are two differences from the v1.5 line (6 items, premised on `specs/`): ① the way `spec_refs` existence is checked changed from "`test -f specs/*.md`" to "**querying node existence in the knowledge graph**" (removal of `specs/`, ADR-0011), and ⑦ **"the graph file's hash matches the value at loop start" was added** (detecting graph tampering during execution).
 
-### 2.1 検査の入力
+### 2.1 Input to the check
 
 ```
-入力: {"task_id": "...", "workdir": "/home/user/wt/issue-N", "changed_files": [...]}
+input: {"task_id": "...", "workdir": "/home/user/wt/issue-N", "changed_files": [...]}
 ```
 
-内部的に `git -C <workdir> diff --numstat` および `git -C <workdir> diff <base>...HEAD` を取得し、以下7項目を順に検査する。1項目でも違反があれば `exit 2`。
+Internally it obtains `git -C <workdir> diff --numstat` and `git -C <workdir> diff <base>...HEAD`, and checks the following 7 items in order. If even one item is violated, `exit 2`.
 
-### 2.2 7項目の検査方式
+### 2.2 Check methods for the 7 items
 
-| # | 検査項目 | 検査方式 | fail 時 reason 例 |
+| # | Check item | Check method | Example fail reason |
 |---|---|---|---|
-| ① | **spec_refs 実在** | task の `spec_refs`（`kg://` ノード ID）が**ナレッジグラフに実在**するか照会（read-only）。存在しない参照があれば fail。※ v1.5 の `test -f specs/*.md` は廃止（specs/ 廃止、ADR-0011） | `spec_refs 'kg://...' がグラフに存在しない` |
-| ② | **テストファイル不変** | diff の変更対象パスをテスト判定パターン（`*.test.*` / `*_test.*` / `test_*.py` / `tests/**` 等）と照合。テストファイルの**削除・変更**が1件でもあれば fail（新規テスト追加は許可） | `テストファイル src/order.test.ts が変更された` |
-| ③ | **エスケープハッチ新規ゼロ** | diff の**追加行**（`+` 行）に `eslint-disable` / `as any` / `@ts-ignore` が新規出現していないか grep。既存行の維持は許可、追加はゼロ強制 | `新規 @ts-ignore が src/api.ts に追加された` |
-| ④ | **カバレッジ閾値不変** | 設定ファイル（`vitest.config.*` / `jest.config.*` / `pyproject.toml` の coverage 節等）内のカバレッジ閾値数値が diff で下方変更されていないか検査 | `カバレッジ閾値が 90 → 80 に改変された` |
-| ⑤ | **自己改変の禁止** | diff の変更対象に `CLAUDE.md` / `PROMPT.md` / `.harness.yml` / テストファイルが含まれていれば fail（ADR-0004）。ルールを縛る対象をエージェントが書き換えることを確定ブロック | `PROMPT.md への自己改変が検出された` |
-| ⑥ | **diff 1500 行上限** | `git diff --numstat` の追加+削除行合計が 1500 を超えたら fail。タスク分割の強制 | `diff 1720 行 > 1500。タスクを分割せよ` |
-| ⑦ | **グラフ改変検出** | グラフファイルのハッシュが**ループ開始時と一致**するか照合。実行中の直接改変を fail として検出（D4 §5.3。凍結性の担保はファイルの git 管理ではなくグラフ書込制御による） | `グラフファイルがループ実行中に改変された` |
+| ① | **spec_refs existence** | Query whether the task's `spec_refs` (`kg://` node IDs) **exist in the knowledge graph** (read-only). Fail if any referenced node does not exist. * The v1.5 `test -f specs/*.md` is abolished (removal of `specs/`, ADR-0011) | `spec_refs 'kg://...' does not exist in the graph` |
+| ② | **Test files unchanged** | Match the diff's changed paths against test-detection patterns (`*.test.*` / `*_test.*` / `test_*.py` / `tests/**`, etc.). Fail if there is even one **deletion or modification** of a test file (adding new tests is allowed) | `test file src/order.test.ts was modified` |
+| ③ | **Zero new escape hatches** | grep the diff's **added lines** (`+` lines) to check that no `eslint-disable` / `as any` / `@ts-ignore` newly appears. Keeping existing lines is allowed; additions are forced to zero | `new @ts-ignore added to src/api.ts` |
+| ④ | **Coverage thresholds unchanged** | Check whether the coverage-threshold numbers in config files (the coverage sections of `vitest.config.*` / `jest.config.*` / `pyproject.toml`, etc.) have been lowered in the diff | `coverage threshold altered from 90 → 80` |
+| ⑤ | **Self-modification prohibited** | Fail if the diff's changed targets include `CLAUDE.md` / `PROMPT.md` / `.harness.yml` / test files (ADR-0004). Definitively blocks the agent from rewriting the targets that constrain the rules | `self-modification of PROMPT.md detected` |
+| ⑥ | **diff 1500-line cap** | Fail if the total of added + deleted lines from `git diff --numstat` exceeds 1500. Forces task splitting | `diff 1720 lines > 1500. Split the task` |
+| ⑦ | **Graph tampering detection** | Verify that the graph file's hash **matches the value at loop start**. Detects direct tampering during execution as a fail (D4 §5.3; immutability is guaranteed not by git-managing the file but by graph write control) | `graph file was modified during the loop run` |
 
-- ②と⑤はテストファイルに関して重複的だが、②は「テストの改変全般」、⑤は「自己改変（ハーネスのルール類）」という異なる不変条件を守る。両方を独立に保持することで、片方の検査漏れをもう片方が補完する。
-- ③のエスケープハッチ検査は**新規追加のみ**を対象とする（既存コードのリファクタで既存の抑制コメントが行移動しただけで fail しないよう、`git diff` の追加行に限定）。
-- ⑥の 1500 行は要件定義書 §11.1 の確定値。カバレッジ閾値（④の 90% 等）は §11.2 の初期値（仮）であり運用調整対象だが、「閾値を**下げる方向の改変を禁止**する」という不変条件自体は確定である。
-- ①⑦はナレッジグラフに関する検査。specs/ ディレクトリを持たない v1.8 では、凍結要件の参照整合（①）と実行中不変（⑦）をグラフに対して検査する（D4 §5）。
+- ② and ⑤ overlap regarding test files, but ② protects "modifications to tests in general" while ⑤ protects a different invariant, "self-modification (the harness's rule set)." Keeping both independently means one compensates for a check gap in the other.
+- The escape-hatch check in ③ targets **new additions only** (limited to the added lines of `git diff` so that an existing suppression comment merely moving lines during a refactor does not fail).
+- The 1500 lines in ⑥ is the fixed value from Requirements §11.1. The coverage thresholds (the 90% etc. of ④) are the initial (tentative) values of §11.2 and subject to operational tuning, but the invariant itself of "prohibiting changes that **lower** a threshold" is fixed.
+- ① and ⑦ are checks concerning the knowledge graph. In v1.8, which has no `specs/` directory, the reference integrity of freeze requirements (①) and the runtime immutability (⑦) are checked against the graph (D4 §5).
 
-### 2.3 dogfooding との関係
+### 2.3 Relationship with dogfooding
 
-ADR-0004 のとおり、dogfooding 導入後もハーネス自身への変更は恒久的に自律度 **L2 上限**（人間承認必須）とする。loop-audit の⑤はこの制約を gate 層で確定ブロックする実装であり、「ルールを書き換える主体」と「縛られる主体」の同一化を構造的に禁止する。
+As stated in ADR-0004, even after dogfooding is introduced, changes to the harness itself are permanently capped at autonomy level **L2** (human approval required). Item ⑤ of loop-audit is the implementation that definitively blocks this constraint at the gate layer, structurally prohibiting the identification of "the subject that rewrites the rules" with "the subject that is constrained."
 
 ---
 
-## 3. evaluator gate（40-ai-review）の懐疑度方針
+## 3. Skepticism policy of the evaluator gate (40-ai-review)
 
-要件定義書 §4.2④・§11.2 に基づく。evaluator は Generator/Evaluator 分離原則（§3.2 原則5）により、実装エージェントとは**独立コンテキスト・独立定義**（`project/.claude/agents/evaluator.md`）で動作する AI レビューゲートである。
+Based on Requirements §4.2④ and §11.2. By the Generator/Evaluator separation principle (§3.2 Principle 5), the evaluator is an AI review gate that operates with an **independent context and independent definition** (`project/.claude/agents/evaluator.md`), separate from the implementation agent.
 
-### 3.1 懐疑度の基本方針
+### 3.1 Basic skepticism policy
 
-- **severity 3 段階**で判定し、**Critical / Major のみ `exit 2`**（fail）とする。Minor（スタイル・好み）は指摘してもゲートは通過させる。
-- **証拠要求（evidence-forcing）**: block する（fail にする）指摘は、以下いずれかの提示を**必須**とする。
-  - spec 行の引用（`spec_refs` の該当行を `evidence` に含める）
-  - 具体的な失敗シナリオの提示（この入力でこの不正な出力、という再現筋）
-- **スタイル指摘の禁止**: 命名の好み・フォーマット・主観的な「より良い書き方」は fail 事由にしない（それらは lint/formatter の領分）。
-- 目的は correctness / 要件充足のギャップのみを捕捉し、**過剰指摘（false positive）を防ぐ**こと。懐疑的に振る舞わせつつ、証拠のない指摘で無人ループを止めないバランスを取る。
+- Judge on a **3-level severity** scale, and let **only Critical / Major be `exit 2`** (fail). Minor (style, preference) may be noted, but the gate is allowed to pass.
+- **Evidence-forcing**: An observation that blocks (makes it a fail) is **required** to present one of the following.
+  - A spec-line quote (include the relevant line of `spec_refs` in `evidence`)
+  - A concrete failure scenario (a reproduction path of "with this input, this incorrect output")
+- **Prohibition of style comments**: Naming preferences, formatting, and subjective "better ways to write it" are not grounds for a fail (those are the domain of lint/formatter).
+- The goal is to capture only correctness / requirements-fulfillment gaps and to **prevent over-reporting (false positives)**. Strike a balance so that it behaves skeptically while not halting the unattended loop over evidence-less observations.
 
-### 3.2 severity 判定基準
+### 3.2 Severity judgment criteria
 
-| severity | 定義 | ゲート挙動 |
+| severity | Definition | Gate behavior |
 |---|---|---|
-| Critical | 要件を満たさない／データ破壊・セキュリティ欠陥・仕様違反 | `exit 2`（fail・差し戻し） |
-| Major | correctness に影響するバグ・境界条件の見落とし・spec との乖離 | `exit 2`（fail・差し戻し） |
-| Minor | スタイル・軽微な可読性・将来の改善提案 | pass（`reason` に記録せず、PR 本文の参考コメントに留める） |
+| Critical | Does not meet requirements / data corruption, security defect, spec violation | `exit 2` (fail, rejected) |
+| Major | A bug affecting correctness, an overlooked boundary condition, divergence from spec | `exit 2` (fail, rejected) |
+| Minor | Style, minor readability, future improvement suggestions | pass (not recorded in `reason`; kept as a reference comment in the PR body) |
 
-### 3.3 出力
+### 3.3 Output
 
-fail 時は §1.2 の JSON に従い、`evidence` へ spec 引用または失敗シナリオを必ず格納する。
+On fail, follow the JSON of §1.2, always storing a spec quote or failure scenario in `evidence`.
 
 ```json
 {
   "gate": "40-ai-review",
-  "reason": "Major: 注文数量が負値のときの検証が欠落",
-  "hint": "src/order.ts の createOrder に quantity > 0 のガードを追加",
-  "evidence": ["kg://order（ドメイン用語ノード）『数量は 1 以上』", "入力 {quantity:-1} で例外が発生せず注文が作られる"]
+  "reason": "Major: validation missing when the order quantity is negative",
+  "hint": "Add a quantity > 0 guard to createOrder in src/order.ts",
+  "evidence": ["kg://order (domain-term node) 'quantity must be 1 or more'", "with input {quantity:-1}, no exception is raised and an order is created"]
 }
 ```
 
-懐疑度パラメータ（false positive/negative の許容度）は §11.2 のとおり**初期値は方針のみ**で数値を置かず、実測後に `evaluator.md` プロンプトファイルとして継続調整する。evaluator は Phase 3 で初投入する（Phase 1-2 では gate は runtime 委譲 + loop-audit のみ）。
+The skepticism parameters (the tolerance for false positives/negatives) are, per §11.2, **initially only a policy** with no numbers set, and are continuously tuned after real measurements as the `evaluator.md` prompt file. The evaluator is first introduced in Phase 3 (in Phases 1-2 the gates are runtime delegation + loop-audit only).
 
 ---
 
-## 4. sink ポート（合格後の副作用）と自律度フィルタ
+## 4. sink port (side effects after passing) and the autonomy filter
 
-要件定義書 §4.2⑤ と ADR-0006 に基づく。
+Based on Requirements §4.2⑤ and ADR-0006.
 
-### 4.1 コントラクト
+### 4.1 Contract
 
 ```
-入力(stdin): {"task_id": "T-012", "workdir": "/home/user/wt/issue-12", "summary": "注文検証を追加", "pr_url": null}
-出力: なし（副作用が本体）。exit 0 = 成功
+input(stdin): {"task_id": "T-012", "workdir": "/home/user/wt/issue-12", "summary": "Add order validation", "pr_url": null}
+output: none (the side effect is the point). exit 0 = success
 ```
 
-- **gate 全通過後のみ**実行される。
-- **部分失敗の許容**: 1つの sink が失敗しても他の sink は続行する（`run_ports_each` は各 sink を独立に呼ぶ）。commit が成功して PR 作成が失敗しても、progress-log は記録される。sink 間に依存を持たせない。
-- 実行は番号順（`10` → `15` → `20` → `35`）。後段（`15-create-pr`）は前段（`10-git-commit`）の成果物（commit）を前提とするが、これはブランチ状態を介した暗黙の順序依存であり、JSON でのデータ受け渡しではない。
+- Runs **only after all gates pass**.
+- **Tolerance for partial failure**: Even if one sink fails, the other sinks continue (`run_ports_each` calls each sink independently). Even if commit succeeds but PR creation fails, progress-log is still recorded. No dependencies between sinks.
+- Execution is in numeric order (`10` → `15` → `20` → `35`). A later stage (`15-create-pr`) presupposes the artifact of an earlier stage (`10-git-commit`) (the commit), but this is an implicit ordering dependency mediated by branch state, not a data handoff via JSON.
 
-### 4.2 `# min-autonomy:` メタデータ仕様
+### 4.2 `# min-autonomy:` metadata specification
 
-各 sink はファイル冒頭のコメント行に**最低必要自律度**を宣言する。
+Each sink declares the **minimum required autonomy level** in a comment line at the top of the file.
 
 ```bash
 #!/usr/bin/env bash
 # min-autonomy: L3
 ```
 
-- コア（`packages/core`）は各 sink の先頭コメントから `# min-autonomy:` の値を抽出し、現在の実行時パラメータ `AUTONOMY` と比較する。**`AUTONOMY` が宣言値未満の sink はスキップ**する。
-- 宣言が無い sink は保守的に最上位（L3 相当）として扱う（誤って低自律度で副作用が走らないため）。
-- 比較は L1 < L2 < L3 の順序で行う。同一 sink に複数モードがある場合（`15-create-pr` の draft/通常）は、sink 内部で `AUTONOMY` を読んで挙動を分岐する（メタデータは「有効化の下限」、内部分岐は「モード選択」）。
+- The core (`packages/core`) extracts the value of `# min-autonomy:` from the leading comment of each sink and compares it with the current runtime parameter `AUTONOMY`. **A sink whose `AUTONOMY` is below the declared value is skipped**.
+- A sink with no declaration is conservatively treated as the highest level (equivalent to L3) (so that side effects do not accidentally run at a low autonomy level).
+- The comparison is done in the order L1 < L2 < L3. When a single sink has multiple modes (the draft/normal of `15-create-pr`), the sink reads `AUTONOMY` internally and branches its behavior (the metadata is the "lower bound for enabling," the internal branch is the "mode selection").
 
-### 4.3 自律度別 sink 対応表
+### 4.3 sink correspondence table by autonomy level
 
-要件定義書 §4.2⑤・§8 のディレクトリ構成に基づく、L1/L2/L3 で有効になる sink の対応。
+Based on the directory structure of Requirements §4.2⑤ and §8, the correspondence of which sinks are enabled at L1/L2/L3.
 
-| sink ファイル | min-autonomy | L1（報告のみ） | L2（支援付き） | L3（無人） | 役割 |
+| sink file | min-autonomy | L1 (report only) | L2 (assisted) | L3 (unattended) | Role |
 |---|---|:---:|:---:|:---:|---|
-| `20-progress-log.sh` | L1 | 有効 | 有効 | 有効 | 進捗を `logs/` へ構造化記録（副作用なしの記録のみ） |
-| `10-git-commit.sh` | L2 | スキップ | 有効 | 有効 | worktree ブランチへ commit |
-| `15-create-pr.sh` | L2(draft)/L3 | スキップ | 有効（**draft PR**） | 有効（**通常 PR**） | `gh pr create`、本文に `Closes #番号` |
-| `35-reindex-knowledge.sh` | L3 | スキップ | スキップ | 有効 | docs マージ後のナレッジグラフ再インデックス |
+| `20-progress-log.sh` | L1 | Enabled | Enabled | Enabled | Structured recording of progress to `logs/` (record only, no side effects) |
+| `10-git-commit.sh` | L2 | Skipped | Enabled | Enabled | Commit to the worktree branch |
+| `15-create-pr.sh` | L2(draft)/L3 | Skipped | Enabled (**draft PR**) | Enabled (**normal PR**) | `gh pr create`, with `Closes #<number>` in the body |
+| `35-reindex-knowledge.sh` | L3 | Skipped | Skipped | Enabled | Re-index the knowledge graph after docs are merged |
 
-- **L1**: `20-progress-log.sh` のみ。コード変更を成果物として残さず、計画・実行結果の報告だけを `logs/` に残す。新規ループ・新規プラグイン導入直後の観察運転で使う（§3.2 原則6、ADR-0006）。人間が毎晩この報告を採点し、昇格判断の実測データとする。
-- **L2**: commit + **draft** PR まで。人間承認を待つ状態でブランチと draft PR が用意される。`15-create-pr.sh` は `AUTONOMY=L2` のとき `gh pr create --draft` で分岐する。
-- **L3**: 通常 PR 作成まで無人。`15-create-pr.sh` は `AUTONOMY=L3` で draft フラグなしの通常 PR を作る。docs 系タスクではさらに `35-reindex-knowledge.sh` が走り、ナレッジグラフを更新して以降の code タスクの context に反映する（docs→code の双方向反映、要件定義書 §4.2⑧）。
-- **降格**: 重大インシデント（自己改変検出・機密アクセス試行）1件で即 L1（§11.2）。フィルタは `AUTONOMY` 変数1つで制御されるため、降格は環境変数の変更のみで完結する（ADR-0006）。
+- **L1**: Only `20-progress-log.sh`. No code changes are left as artifacts; only reports of the plan and execution results are left in `logs/`. Used for observation runs immediately after starting a new loop or introducing a new plugin (§3.2 Principle 6, ADR-0006). A human grades this report each night, using it as measured data for promotion decisions.
+- **L2**: Up to commit + **draft** PR. A branch and draft PR are prepared in a state awaiting human approval. `15-create-pr.sh` branches to `gh pr create --draft` when `AUTONOMY=L2`.
+- **L3**: Unattended up to normal PR creation. `15-create-pr.sh` creates a normal PR without the draft flag when `AUTONOMY=L3`. For docs-type tasks, `35-reindex-knowledge.sh` additionally runs, updating the knowledge graph and reflecting it into the context of subsequent code tasks (bidirectional docs→code reflection, Requirements §4.2⑧).
+- **Demotion**: A single serious incident (self-modification detected, sensitive-access attempt) immediately drops to L1 (§11.2). Since the filter is controlled by the single `AUTONOMY` variable, demotion is completed by changing only an environment variable (ADR-0006).
 
 ---
 
-## 5. on-fail ポート（失敗時処理）と失敗学習ループ
+## 5. on-fail port (failure handling) and the failure-learning loop
 
-要件定義書 §4.2⑥ に基づく。
+Based on Requirements §4.2⑥.
 
-### 5.1 コントラクト
-
-```
-入力(stdin): {"task_id": "T-012", "reason": "coverage 87% < 90%", "retry_count": 2, "gate": "30-test", "workdir": "/home/user/wt/issue-12"}
-出力: なし（記録・エスカレーション・提案が本体）
-```
-
-- 発火条件: **gate fail** または **executor の stuck/timeout**。番号順（`10` → `20` → `30`）で全プラグインを実行する。
-- 各プラグインは独立に副作用を持ち、部分失敗を許容する。
-
-### 5.2 3プラグインの仕様
-
-#### 10-record-failure.sh（失敗記録）
+### 5.1 Contract
 
 ```
-入力: 上記コントラクト
-副作用: .halo/failure-catalog.md にインシデント形式で追記
+input(stdin): {"task_id": "T-012", "reason": "coverage 87% < 90%", "retry_count": 2, "gate": "30-test", "workdir": "/home/user/wt/issue-12"}
+output: none (the recording, escalation, and suggestion are the point)
 ```
 
-`failure-catalog.md` へ以下のインシデント形式で1件追記する。
+- Firing conditions: **gate fail** or **executor stuck/timeout**. All plugins are run in numeric order (`10` → `20` → `30`).
+- Each plugin has independent side effects and tolerates partial failure.
 
-| 項目 | 内容 |
+### 5.2 Specification of the 3 plugins
+
+#### 10-record-failure.sh (failure recording)
+
+```
+input: the contract above
+side effect: appends to .halo/failure-catalog.md in incident format
+```
+
+Appends one entry to `failure-catalog.md` in the following incident format.
+
+| Item | Content |
 |---|---|
-| 日時 | 追記時刻（ISO 8601） |
-| タスク | `task_id` |
-| 失敗ゲート | `gate`（例 `30-test`）。executor 由来なら `executor:timeout` 等 |
-| 理由 | `reason`（gate の fail JSON をそのまま） |
-| 対処 | 初期は空欄（人間または後続の suggest-sign が埋める） |
+| Timestamp | Time of appending (ISO 8601) |
+| Task | `task_id` |
+| Failed gate | `gate` (e.g. `30-test`). If executor-derived, `executor:timeout` etc. |
+| Reason | `reason` (the gate's fail JSON as-is) |
+| Action | Initially blank (filled in later by a human or the subsequent suggest-sign) |
 
-このカタログが失敗学習ループの永続化層（要件定義書 §3.2 原則7）となる。
+This catalog becomes the persistence layer of the failure-learning loop (Requirements §3.2 Principle 7).
 
-#### 20-escalate.sh（エスカレーション）
-
-```
-入力: 上記コントラクト
-副作用: retry_count が閾値(3回・仮)到達時に task-source 経由で needs-human 付与 + in-progress 解除
-```
-
-- `retry_count` が閾値（**3回**、§11.2 の初期値・仮）に達したら、task-source の `fail` op を呼び、Issue に `needs-human` ラベル付与と `in-progress` 解除を行う（無限ループ遮断）。
-- 閾値未満なら何もしない（次イテレーションで reason 再注入により再挑戦させる）。
-- 閾値 3 の根拠は経験則（1回目は reason 注入で直る、3回同一アプローチで fail はアプローチ自体の誤り）。retry 回数別の成功率を `logs/` に記録し実測で調整する（§11.2）。
-
-#### 30-suggest-sign.sh（sign 候補生成）
+#### 20-escalate.sh (escalation)
 
 ```
-入力: 上記コントラクト（+ failure-catalog.md の直近履歴を参照）
-副作用: PROMPT.md への sign 候補を signs-proposed.md に出力（採用は人間判断）
+input: the contract above
+side effect: when retry_count reaches the threshold (3 times, tentative), adds needs-human via task-source and clears in-progress
 ```
 
-- 失敗ログから PROMPT.md へ追記すべき **sign 候補**（「次はこうせよ」という恒久的な指示）を生成し `signs-proposed.md` に出力する。
-- **採用は人間が判断**する。PROMPT.md への直接追記はしない（ADR-0004 の自己改変禁止に抵触するため。sign の採用は人間ゲート、要件定義書 §7）。
-- Phase 2 で本格運用を開始する（要件定義書 §9）。
+- When `retry_count` reaches the threshold (**3 times**, the tentative initial value of §11.2), it calls the task-source `fail` op, adds the `needs-human` label to the Issue, and removes `in-progress` (breaking the infinite loop).
+- If below the threshold, does nothing (retries in the next iteration via reason re-injection).
+- The rationale for a threshold of 3 is a heuristic (the 1st time is fixed by reason injection; failing 3 times with the same approach means the approach itself is wrong). The success rate by number of retries is recorded to `logs/` and tuned by measurement (§11.2).
 
-### 5.3 失敗学習ループのデータフロー図
+#### 30-suggest-sign.sh (sign candidate generation)
 
-失敗 → 記録 → sign 候補 → context 再注入の閉ループ。要件定義書 §3.2 原則7・§4.2⑥ の「失敗 → 記録 → 再注入」の学習経路を図示する。context.d の `30-recent-failures.sh`（設計書02 の context ポートで詳述）が `failure-catalog.md` を読み取り、次イテレーションのプロンプトへ注入することで閉じる。
+```
+input: the contract above (+ references the recent history in failure-catalog.md)
+side effect: writes sign candidates for PROMPT.md to signs-proposed.md (adoption is a human decision)
+```
+
+- Generates **sign candidates** (permanent instructions of "next time, do this") that should be appended to PROMPT.md from the failure log, and outputs them to `signs-proposed.md`.
+- **Adoption is a human decision**. It does not directly append to PROMPT.md (because doing so would conflict with the self-modification prohibition of ADR-0004; sign adoption is a human gate, Requirements §7).
+- Full operation begins in Phase 2 (Requirements §9).
+
+### 5.3 Data-flow diagram of the failure-learning loop
+
+A closed loop of failure → record → sign candidate → context re-injection. It diagrams the learning path of "failure → record → re-injection" from Requirements §3.2 Principle 7 and §4.2⑥. `30-recent-failures.sh` of context.d (detailed in the context port of Design 02) reads `failure-catalog.md` and injects it into the next iteration's prompt, closing the loop.
 
 ```mermaid
 flowchart TD
-    subgraph iterN["イテレーション N"]
-        EX[executor 実行] --> GATE{gate 全通過?}
-        GATE -->|pass| SINK[sink 実行<br/>自律度フィルタ]
-        GATE -->|fail| ONFAIL[on-fail 番号順実行]
+    subgraph iterN["Iteration N"]
+        EX[run executor] --> GATE{all gates pass?}
+        GATE -->|pass| SINK[run sink<br/>autonomy-level filter]
+        GATE -->|fail| ONFAIL[run on-fail in numeric order]
     end
 
-    ONFAIL --> REC[10-record-failure<br/>インシデント追記]
-    ONFAIL --> ESC[20-escalate<br/>retry>=3 で needs-human]
-    ONFAIL --> SUG[30-suggest-sign<br/>sign 候補生成]
+    ONFAIL --> REC[10-record-failure<br/>append incident]
+    ONFAIL --> ESC[20-escalate<br/>needs-human when retry>=3]
+    ONFAIL --> SUG[30-suggest-sign<br/>generate sign candidate]
 
-    REC --> CAT[(failure-catalog.md<br/>永続化)]
+    REC --> CAT[(failure-catalog.md<br/>persistence)]
     SUG --> PROP[(signs-proposed.md)]
 
-    PROP -.人間が採用判断.-> HUMAN[人間ゲート §7]
-    HUMAN -.承認した sign.-> PROMPT[(PROMPT.md)]
+    PROP -.human decides adoption.-> HUMAN[human gate §7]
+    HUMAN -.approved sign.-> PROMPT[(PROMPT.md)]
 
     CAT --> CTX[context.d<br/>30-recent-failures]
     ESC -->|retry<3| NEXT
-    CTX --> NEXT[イテレーション N+1<br/>プロンプト構築]
+    CTX --> NEXT[Iteration N+1<br/>build prompt]
     PROMPT --> NEXT
-    GATE -.fail の reason/hint.-> GF[(gate_failure.json)]
+    GATE -.reason/hint of fail.-> GF[(gate_failure.json)]
     GF --> NEXT
 
     NEXT --> iterN
@@ -272,31 +272,31 @@ flowchart TD
     style HUMAN fill:#aed6f1
 ```
 
-- 実線は自動フロー、点線は人間ゲートを挟むフロー。`failure-catalog.md` → context 再注入は自動で閉じるが、`signs-proposed.md` → `PROMPT.md` は人間の採用判断を必ず経由する（自己改変禁止、ADR-0004）。
-- gate fail の `reason`/`hint` は `gate_failure.json` を介して**次イテレーションに即再注入**される短期ループ、`failure-catalog.md` は**過去の失敗パターンを蓄積**する長期ループの二段構えとなる。
+- Solid lines are automatic flows; dotted lines are flows that pass through a human gate. `failure-catalog.md` → context re-injection closes automatically, but `signs-proposed.md` → `PROMPT.md` always goes through a human adoption decision (self-modification prohibition, ADR-0004).
+- The `reason`/`hint` of a gate fail is a short-term loop that is **re-injected immediately into the next iteration** via `gate_failure.json`, while `failure-catalog.md` is a long-term loop that **accumulates past failure patterns** — a two-tier structure.
 
 ---
 
-## 6. 人間ゲート（§7）との境界
+## 6. Boundary with the human gate (§7)
 
-要件定義書 §7 の6項目は自動化対象外で常に人間が実施する。gate/sink/on-fail の3ポートがどこで人間ゲートに接続・停止するかを整理する。
+The 6 items of Requirements §7 are outside the scope of automation and are always performed by humans. This section organizes where the three ports (gate/sink/on-fail) connect to, or stop at, the human gate.
 
-| # | 人間ゲート項目（§7） | 3ポートとの境界 |
+| # | Human-gate item (§7) | Boundary with the three ports |
 |---|---|---|
-| 1 | 要件定義（仕様の正しさ） | gate は spec_refs の**実在**（loop-audit ①）と spec との**乖離**（evaluator）を検査するが、spec 自体の**正しさ**は検査しない。仕様の妥当性は人間の領分 |
-| 2 | Issue 起票と `ready` 付与 | task-source の入口。gate/sink/on-fail の手前。実行キューへの投入判断は人間 |
-| 3 | PR レビューとマージ | sink（`15-create-pr`）は PR **作成**まで。**マージは自動化しない**（要件定義書 §6.1 safe outputs）。L3 でも PR 作成が上限で、マージは人間ゲート |
-| 4 | 本番デプロイ承認 | 全ポートの範囲外 |
-| 5 | 外部 API 接続・機密情報を扱う実装 | gate は検査するが、当該実装タスク自体は人間ゲート（PreToolUse hook で機密アクセスを遮断、§6.1） |
-| 6 | `needs-human` エスカレーション処理 | on-fail（`20-escalate`）が `needs-human` を付与する**出口**。以降の処理は人間。sign 採用（`30-suggest-sign` → `signs-proposed.md`）の判断も人間ゲート |
+| 1 | Requirements definition (correctness of the spec) | The gate checks the **existence** of spec_refs (loop-audit ①) and **divergence** from the spec (evaluator), but not the **correctness** of the spec itself. The validity of the spec is the human's domain |
+| 2 | Filing the Issue and adding `ready` | The entrance of task-source. Upstream of gate/sink/on-fail. The decision to enqueue into the execution queue is the human's |
+| 3 | PR review and merge | The sink (`15-create-pr`) goes only up to PR **creation**. **Merge is not automated** (Requirements §6.1 safe outputs). Even at L3, PR creation is the ceiling, and merge is a human gate |
+| 4 | Production deployment approval | Outside the scope of all ports |
+| 5 | External API connections / implementations handling sensitive information | The gate checks it, but the implementation task itself is a human gate (sensitive access is blocked by a PreToolUse hook, §6.1) |
+| 6 | `needs-human` escalation handling | on-fail (`20-escalate`) is the **exit** that adds `needs-human`. Subsequent handling is the human's. The decision to adopt a sign (`30-suggest-sign` → `signs-proposed.md`) is also a human gate |
 
-- **設計上の境界原則**: 3ポートは「検証可能な出力（テスト・ビルド・diff・spec 実在）」の範囲でのみ自動判定し、「正しさ・承認・マージ・デプロイ」は必ず人間へ渡す。sink の自律度フィルタ（§4.3）は L3 でも PR **作成**が上限であり、マージ（§7-3）を越えない設計になっている点が、権限軸（自律度）と人間ゲート（固定境界）の交点である。
-- sign 採用の人間ゲート（§7-6 に含まれる）は ADR-0004 の自己改変禁止と表裏一体で、on-fail が生成した改善提案がループを自己書き換えする経路を人間承認で遮断する。
+- **Design boundary principle**: The three ports make automatic judgments only within the range of "verifiable outputs (tests, builds, diffs, spec existence)," and always hand "correctness, approval, merge, deployment" to humans. The point where the sink's autonomy filter (§4.3) is capped at PR **creation** even at L3, not crossing merge (§7-3), is the intersection of the authority axis (autonomy) and the human gate (a fixed boundary).
+- The human gate for sign adoption (included in §7-6) is two sides of the same coin as ADR-0004's self-modification prohibition, blocking, via human approval, the path by which an improvement suggestion generated by on-fail could self-rewrite the loop.
 
 ---
 
-## 受入基準の充足
+## Satisfaction of acceptance criteria
 
-- **各プラグインの入出力仕様**: gate（§1.1-1.2）、sink（§4.1-4.2）、on-fail（§5.1-5.2）の入力 JSON・終了コード・副作用を定義済み。
-- **自律度別 sink 対応表**: §4.3 に L1/L2/L3 × 各 sink の有効/スキップ表を掲載。
-- **失敗学習ループのデータフロー図**: §5.3 に Mermaid 図（失敗 → 記録 → sign 候補 → context 再注入の閉ループ）を掲載。
+- **Input/output specification of each plugin**: The input JSON, exit codes, and side effects of gate (§1.1-1.2), sink (§4.1-4.2), and on-fail (§5.1-5.2) are defined.
+- **sink correspondence table by autonomy level**: §4.3 presents an enabled/skipped table of L1/L2/L3 × each sink.
+- **Data-flow diagram of the failure-learning loop**: §5.3 presents a Mermaid diagram (the closed loop of failure → record → sign candidate → context re-injection).

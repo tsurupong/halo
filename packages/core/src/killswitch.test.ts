@@ -1,6 +1,6 @@
 import { expect, test, describe } from 'vitest';
 import { setStop, clearStop, formatStopFile, stopPath } from './killswitch.js';
-import { memFs } from '../testkit.js';
+import { memFs } from './testkit.js';
 
 describe('killswitch (T25)', () => {
   test('stopPath appends STOP to the halo dir', () => {

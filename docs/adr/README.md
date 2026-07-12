@@ -1,19 +1,19 @@
 # Architecture Decision Records
 
-HALO の設計判断の記録。出典: HALO要件定義書 v1.5（2026-07-09）／ ADR-0009 以降は v1.8（2026-07-11）。
-現行の最上位典拠は要件定義書 v1.8 であり、ADR-0009 以降は v1.8 を起点とする（0008 以前は v1.5 時点の判断を記録）。
+A record of HALO's design decisions. Source: HALO Requirements Specification v1.5 (2026-07-09); ADR-0009 onward is v1.8 (2026-07-11).
+The current top-level authority is Requirements Specification v1.8, and ADR-0009 onward takes v1.8 as its starting point (0008 and earlier record decisions as of v1.5).
 
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
-| [0001](0001-ports-and-adapters-unified-contract.md) | ポート＆アダプタ構造と統一コントラクトの採用 | accepted | 2026-07-09 |
-| [0002](0002-disposable-worktree.md) | 使い捨て worktree 方式の採用 | accepted | 2026-07-09 |
-| [0003](0003-kuzudb-merge-driven-reindex.md) | KuzuDB 採用とマージ駆動再インデックス（watch 不採用） | accepted | 2026-07-09 |
-| [0004](0004-self-modification-prohibition.md) | 自己改変の禁止（安全不変条件） | accepted | 2026-07-09 |
-| [0005](0005-knowledge-graph-schema-granularity.md) | ナレッジグラフのスキーマ粒度（ノード5種・エッジ5種で固定） | accepted | 2026-07-09 |
-| [0006](0006-autonomy-levels.md) | 自律度レベル（L1→L3）の sink フィルタ実装 | accepted | 2026-07-09 |
-| [0007](0007-runtime-as-artifact-kind.md) | runtime は「言語」ではなく「成果物種別」を吸収する | accepted | 2026-07-09 |
-| [0008](0008-polling-trigger-over-webhook.md) | トリガーはポーリング方式を採用（webhook 不採用） | accepted | 2026-07-09 |
-| [0009](0009-zero-global-state.md) | グローバル状態ゼロ（全状態を対象リポジトリ配下に置く） | accepted | 2026-07-11 |
-| [0010](0010-typescript-core.md) | コア・CLI・コントラクトの TypeScript 化（プラグインは任意言語） | accepted | 2026-07-11 |
-| [0011](0011-specs-abolition-graph-consolidation.md) | specs/ 廃止とナレッジグラフへの要件一元化 | accepted | 2026-07-11 |
-| [0012](0012-no-premature-numeric-fixing.md) | 数値パラメータを事前固定しない（仕組みは今、数値は運用実測で） | accepted | 2026-07-11 |
+| [0001](0001-ports-and-adapters-unified-contract.md) | Adoption of Ports & Adapters Structure and a Unified Contract | accepted | 2026-07-09 |
+| [0002](0002-disposable-worktree.md) | Adoption of the Disposable Worktree Approach | accepted | 2026-07-09 |
+| [0003](0003-kuzudb-merge-driven-reindex.md) | Adopting KuzuDB and Merge-Driven Reindexing (no watch) | accepted | 2026-07-09 |
+| [0004](0004-self-modification-prohibition.md) | Prohibition of Self-Modification (Safety Invariant) | accepted | 2026-07-09 |
+| [0005](0005-knowledge-graph-schema-granularity.md) | Knowledge Graph Schema Granularity (fixed at 5 node types, 5 edge types) | accepted | 2026-07-09 |
+| [0006](0006-autonomy-levels.md) | Sink-Filter Implementation of Autonomy Levels (L1→L3) | accepted | 2026-07-09 |
+| [0007](0007-runtime-as-artifact-kind.md) | Runtime Absorbs "Artifact Kind," Not "Language" | accepted | 2026-07-09 |
+| [0008](0008-polling-trigger-over-webhook.md) | Adopt a Polling Trigger (no webhook) | accepted | 2026-07-09 |
+| [0009](0009-zero-global-state.md) | Zero Global State (place all state under the target repository) | accepted | 2026-07-11 |
+| [0010](0010-typescript-core.md) | TypeScript for Core, CLI, and Contracts (plugins remain any-language) | accepted | 2026-07-11 |
+| [0011](0011-specs-abolition-graph-consolidation.md) | Abolishing specs/ and Consolidating Requirements into the Knowledge Graph | accepted | 2026-07-11 |
+| [0012](0012-no-premature-numeric-fixing.md) | Do Not Fix Numeric Parameters in Advance (mechanism now, numbers from operational measurement) | accepted | 2026-07-11 |

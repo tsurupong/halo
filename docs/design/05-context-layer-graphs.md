@@ -1,198 +1,198 @@
-# 詳細設計書 05: コンテキスト層（グラフ基盤）
+# Detailed Design Document 05: Context Layer (Graph Foundation)
 
-> **v1.8 追随改訂済み（コア TS 化・specs/ 廃止を反映）**。プリフライト/再インデックスを駆動する `run.sh` は `packages/cli`（`halo run`）の起動エントリを指す。v1.8 は要件・仕様を **specs/ ディレクトリではなくナレッジグラフに一元管理**し、凍結性はグラフ書込制御（実行中 read-only / 書込 2 経路 / ハッシュ照合、D4 §5）で担保する。本書のグラフ基盤はその中核。
+> **Revised to follow up on v1.8 (reflecting the core TS migration and the removal of specs/)**. The `run.sh` that drives preflight/reindexing refers to the launch entry point of `packages/cli` (`halo run`). v1.8 manages requirements and specifications **centrally in the knowledge graph rather than in a specs/ directory**, and freezability is guaranteed by graph write control (read-only during execution / two write paths / hash verification, D4 §5). The graph foundation described in this document is its core.
 
-**対象**: HALO コンテキスト層（`context` ポートおよびグラフ基盤）
-**典拠**: HALO要件定義書 v1.8 §5・§11.1、[ADR-0003](../adr/0003-kuzudb-merge-driven-reindex.md)、[ADR-0005](../adr/0005-knowledge-graph-schema-granularity.md)、ADR-0010（コア TypeScript 化）
-**位置づけ**: 本書は要件定義書 §5 を実装レベルまで詳細化したものであり、要件定義書と矛盾する内容は含まない。数値・細部で要件に未定義の箇所は「初期値（仮）」と明記する。
+**Scope**: HALO context layer (the `context` port and the graph foundation)
+**Basis**: HALO Requirements Definition v1.8 §5, §11.1, [ADR-0003](../adr/0003-kuzudb-merge-driven-reindex.md), [ADR-0005](../adr/0005-knowledge-graph-schema-granularity.md), ADR-0010 (core TypeScript migration)
+**Positioning**: This document elaborates §5 of the Requirements Definition down to the implementation level, and contains nothing that contradicts the Requirements Definition. Where numbers or details are undefined in the requirements, they are explicitly marked as "initial value (tentative)".
 
 ---
 
-## 0. スコープと全体像
+## 0. Scope and Overview
 
-コンテキスト層は 2 種のグラフ（コードグラフ / ナレッジグラフ）を持ち、いずれも KuzuDB（組み込み・ファイル1個・サーバー不要）をバックエンドとする。両グラフは `graphs/code.kuzu` と `graphs/knowledge.kuzu` の 2 ファイルに分離して格納する。
+The context layer holds two kinds of graphs (code graph / knowledge graph), both backed by KuzuDB (embedded, single file, no server required). The two graphs are stored separately in two files, `graphs/code.kuzu` and `graphs/knowledge.kuzu`.
 
 ```
-┌─────────────────────────── コンテキスト層 ───────────────────────────┐
+┌─────────────────────────── Context layer ───────────────────────────┐
 │                                                                      │
 │  graphs/code.kuzu           graphs/knowledge.kuzu                    │
-│  ├ tree-sitter 自動生成      ├ 人間設計・手書き Cypher 投入            │
-│  └ CGC 経由 MCP: codegraph   └ 自作 MCP: knowledge                    │
+│  ├ tree-sitter auto-gen      ├ human-designed, hand-written Cypher    │
+│  └ MCP via CGC: codegraph    └ custom MCP: knowledge                  │
 │         │                            │                               │
-│         │  IMPLEMENTED_BY（集約→ディレクトリパス）で論理的に橋渡し    │
+│         │  bridged logically via IMPLEMENTED_BY (aggregate→dir path) │
 │         ▼                            ▼                               │
-│  ┌──────────────────── context.d プラグイン ─────────────────────┐   │
+│  ┌──────────────────── context.d plugins ────────────────────────┐   │
 │  │ 10-codegraph / 20-knowledge / 30-recent-failures             │   │
-│  │  → fragments を priority 順連結・トークン上限で切り詰め       │   │
+│  │  → concat fragments by priority, truncate at token limit      │   │
 │  └──────────────────────────────────────────────────────────────┘   │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-責務分離（ADR-0005）:
-- **コードグラフ** = 自動生成領域。エンティティ・フィールド粒度の構造情報。
-- **ナレッジグラフ** = 人間設計領域。設計意図・ユビキタス言語・決定という暗黙知。
-- 両者は `IMPLEMENTED_BY`（集約ノード → ディレクトリパス）でのみ接続し、フィールドレベルの二重管理を避ける。
+Separation of responsibilities (ADR-0005):
+- **Code graph** = automatically generated domain. Structural information at entity/field granularity.
+- **Knowledge graph** = human-designed domain. Tacit knowledge such as design intent, ubiquitous language, and decisions.
+- The two are connected only via `IMPLEMENTED_BY` (aggregate node → directory path), avoiding duplicate management at the field level.
 
 ---
 
-## 1. コードグラフ（CodeGraphContext + KuzuDB）
+## 1. Code Graph (CodeGraphContext + KuzuDB)
 
-### 1.1 構成
+### 1.1 Composition
 
-| 項目 | 内容 |
+| Item | Content |
 |---|---|
-| ツール | CodeGraphContext（CGC） |
-| バックエンド | KuzuDB（`graphs/code.kuzu`） |
-| 生成方式 | tree-sitter による静的解析。**LLM API 不使用・ローカル完結**（コスト0・オフライン可） |
-| 提供ツール | `find_code` / `analyze_code_relationships` / `find_dead_code` / `execute_cypher_query` |
-| MCP 定義 | `ports/mcp.d/10-codegraph.json` |
+| Tool | CodeGraphContext (CGC) |
+| Backend | KuzuDB (`graphs/code.kuzu`) |
+| Generation method | Static analysis via tree-sitter. **No LLM API used, fully local** (zero cost, works offline) |
+| Provided tools | `find_code` / `analyze_code_relationships` / `find_dead_code` / `execute_cypher_query` |
+| MCP definition | `ports/mcp.d/10-codegraph.json` |
 
-tree-sitter を使う理由: 構文解析のみで呼び出し関係・定義位置・デッドコードを抽出でき、LLM 推論を伴わないため決定的かつ無料。ナレッジグラフ側（人間設計）と対照的に、コードグラフは「機械が事実として読み取れるもの」だけを扱う。
+Reason for using tree-sitter: purely syntactic analysis can extract call relationships, definition locations, and dead code, and because it involves no LLM inference it is deterministic and free. In contrast to the knowledge graph side (human-designed), the code graph deals only with "things a machine can read as fact".
 
-### 1.2 再インデックスのタイミング（マージ駆動 + プリフライト = 案A）
+### 1.2 Reindexing Timing (Merge-Driven + Preflight = Option A)
 
-ADR-0003 の決定に従い、`watch` モードは採用しない（監視対象が main ではなく生滅する worktree になり、グラフが中間状態で汚染されるため使い捨て worktree 方式と構造的に両立しない）。
+Following the decision in ADR-0003, the `watch` mode is not adopted (its watch target would not be main but ephemeral worktrees that come and go, contaminating the graph with intermediate states, so it is structurally incompatible with the disposable-worktree approach).
 
-再インデックスの発火点は **ループ起動時のプリフライト1箇所のみ**とする。
+The reindexing trigger point is **only the single preflight at loop startup**.
 
 ```
-run.sh 起動
-  └─ プリフライト（2段のうち第1段: グラフ鮮度判定）
-       IF  main の現在 HEAD != graphs/code.kuzu に記録された last_indexed_sha
-       THEN 再インデックス実行（main 基準・単一プロセス・書き込みはここ1回のみ）
-            → last_indexed_sha を main HEAD に更新
-       ELSE スキップ（陳腐化していない）
-  └─ ループ本体開始（以降グラフは不変）
+run.sh launch
+  └─ preflight (stage 1 of 2: graph freshness decision)
+       IF  current HEAD of main != last_indexed_sha recorded in graphs/code.kuzu
+       THEN run reindex (based on main, single process, the only write happens here)
+            → update last_indexed_sha to main HEAD
+       ELSE skip (not stale)
+  └─ start the loop body (graph is immutable thereafter)
 ```
 
-判定に使うメタデータ:
+Metadata used for the decision:
 
-| キー | 内容 | 保存先 |
+| Key | Content | Storage location |
 |---|---|---|
-| `last_indexed_sha` | 前回インデックスした main の commit SHA | code.kuzu 内メタノード or `graphs/.code.meta` |
-| `indexed_at` | 前回インデックス時刻（ISO8601） | 同上 |
-| `schema_version` | コードグラフスキーマ版（tree-sitter 抽出ルール版） | 同上 |
+| `last_indexed_sha` | The commit SHA of main from the previous index | Meta node inside code.kuzu, or `graphs/.code.meta` |
+| `indexed_at` | Timestamp of the previous index (ISO8601) | Same as above |
+| `schema_version` | Code graph schema version (tree-sitter extraction rule version) | Same as above |
 
-再インデックスは差分ではなく **main 基準のフルインデックスを既定**とする（KuzuDB の単一プロセス書き込み制約下で状態の一貫性を最優先。差分インデックスは Phase 2 以降の最適化候補=保留）。
+Reindexing defaults to **a full index based on main**, not a differential one (under KuzuDB's single-process write constraint, state consistency is the top priority. Differential indexing is a deferred optimization candidate for Phase 2 and beyond).
 
-### 1.3 排他方式（read-only スナップショット共有）
+### 1.3 Exclusion Method (Read-Only Snapshot Sharing)
 
-KuzuDB は単一プロセスからの書き込みを前提とする。並列 worktree からの同時書き込みは構造的に禁止する。
+KuzuDB assumes writes from a single process. Simultaneous writes from parallel worktrees are structurally prohibited.
 
-**方式**: 「main ブランチ基準の read-only スナップショット」を全 worktree で共有する。
+**Method**: share a "read-only snapshot based on the main branch" across all worktrees.
 
-| フェーズ | 主体 | code.kuzu へのアクセス | 排他手段 |
+| Phase | Actor | Access to code.kuzu | Exclusion mechanism |
 |---|---|---|---|
-| プリフライト | run.sh（親プロセス単一） | 読み書き（再インデックス） | `flock`（`run.sh` 標準装備のロックと同一。多重起動防止と共用） |
-| ループ実行中 | 各 worktree のエージェント | **read-only** のみ | 書き込み経路を持たない（MCP は参照系ツールのみ公開） |
+| Preflight | run.sh (single parent process) | Read/write (reindex) | `flock` (the same lock that `run.sh` ships with by default; shared with the multiple-launch prevention) |
+| During loop execution | The agent in each worktree | **read-only** only | Has no write path (MCP exposes only reference-type tools) |
 
-要点:
-1. 書き込みはプリフライト時の1回のみ。`flock` で run.sh 多重起動を排除しているため、書き込みプロセスは同時に高々1つ。
-2. ループ実行中は全 worktree が同一の不変スナップショットを read-only で共有する。これにより **イテレーション間のコンテキスト再現性**も担保される（同じ入力→同じグラフ→同じ context）。
-3. read-only 共有の実体は KuzuDB を read-only モードで開くこと。ファイルコピーは不要（不変前提のため）。書き込みを試みる MCP ツールは `10-codegraph.json` に含めない。
+Key points:
+1. Writes occur only once, during preflight. Because `flock` excludes multiple launches of run.sh, there is at most one writing process at a time.
+2. During loop execution, all worktrees share the same immutable snapshot read-only. This also guarantees **context reproducibility across iterations** (same input → same graph → same context).
+3. The substance of read-only sharing is opening KuzuDB in read-only mode. File copies are unnecessary (given the immutability assumption). MCP tools that attempt writes are not included in `10-codegraph.json`.
 
-### 1.4 陳腐化の緩和（双方向自動反映）
+### 1.4 Staleness Mitigation (Bidirectional Automatic Reflection)
 
-マージ〜次回プリフライトの間はグラフが陳腐化する（ADR-0003 Negative）。これを以下で緩和する。
+Between a merge and the next preflight, the graph becomes stale (ADR-0003 Negative). This is mitigated as follows.
 
-| 起点 | 反映経路 |
+| Origin | Reflection path |
 |---|---|
-| docs マージ | sink `35-reindex-knowledge.sh` がナレッジグラフを更新 |
-| code 変更 | 次回プリフライトで陳腐化検出 → `kind:docs` タスクを自動起票（設計書と実装の乖離検知） |
+| docs merge | The sink `35-reindex-knowledge.sh` updates the knowledge graph |
+| code change | Staleness is detected at the next preflight → a `kind:docs` task is automatically filed (detecting divergence between design docs and implementation) |
 
 ---
 
-## 2. ナレッジグラフ（スキーマ定義）
+## 2. Knowledge Graph (Schema Definition)
 
-### 2.1 スキーマ粒度（確定 = ADR-0005 / §11.1）
+### 2.1 Schema Granularity (Finalized = ADR-0005 / §11.1)
 
-ノード **5 種**・エッジ **5 種**で開始し、エンティティ・フィールドレベルには下ろさない。橋渡しエッジ `IMPLEMENTED_BY` は集約→ディレクトリパスで張る。
+Start with **5 node types** and **5 edge types**, without descending to the entity/field level. The bridging edge `IMPLEMENTED_BY` is drawn as aggregate → directory path.
 
-**ノード5種**: 境界づけられたコンテキスト / 集約 / ドメイン用語 / 文書 / 決定
-**エッジ5種**: `BELONGS_TO` / `DEFINED_IN` / `IMPLEMENTED_BY` / `SUPERSEDES` / `AFFECTS`
+**5 node types**: Bounded Context / Aggregate / Domain Term / Document / Decision
+**5 edge types**: `BELONGS_TO` / `DEFINED_IN` / `IMPLEMENTED_BY` / `SUPERSEDES` / `AFFECTS`
 
-### 2.2 Cypher DDL 相当スキーマ定義（KuzuDB）
+### 2.2 Cypher DDL-Equivalent Schema Definition (KuzuDB)
 
-KuzuDB は構造化スキーマを要求するため、ノードは `NODE TABLE`、エッジは `REL TABLE` として定義する（プロパティグラフの型付きスキーマ）。以下は `graphs/knowledge.kuzu` の初期 DDL である。手書き Cypher（KuzuDB DDL）で投入する。
+Because KuzuDB requires a structured schema, nodes are defined as `NODE TABLE` and edges as `REL TABLE` (a typed property-graph schema). The following is the initial DDL for `graphs/knowledge.kuzu`. It is loaded via hand-written Cypher (KuzuDB DDL).
 
 ```cypher
--- ============ ノードテーブル（5種）============
+-- ============ Node tables (5 kinds) ============
 
--- ① 境界づけられたコンテキスト（Bounded Context）
+-- (1) Bounded Context
 CREATE NODE TABLE BoundedContext (
-    id        STRING,        -- 一意識別子（例: "billing"）
-    name      STRING,        -- 表示名（例: "課金コンテキスト"）
-    summary   STRING,        -- 概要
+    id        STRING,        -- unique identifier (e.g. "billing")
+    name      STRING,        -- display name (e.g. "Billing Context")
+    summary   STRING,        -- summary
     PRIMARY KEY (id)
 );
 
--- ② 集約（Aggregate）: 橋渡しの起点。dir_path が実装へのリンク
+-- (2) Aggregate: the origin of the bridge. dir_path is the link to the implementation
 CREATE NODE TABLE Aggregate (
     id        STRING,
-    name      STRING,        -- 集約名（例: "Invoice"）
-    dir_path  STRING,        -- 実装ディレクトリパス（IMPLEMENTED_BY の根拠）
+    name      STRING,        -- aggregate name (e.g. "Invoice")
+    dir_path  STRING,        -- implementation directory path (basis for IMPLEMENTED_BY)
     summary   STRING,
     PRIMARY KEY (id)
 );
 
--- ③ ドメイン用語（ユビキタス言語）
+-- (3) Domain term (ubiquitous language)
 CREATE NODE TABLE DomainTerm (
     id          STRING,
-    term        STRING,      -- 用語（正）
-    definition  STRING,      -- 定義
-    synonyms    STRING,      -- 許容同義語（カンマ区切り。用語集整合チェック用）
-    deprecated  STRING,      -- 禁止語（カンマ区切り。禁止語違反は block 対象）
+    term        STRING,      -- term (canonical)
+    definition  STRING,      -- definition
+    synonyms    STRING,      -- allowed synonyms (comma-separated; for glossary consistency check)
+    deprecated  STRING,      -- forbidden terms (comma-separated; a forbidden-term violation is a block)
     PRIMARY KEY (id)
 );
 
--- ④ 文書（設計書 / ADR / 要件）
+-- (4) Document (design doc / ADR / requirement)
 CREATE NODE TABLE Document (
     id        STRING,
     title     STRING,
-    path      STRING,        -- リポジトリ相対パス（例: "docs/design/05-...md"）
+    path      STRING,        -- repo-relative path (e.g. "docs/design/05-...md")
     doc_type  STRING,        -- "design" | "adr" | "requirement" | "glossary"
-    body_hash STRING,        -- 投入時点の原本ハッシュ（陳腐化検出・凍結性照合用）
+    body_hash STRING,        -- source hash at ingestion time (for staleness detection / freeze verification)
     PRIMARY KEY (id)
 );
 
--- ⑤ 決定（Decision / ADR の意思決定単位）
+-- (5) Decision (Decision / the ADR decision unit)
 CREATE NODE TABLE Decision (
-    id        STRING,        -- 例: "adr-0005"
+    id        STRING,        -- e.g. "adr-0005"
     title     STRING,
     status    STRING,        -- "accepted" | "superseded" | "proposed"
     date      STRING,        -- ISO8601
     PRIMARY KEY (id)
 );
 
--- ============ エッジテーブル（5種）============
+-- ============ Edge tables (5 kinds) ============
 
--- BELONGS_TO: 集約 → 境界づけられたコンテキスト（帰属）
+-- BELONGS_TO: aggregate → bounded context (belonging)
 CREATE REL TABLE BELONGS_TO (
     FROM Aggregate TO BoundedContext
 );
 
--- DEFINED_IN: ドメイン用語/決定 → 文書（どの文書で定義されたか）
+-- DEFINED_IN: domain term/decision → document (which document defined it)
 CREATE REL TABLE DEFINED_IN (
     FROM DomainTerm TO Document,
     FROM Decision   TO Document
 );
 
--- IMPLEMENTED_BY: 集約 → ディレクトリパス（橋渡し。設計⇔実装）
---   対向は Aggregate.dir_path が指すコード側。ナレッジグラフ内は
---   確度メタを保持する自己参照を避け、プロパティで持つ。
+-- IMPLEMENTED_BY: aggregate → directory path (the bridge; design ⇔ implementation)
+--   The counterpart is the code side pointed to by Aggregate.dir_path. Inside the
+--   knowledge graph, avoid a self-reference and carry the confidence meta as properties.
 CREATE REL TABLE IMPLEMENTED_BY (
-    FROM Aggregate TO Aggregate,   -- 論理上の張替え耐性のため集約起点で保持
-    dir_path   STRING,             -- 実装ディレクトリ（冗長保持=検索高速化）
+    FROM Aggregate TO Aggregate,   -- held on the aggregate side for resilience to logical re-wiring
+    dir_path   STRING,             -- implementation directory (redundantly held = faster search)
     confidence STRING,             -- "explicit" | "inferred" | "reviewed"
-    source     STRING              -- 抽出根拠（"link" | "ai" | "human"）
+    source     STRING              -- extraction basis ("link" | "ai" | "human")
 );
 
--- SUPERSEDES: 決定 → 決定（新決定が旧決定を廃止）
+-- SUPERSEDES: decision → decision (a new decision supersedes an old one)
 CREATE REL TABLE SUPERSEDES (
     FROM Decision TO Decision
 );
 
--- AFFECTS: 決定 → 境界づけられたコンテキスト/集約/文書（影響範囲）
+-- AFFECTS: decision → bounded context/aggregate/document (impact scope)
 CREATE REL TABLE AFFECTS (
     FROM Decision TO BoundedContext,
     FROM Decision TO Aggregate,
@@ -200,33 +200,33 @@ CREATE REL TABLE AFFECTS (
 );
 ```
 
-> 補足: KuzuDB は 1 つの `REL TABLE` に複数の `FROM ... TO ...` ペアを宣言できる（マルチペア関係）。`DEFINED_IN` / `AFFECTS` はこれを用いて 1 テーブルで複数の起点・終点型を許容する。`IMPLEMENTED_BY` の対向は本来コード側ノードだが、コードグラフは別 DB（`code.kuzu`）にあるため DB をまたぐ物理エッジは張れない。よって橋渡しは **`Aggregate.dir_path` 文字列を鍵にした論理結合**とし、`IMPLEMENTED_BY` エッジ自身は確度メタ（`confidence` / `source`）を保持するために集約起点で持つ（§4 の trace_spec_to_code はこの `dir_path` を codegraph 側クエリのパラメータに渡してホップする）。
+> Note: KuzuDB allows declaring multiple `FROM ... TO ...` pairs in a single `REL TABLE` (multi-pair relationship). `DEFINED_IN` / `AFFECTS` use this to allow multiple source/target types in one table. The counterpart of `IMPLEMENTED_BY` is originally a code-side node, but because the code graph lives in a separate DB (`code.kuzu`), a physical edge crossing DBs cannot be drawn. Therefore the bridge is a **logical join keyed on the `Aggregate.dir_path` string**, and the `IMPLEMENTED_BY` edge itself is held with the aggregate as its origin in order to retain confidence metadata (`confidence` / `source`) (the trace_spec_to_code in §4 passes this `dir_path` as a parameter to a code-graph-side query to hop).
 
-### 2.3 スキーマ拡張の方針
+### 2.3 Schema Extension Policy
 
-- エッジ追加は「開始セット」からの拡張として許容する（ADR-0005）。
-- **ノード種の追加は再検討事項**（安易に増やさない）。5 種で表現しきれない知識が出現した時点で ADR を起票する。
+- Adding edges is permitted as an extension from the "starting set" (ADR-0005).
+- **Adding node types is a matter for reconsideration** (do not increase them lightly). When knowledge appears that cannot be fully expressed by the 5 types, an ADR is filed.
 
 ---
 
-## 3. 自作 knowledge MCP のツール入出力仕様
+## 3. Tool I/O Specification of the Custom knowledge MCP
 
-MCP 定義は `ports/mcp.d/20-knowledge.json`、サーバー実体は `mcp-knowledge/`。初期ツールは **2 つ**（`search_docs` / `trace_spec_to_code`）に絞る（ADR-0003: Neo4j 移行時の Cypher 方言差の移行面を最小化）。両ツールとも **read-only**（グラフ書き込み経路を一切持たない）。
+The MCP definition is `ports/mcp.d/20-knowledge.json`, and the server itself is `mcp-knowledge/`. The initial tools are narrowed to **two** (`search_docs` / `trace_spec_to_code`) (ADR-0003: to minimize the migration surface of Cypher dialect differences when migrating to Neo4j). Both tools are **read-only** (they have no graph write path whatsoever).
 
 ### 3.1 `search_docs`
 
-用途: 自然言語 or 用語から関連文書・用語・決定ノードを検索する入口ツール。
+Purpose: an entry-point tool that searches for related document/term/decision nodes from natural language or a term.
 
-**入力**:
+**Input**:
 ```json
 {
-  "query": "課金の締め処理の設計意図",   // 必須: 検索語（自然言語 or 用語）
-  "node_types": ["Document", "Decision", "DomainTerm"], // 任意: 絞り込み。既定は全ノード種
-  "limit": 10                            // 任意: 既定 10（初期値・仮）
+  "query": "design intent of the billing closing process",   // required: search term (natural language or term)
+  "node_types": ["Document", "Decision", "DomainTerm"], // optional: narrowing. Default is all node kinds
+  "limit": 10                            // optional: default 10 (initial value, tentative)
 }
 ```
 
-**出力**（`fragments` ではなく検索結果。返却値に「次に呼ぶツール引数」を埋め込む=§4）:
+**Output** (search results rather than `fragments`. The return value embeds "the arguments for the next tool to call" = §4):
 ```json
 {
   "results": [
@@ -234,27 +234,27 @@ MCP 定義は `ports/mcp.d/20-knowledge.json`、サーバー実体は `mcp-knowl
       "node_type": "Aggregate",
       "id": "invoice",
       "name": "Invoice",
-      "summary": "請求書集約。締め処理の主体。",
+      "summary": "The invoice aggregate. The subject of the closing process.",
       "path": null,
       "next_tools": [
         {
           "tool": "trace_spec_to_code",
           "args": { "aggregate_id": "invoice" },
-          "why": "この集約の実装ディレクトリと関連コードへ辿る"
+          "why": "trace to this aggregate's implementation directory and related code"
         }
       ]
     },
     {
       "node_type": "Decision",
       "id": "adr-0005",
-      "title": "ナレッジグラフのスキーマ粒度",
+      "title": "Knowledge graph schema granularity",
       "status": "accepted",
       "path": "docs/adr/0005-...md",
       "next_tools": [
         {
           "tool": "search_docs",
-          "args": { "query": "IMPLEMENTED_BY 橋渡し", "node_types": ["Aggregate"] },
-          "why": "この決定が AFFECTS する集約を辿る"
+          "args": { "query": "IMPLEMENTED_BY bridge", "node_types": ["Aggregate"] },
+          "why": "trace the aggregates this decision AFFECTS"
         }
       ]
     }
@@ -263,22 +263,22 @@ MCP 定義は `ports/mcp.d/20-knowledge.json`、サーバー実体は `mcp-knowl
 }
 ```
 
-検索は決定的（§5.3: 各ステップは決定的、オーケストレーションのみ AI）。内部実装は用語完全一致 → 部分一致 → 概要 substring の順のフォールバック（LLM 埋め込み検索は初期採用しない=ローカル完結優先）。
+Search is deterministic (§5.3: each step is deterministic, only the orchestration is AI). The internal implementation is a fallback in the order of exact term match → partial match → summary substring (LLM embedding search is not adopted initially, prioritizing a fully local approach).
 
 ### 3.2 `trace_spec_to_code`
 
-用途: 集約ノード（または文書）を起点に、橋渡しエッジ `IMPLEMENTED_BY` を辿って実装ディレクトリ／コードシンボルへ到達する。ナレッジグラフ→コードグラフのホップを担う。
+Purpose: starting from an aggregate node (or a document), follow the bridging edge `IMPLEMENTED_BY` to reach the implementation directory / code symbols. Handles the hop from the knowledge graph to the code graph.
 
-**入力**:
+**Input**:
 ```json
 {
-  "aggregate_id": "invoice",     // どちらか必須（集約起点）
-  "document_id": null,           // または文書起点（DEFINED_IN 逆引き→集約）
-  "resolve_symbols": true        // 任意: true なら codegraph へ委譲しシンボルまで解決（既定 false）
+  "aggregate_id": "invoice",     // one of the two is required (aggregate origin)
+  "document_id": null,           // or document origin (DEFINED_IN reverse lookup → aggregate)
+  "resolve_symbols": true        // optional: if true, delegate to codegraph and resolve down to symbols (default false)
 }
 ```
 
-**出力**:
+**Output**:
 ```json
 {
   "aggregate": { "id": "invoice", "name": "Invoice" },
@@ -289,113 +289,113 @@ MCP 定義は `ports/mcp.d/20-knowledge.json`、サーバー実体は `mcp-knowl
       "source": "human"
     }
   ],
-  "code_symbols": [                 // resolve_symbols=true のときのみ
+  "code_symbols": [                 // only when resolve_symbols=true
     { "symbol": "InvoiceService", "file": "src/billing/invoice/service.ts" }
   ],
   "next_tools": [
     {
       "tool": "codegraph.analyze_code_relationships",
       "args": { "path": "src/billing/invoice/" },
-      "why": "実装ディレクトリの呼び出し関係を深掘りする（コードグラフ側へ）"
+      "why": "dig into the call relationships of the implementation directory (over to the code graph side)"
     }
   ]
 }
 ```
 
-`resolve_symbols=true` のとき、本ツールは `dir_path` を引数に codegraph MCP（別グラフ）へ委譲する。ここが 2 グラフの論理結合点である（§2.2 補足）。
+When `resolve_symbols=true`, this tool delegates to the codegraph MCP (a separate graph) with `dir_path` as an argument. This is the logical join point of the two graphs (§2.2 note).
 
 ---
 
-## 4. Agentic Graph RAG: runbook 方式の具体例
+## 4. Agentic Graph RAG: A Concrete Example of the runbook Approach
 
-方針（§5.3）: グラフ構築は人間設計、**クエリ側のみエージェント化**。各ツールの返却値に「次に呼ぶべきツールの引数」を埋め込み、返却値そのものを runbook（次アクション付き手順書）にする。検索の各ステップは決定的、マルチホップのオーケストレーションのみ AI に委ねる。
+Policy (§5.3): graph construction is human-designed, and **only the query side is agentized**. The return value of each tool embeds "the arguments of the tool to call next", making the return value itself a runbook (a procedure with the next action attached). Each search step is deterministic, and only the multi-hop orchestration is delegated to AI.
 
-### 4.1 マルチホップ探索の具体例
+### 4.1 Concrete Example of Multi-Hop Exploration
 
-タスク例:「請求書の締め処理を修正する Issue に着手。関連する設計意図と実装箇所を把握したい。」
+Example task: "Starting work on an Issue that fixes the closing process for invoices. I want to grasp the related design intent and implementation locations."
 
 ```
-[Hop 1] search_docs({query:"請求書 締め処理"})
+[Hop 1] search_docs({query:"invoice closing process"})
   → results[0] = Aggregate "invoice"
-     next_tools = [ trace_spec_to_code({aggregate_id:"invoice"}) ]   ← 引数が埋め込み済み
+     next_tools = [ trace_spec_to_code({aggregate_id:"invoice"}) ]   ← args already embedded
   → results[1] = Decision "adr-0005"
      next_tools = [ search_docs({query:"...", node_types:["Aggregate"]}) ]
 
-[Hop 2] （AI は next_tools をそのまま実行）
+[Hop 2] (the AI just runs next_tools as-is)
   trace_spec_to_code({aggregate_id:"invoice"})
   → implemented_by = [ "src/billing/invoice/" (confidence:reviewed) ]
      next_tools = [ codegraph.analyze_code_relationships({path:"src/billing/invoice/"}) ]
 
 [Hop 3]
   codegraph.analyze_code_relationships({path:"src/billing/invoice/"})
-  → 呼び出し関係・依存を取得（コードグラフ側・read-only スナップショット）
+  → obtain call relationships and dependencies (code graph side, read-only snapshot)
 
-→ AI は「設計意図（ADR）＋実装ディレクトリ＋呼び出し関係」を自律的に組み立てて把握
+→ the AI autonomously assembles and grasps "design intent (ADR) + implementation directory + call relationships"
 ```
 
-各ホップの入力引数は前段の `next_tools[].args` として**サーバー側が構築済み**であり、AI は「どの next_tool を選ぶか」だけを判断する。引数の値を AI に発明させない（決定性の担保）。
+The input arguments for each hop are **already constructed by the server** as the preceding stage's `next_tools[].args`, and the AI decides only "which next_tool to choose". The AI is not made to invent the argument values (ensuring determinism).
 
-### 4.2 context.d との関係（ハイブリッド方式）
+### 4.2 Relationship with context.d (Hybrid Approach)
 
-要件定義書 §4.2 ②のハイブリッド方式に従い、context プラグイン（§6）は**軽い要約のみ事前注入**し、上記マルチホップの深掘りは**実行中に AI 自身が MCP ツールで取得**する。事前注入で全グラフを展開しない（トークン浪費と再現性低下を避ける）。
+Following the hybrid approach in Requirements Definition §4.2 ②, the context plugin (§6) **pre-injects only a light summary**, and the deep dive of the above multi-hop is **obtained by the AI itself via MCP tools during execution**. The entire graph is not expanded during pre-injection (to avoid token waste and reduced reproducibility).
 
 ---
 
-## 5. IMPLEMENTED_BY 橋渡しエッジの抽出手順
+## 5. Extraction Procedure for the IMPLEMENTED_BY Bridging Edge
 
-橋渡しエッジ（設計書ノード ⇔ 実装コンポーネント）の対応付けが最大の価値源泉（§5.4）。抽出は 2 段階。
+The mapping of the bridging edge (design-doc node ⇔ implementation component) is the greatest source of value (§5.4). Extraction is in two stages.
 
-### 5.1 第1段: 明示リンクの機械抽出（confidence=explicit / source=link）
+### 5.1 Stage 1: Mechanical Extraction of Explicit Links (confidence=explicit / source=link)
 
-設計書内の明示的なファイルパス記載から機械抽出する。
-
-```
-1. Document ノードの path が指す Markdown を走査
-2. 実装パス表記を正規表現で抽出:
-     - コードスパン内のパス:  `src/billing/invoice/`
-     - 「実装: src/...」形式の明示記載
-     - Aggregate.dir_path と前方一致するパス
-3. 抽出パスと Aggregate.dir_path を突合
-     → 一致すれば IMPLEMENTED_BY(confidence="explicit", source="link") を張る
-```
-
-この段は LLM 不使用・決定的。sink `35-reindex-knowledge.sh` から docs マージ後に再実行される。
-
-### 5.2 第2段: 不足分の AI 推定 + 人間レビュー（confidence=inferred → reviewed / source=ai → human）
-
-明示リンクで埋まらない集約について AI 推定で候補を出し、**人間レビューを経て確定**する。
+Extract mechanically from explicit file-path notations within design documents.
 
 ```
-1. IMPLEMENTED_BY を持たない Aggregate を列挙
-2. AI が集約名・summary と codegraph のディレクトリ／シンボル名の類似から候補 dir_path を提案
-     → IMPLEMENTED_BY(confidence="inferred", source="ai") として仮登録
-3. 人間レビュー（needs-human）: 妥当なら confidence を "reviewed"、source を "human" に更新。
-   誤りならエッジ削除。
+1. Scan the Markdown pointed to by the Document node's path
+2. Extract implementation-path notations by regex:
+     - a path inside a code span:  `src/billing/invoice/`
+     - an explicit "implementation: src/..." style notation
+     - a path that prefix-matches Aggregate.dir_path
+3. Match the extracted paths against Aggregate.dir_path
+     → on a match, draw IMPLEMENTED_BY(confidence="explicit", source="link")
 ```
 
-要点:
-- AI 推定エッジ（`inferred`）は品質ゲートの根拠として**そのままは使わない**。`reviewed` へ昇格したものだけを機械ゲートの正とする（ADR-0005: グラフを品質ゲートの基盤に使うため型と確度が要る）。
-- ディレクトリ構成のリファクタ時は `IMPLEMENTED_BY` の張り替えが必要（ADR-0005 Negative）。張替えは第1段の再抽出で自動追随する（explicit 分）ため、明示リンクを設計書に書く運用を推奨。
+This stage uses no LLM and is deterministic. It is re-run after a docs merge from the sink `35-reindex-knowledge.sh`.
+
+### 5.2 Stage 2: AI Inference for the Shortfall + Human Review (confidence=inferred → reviewed / source=ai → human)
+
+For aggregates not covered by explicit links, AI inference produces candidates, which are **finalized through human review**.
+
+```
+1. Enumerate Aggregates that have no IMPLEMENTED_BY
+2. The AI proposes candidate dir_paths from the similarity between the aggregate name/summary and codegraph's directory/symbol names
+     → tentatively register as IMPLEMENTED_BY(confidence="inferred", source="ai")
+3. Human review (needs-human): if valid, update confidence to "reviewed" and source to "human".
+   If wrong, delete the edge.
+```
+
+Key points:
+- AI-inferred edges (`inferred`) are **not used as-is** as a basis for quality gates. Only those promoted to `reviewed` are treated as authoritative by the mechanical gate (ADR-0005: because the graph is used as the foundation for quality gates, types and confidence are required).
+- When refactoring the directory structure, `IMPLEMENTED_BY` needs to be re-wired (ADR-0005 Negative). Re-wiring automatically follows through the re-extraction of Stage 1 (for the explicit portion), so writing explicit links in design documents is the recommended practice.
 
 ---
 
-## 6. context.d プラグインの fragments 出力仕様
+## 6. fragments Output Specification of the context.d Plugin
 
-`ports/context.d/` は context ポートの実装。コアは全プラグインを順に実行し、`fragments` を **priority 順に連結**、**トークン上限で切り詰める**（§4.2 ②）。
+`ports/context.d/` is the implementation of the context port. The core executes all plugins in order, **concatenates `fragments` in priority order**, and **truncates them at the token limit** (§4.2 ②).
 
-### 6.1 プラグイン構成
+### 6.1 Plugin Composition
 
-| ファイル | source | 役割 | 既定 priority |
+| File | source | Role | Default priority |
 |---|---|---|---|
-| `10-codegraph.sh` | `codegraph` | コードグラフから影響範囲サマリ（軽い要約）を注入 | 10 |
-| `20-knowledge.sh` | `knowledge` | ナレッジグラフから関連設計意図・用語・決定の要約を注入 | 20 |
-| `30-recent-failures.sh` | `recent-failures` | `failure-catalog.md` / logs から同種タスクの直近失敗を注入 | 30 |
+| `10-codegraph.sh` | `codegraph` | Injects an impact-scope summary (light summary) from the code graph | 10 |
+| `20-knowledge.sh` | `knowledge` | Injects a summary of related design intent/terms/decisions from the knowledge graph | 20 |
+| `30-recent-failures.sh` | `recent-failures` | Injects recent failures of similar tasks from `failure-catalog.md` / logs | 30 |
 
-> 既存の要件定義書 §8 のディレクトリ図では `context.d/` に `10-codegraph.sh` と `20-knowledge.sh` の 2 つが例示されている。本設計はこれを踏襲しつつ `30-recent-failures.sh` を追加する（retry 時の context 注入戦略変更=§11.2 の拡張余地に対応。要件と矛盾せず拡張の範囲内）。
+> The existing directory diagram in Requirements Definition §8 illustrates two files in `context.d/`: `10-codegraph.sh` and `20-knowledge.sh`. This design follows that while adding `30-recent-failures.sh` (corresponding to the change of context-injection strategy on retry = the extension latitude in §11.2. It does not contradict the requirements and is within the scope of extension).
 
-### 6.2 各プラグインの出力（fragment）仕様
+### 6.2 Output (fragment) Specification of Each Plugin
 
-各プラグインは要件定義書 §4.2 ②の契約に従い、`fragments` 配列の要素を stdout に出す。
+Each plugin, following the contract in Requirements Definition §4.2 ②, emits elements of the `fragments` array to stdout.
 
 ```json
 {
@@ -407,56 +407,56 @@ MCP 定義は `ports/mcp.d/20-knowledge.json`、サーバー実体は `mcp-knowl
 }
 ```
 
-| フィールド | 型 | 意味 |
+| Field | Type | Meaning |
 |---|---|---|
-| `source` | string | 生成プラグイン識別子（`codegraph` / `knowledge` / `recent-failures`） |
-| `content` | string | 注入本文。**軽い要約のみ**（ハイブリッド方式: 深掘りは実行中に AI が MCP で取得） |
-| `priority` | number | 連結順序。**小さいほど先**（上位=より重要としてトークン上限内で優先残置） |
+| `source` | string | Generating plugin identifier (`codegraph` / `knowledge` / `recent-failures`) |
+| `content` | string | Injected body. **Light summary only** (hybrid approach: deep dives are obtained by the AI via MCP during execution) |
+| `priority` | number | Concatenation order. **Smaller comes first** (higher = more important, preferentially retained within the token limit) |
 
-各プラグインは自身の source の fragment を 1 個以上返す。該当情報が無い場合は空配列 `{"fragments": []}` を返す（エラーにしない＝サイレント失敗回避のためログには残す）。
+Each plugin returns one or more fragments for its own source. If there is no applicable information, it returns an empty array `{"fragments": []}` (does not error = it is recorded in logs to avoid silent failure).
 
-### 6.3 priority 連結とトークン上限切り詰め
+### 6.3 Priority Concatenation and Token-Limit Truncation
 
-コアの結合アルゴリズム:
+The core's combination algorithm:
 
 ```
-1. 収集:  run_ports_all(context.d) で全プラグインの fragments を収集
-2. 整列:  fragments を priority 昇順で安定ソート（同 priority はプラグイン番号順）
-3. 連結:  content を順に連結（source ラベル付きの区切りヘッダを挿入）
-4. 切詰:  累積トークンが CONTEXT_TOKEN_BUDGET を超えたら、超過分を末尾（=低優先）から破棄
-          - fragment 単位で落とす（途中でぶつ切りにしない）
-          - 落とした fragment は logs に記録（何を捨てたか可観測に）
-5. 出力:  executor へ渡す最終 context 文字列
+1. Collect:  gather all plugins' fragments via run_ports_all(context.d)
+2. Sort:     stable-sort fragments by ascending priority (same priority = plugin number order)
+3. Concat:   concatenate content in order (insert a source-labeled separator header)
+4. Truncate: when cumulative tokens exceed CONTEXT_TOKEN_BUDGET, discard the excess from the tail (= lowest priority)
+          - drop per fragment (do not cut off mid-fragment)
+          - record dropped fragments in logs (make what was discarded observable)
+5. Output:   the final context string passed to the executor
 ```
 
-| パラメータ | 初期値（仮） | 見直し | 備考 |
+| Parameter | Initial value (tentative) | Review | Notes |
 |---|---|---|---|
-| `CONTEXT_TOKEN_BUDGET` | 未定（プロファイル `profiles/*.env` で設定。初期値は運用データで調整） | Phase 2 実測後 | §11.2 の「数値は運用で調整」方針に準拠。事前の偽の精度を置かない |
-| 切り詰め単位 | fragment 単位 | — | priority の意味（重要度）を保つため部分切り詰めはしない |
+| `CONTEXT_TOKEN_BUDGET` | Undecided (set via the profile `profiles/*.env`. Initial value adjusted with operational data) | After Phase 2 measurement | Conforms to the "numbers are adjusted through operation" policy of §11.2. No false precision is set in advance |
+| Truncation unit | Per fragment | — | No partial truncation is done, in order to preserve the meaning of priority (importance) |
 
-要点:
-- **priority が小さい fragment ほど残りやすい**（重要な影響範囲サマリを優先保全）。
-- 事前注入は軽量に保ち、AI が実行中に MCP で深掘りする前提（§4.2）。したがって content には巨大なグラフ全文を入れない。
-- 切り詰めが発生したこと自体を可観測にする（要件 §6.3 可観測性）。
+Key points:
+- **The smaller a fragment's priority, the more likely it is retained** (preferentially preserving the important impact-scope summary).
+- Pre-injection is kept lightweight, on the premise that the AI deep-dives via MCP during execution (§4.2). Therefore the full text of a huge graph is not placed in content.
+- The fact that truncation occurred is itself made observable (Requirements §6.3 observability).
 
 ---
 
-## 7. 受入基準の充足マッピング
+## 7. Acceptance-Criteria Fulfillment Mapping
 
-| 受入基準 | 充足箇所 |
+| Acceptance criterion | Where fulfilled |
 |---|---|
-| ナレッジグラフのスキーマ定義（Cypher DDL 相当）がある | §2.2（NODE/REL TABLE の DDL、ノード5種・エッジ5種） |
-| MCP 2ツールの入出力仕様がある | §3.1 `search_docs` / §3.2 `trace_spec_to_code`（read-only・入出力 JSON） |
-| 再インデックスのタイミングと排他方式が明記されている | §1.2（マージ駆動+プリフライト・発火点1箇所）/ §1.3（read-only スナップショット共有・flock・書込1回のみ） |
+| There is a schema definition for the knowledge graph (Cypher DDL-equivalent) | §2.2 (NODE/REL TABLE DDL, 5 node types and 5 edge types) |
+| There is an I/O specification for the 2 MCP tools | §3.1 `search_docs` / §3.2 `trace_spec_to_code` (read-only, I/O JSON) |
+| Reindexing timing and the exclusion method are specified | §1.2 (merge-driven + preflight, single trigger point) / §1.3 (read-only snapshot sharing, flock, write only once) |
 
 ---
 
-## 8. 未決事項（保留・初期値の明示）
+## 8. Open Items (Deferred, Initial Values Made Explicit)
 
-| 項目 | 状態 | 典拠 |
+| Item | Status | Basis |
 |---|---|---|
-| `CONTEXT_TOKEN_BUDGET` の具体数値 | 初期値（仮）。運用データで調整 | §11.2 |
-| 差分インデックス（フル→差分の最適化） | 保留。Phase 2 以降の最適化候補 | 本書 §1.2 |
-| Neo4j への移行 | 保留。必要になってから | ADR-0003 |
-| ノード種の追加 | 再検討事項（安易に増やさない） | ADR-0005 |
-| MCP ツールの追加（2→3以降） | 拡張余地。移行面最小化のため初期は2つ固定 | §5.2 / ADR-0003 |
+| The concrete value of `CONTEXT_TOKEN_BUDGET` | Initial value (tentative). Adjusted with operational data | §11.2 |
+| Differential indexing (full → differential optimization) | Deferred. An optimization candidate for Phase 2 and beyond | This document §1.2 |
+| Migration to Neo4j | Deferred. When it becomes necessary | ADR-0003 |
+| Adding node types | A matter for reconsideration (do not increase lightly) | ADR-0005 |
+| Adding MCP tools (2 → 3 and beyond) | Extension latitude. Fixed at 2 initially to minimize the migration surface | §5.2 / ADR-0003 |

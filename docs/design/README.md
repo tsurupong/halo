@@ -1,23 +1,23 @@
-# HALO 詳細設計書
+# HALO Detailed Design Documents
 
-出典: [HALO要件定義書 v1.8](../../../docs/HALO要件定義書.md)（2026-07-09）。設計判断の背景は [ADR 索引](../adr/README.md) を参照。
-文書体系は [HALO設計書一覧.md](../../../docs/HALO設計書一覧.md)（D1〜D9）に従う。
+Source: [HALO Requirements Specification v1.8](../../../docs/HALO要件定義書.md) (2026-07-09). For the background of design decisions, see the [ADR index](../adr/README.md).
+The document system follows [HALO Design Document Index](../../../docs/HALO設計書一覧.md) (D1-D9).
 
-> 注意: 01〜06 は v1.5 時点の内容を含む（bash コア前提など）。v1.8 で確定したコア TypeScript 化・specs/ 廃止と矛盾する箇所は、D 体系の各設計書（d1-, d4- …）を正とする。
+> Note: 01-06 contain content as of v1.5 (e.g., the bash-core premise). Where they contradict the core TypeScript migration and the abolition of specs/ confirmed in v1.8, the individual design documents of the D system (d1-, d4-, ...) are authoritative.
 
-| # | セクション | 対応要件 | 関連 ADR |
+| # | Section | Corresponding requirements | Related ADR |
 |---|---|---|---|
-| 01 | [コアループとポート](01-core-loop-and-ports.md) — 9ポートのJSONコントラクト、helpers.sh 仕様、fail 再注入シーケンス、conf.d 活性化規約 | §3〜4.3 | 0001, 0006 |
-| 02 | [executor / worktree / runtime](02-executor-worktree-runtime.md) — claude -p 実行仕様、使い捨て worktree 状態遷移、.harness.yml スキーマ、runtime 4種差分表 | §4.2③⑦⑧ | 0002, 0007 |
-| 03 | [gate / sink / on-fail](03-gate-sink-onfail.md) — loop-audit 6項目検査、evaluator 懐疑度方針、自律度別 sink 対応表、失敗学習ループ | §4.2④⑤⑥, §7, §11 | 0004, 0006 |
-| 04 | [起動層（trigger / プロファイル / プリフライト）](04-trigger-profiles-preflight.md) — schedule/polling トリガー、プロファイル3種の環境変数、2段プリフライト、日次予算算出 | §4.4 | 0008, 0006 |
-| 05 | [コンテキスト層（グラフ基盤）](05-context-layer-graphs.md) — CGC+KuzuDB 再インデックス、ナレッジグラフ Cypher DDL、knowledge MCP ツール仕様、Agentic Graph RAG | §5, §11.1 | 0003, 0005 |
-| D1 | [コントラクト仕様書](d1-contract-spec.md) — 9ポート I/O 型、plugin.json、exit code 規約、kg:// URI、STUCK マーカー、JSON Schema 検証（v1.8 準拠・最保守的に変更管理） | §3〜4, §11.1 | 0001, 0009〜0011 |
-| D2 | [コア詳細設計書](d2-core-design.md) — 9モジュール分割、loop 状態機械、runPort、プリフライト2段、budget 都度計測、discovery、worktree ライフサイクル | §3〜4, §8 | 0002, 0009, 0010 |
-| D3 | [CLI 仕様書](d3-cli-spec.md) — 6コマンド体系、フラグ上書き規則、project init 生成物、doctor 検査、終了コード規約、core 委譲マップ | §4.4, §8.2 | 0010 |
-| D4 | [セキュリティ設計書（骨子）](d4-security-design.md) — bubblewrap、deny 標準セット、fine-grained PAT、loop-audit 7 検査、グラフ書込制御、インジェクション対策、MCP 権限（v1.8 準拠） | §6, §7, §11.1 | 0004, 0011 |
-| D5 | [プラグイン開発ガイド](d5-plugin-dev-guide.md) — 最小プラグイン（TS/bash）、ポート別実装ポイント、見本4種解説、contract test、配置方法 | §4, §8 | 0001 |
-| D6 | [グラフ設計書](d6-graph-design.md) ◆私有 — KuzuDB DDL、kg:// 解決、CGC 再インデックス、陳腐化検出→自動起票、用語集チェック、MCP ツール、要件投入手順 | §5 | 0003, 0005, 0011 |
-| D7 | [運用ランブック（骨子）](d7-ops-runbook.md) — 自律度昇降格、needs-human フロー、failure-catalog/sign 昇格、予算監視、トラブルシュート（実測値は Phase 1〜2 後に記入） | §7, §9 | 0006, 0012 |
-| D8 | [テスト戦略書](d8-test-strategy.md) — core 単体（vitest）、ループ回帰（executor モック）、contract test、E2E、CI 構成 | §9 | 0010 |
-| 06 | [セキュリティ / コスト制御 / 可観測性](06-security-cost-observability.md) — bubblewrap 仕様、遮断操作一覧、PAT スコープ、コストパラメータ表、iter_N.json スキーマ | §6, §10 | 0004, 0008 |
+| 01 | [Core loop and ports](01-core-loop-and-ports.md) — JSON contract of the 9 ports, helpers.sh specification, fail re-injection sequence, conf.d activation rules | §3-4.3 | 0001, 0006 |
+| 02 | [executor / worktree / runtime](02-executor-worktree-runtime.md) — claude -p execution specification, disposable worktree state transitions, .harness.yml schema, runtime 4-type difference table | §4.2③⑦⑧ | 0002, 0007 |
+| 03 | [gate / sink / on-fail](03-gate-sink-onfail.md) — loop-audit 6-item inspection, evaluator skepticism policy, per-autonomy sink correspondence table, failure-learning loop | §4.2④⑤⑥, §7, §11 | 0004, 0006 |
+| 04 | [Launch layer (trigger / profile / preflight)](04-trigger-profiles-preflight.md) — schedule/polling triggers, environment variables of the 3 profiles, 2-stage preflight, daily budget computation | §4.4 | 0008, 0006 |
+| 05 | [Context layer (graph foundation)](05-context-layer-graphs.md) — CGC+KuzuDB re-indexing, knowledge-graph Cypher DDL, knowledge MCP tool specification, Agentic Graph RAG | §5, §11.1 | 0003, 0005 |
+| D1 | [Contract Specification](d1-contract-spec.md) — 9-port I/O types, plugin.json, exit code rules, kg:// URI, STUCK marker, JSON Schema validation (v1.8-compliant, most-conservative change management) | §3-4, §11.1 | 0001, 0009-0011 |
+| D2 | [Core Detailed Design](d2-core-design.md) — 9-module split, loop state machine, runPort, 2-stage preflight, budget per-call measurement, discovery, worktree lifecycle | §3-4, §8 | 0002, 0009, 0010 |
+| D3 | [CLI Specification](d3-cli-spec.md) — 6-command system, flag override rules, project init artifacts, doctor inspection, exit code rules, core delegation map | §4.4, §8.2 | 0010 |
+| D4 | [Security Design (skeleton)](d4-security-design.md) — bubblewrap, standard deny set, fine-grained PAT, loop-audit 7 inspections, graph-write control, injection countermeasures, MCP permissions (v1.8-compliant) | §6, §7, §11.1 | 0004, 0011 |
+| D5 | [Plugin Development Guide](d5-plugin-dev-guide.md) — minimal plugin (TS/bash), per-port implementation points, explanation of the 4 sample types, contract test, placement method | §4, §8 | 0001 |
+| D6 | [Graph Design](d6-graph-design.md) ◆private — KuzuDB DDL, kg:// resolution, CGC re-indexing, staleness detection → automatic issue creation, glossary check, MCP tools, requirement-ingestion procedure | §5 | 0003, 0005, 0011 |
+| D7 | [Operations Runbook (skeleton)](d7-ops-runbook.md) — autonomy promotion/demotion, needs-human flow, failure-catalog/sign promotion, budget monitoring, troubleshooting (measured values filled in after Phase 1-2) | §7, §9 | 0006, 0012 |
+| D8 | [Test Strategy](d8-test-strategy.md) — core unit (vitest), loop regression (executor mock), contract test, E2E, CI configuration | §9 | 0010 |
+| 06 | [Security / cost control / observability](06-security-cost-observability.md) — bubblewrap specification, list of blocked operations, PAT scope, cost parameter table, iter_N.json schema | §6, §10 | 0004, 0008 |

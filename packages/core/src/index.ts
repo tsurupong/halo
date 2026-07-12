@@ -11,3 +11,8 @@ export * from './budget.js';
 export * from './autonomy.js';
 export * from './preflight.js';
 export * from './loop.js';
+export * from './fs.js';
+export * from './scaffold.js';
+export * from './killswitch.js';
+export * from './doctor.js';
+export * from './triggers.js';

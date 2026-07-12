@@ -1,39 +1,39 @@
-# ADR-0010: コア・CLI・コントラクトの TypeScript 化（プラグインは任意言語）
+# ADR-0010: TypeScript for Core, CLI, and Contracts (plugins remain any-language)
 
 **Date**: 2026-07-11
 **Status**: accepted
-**Deciders**: 本人（HALO要件定義書 v1.8 §2.1・§3.2 より記録）
+**Deciders**: Owner (recorded from HALO Requirements Specification v1.8 §2.1 / §3.2)
 
 ## Context
 
-コアループ・CLI・コントラクト型定義の実装言語を確定する必要がある。当初案は bash によるスクリプト実装だったが、HALO は OSS として公開・配布する前提であり、導入の容易さ・クロスプラットフォーム性・外部バイナリ依存の少なさが配布性を左右する。一方、統一コントラクト（stdin/stdout の JSON + 終了コード）はプロセス境界に置く公開 API であり、コアの実装言語からプラグインを独立させる最重要の不変条件である（ADR-0001）。
+We need to settle the implementation language for the core loop, CLI, and contract type definitions. The original plan was a bash script implementation, but HALO is premised on being published and distributed as OSS, and ease of adoption, cross-platform support, and minimal external-binary dependencies govern its distributability. Meanwhile, the unified contract (JSON over stdin/stdout + exit code) is a public API placed at the process boundary, and is the most important invariant making plugins independent of the core's implementation language (ADR-0001).
 
 ## Decision
 
-コア・CLI・コントラクト型定義は TypeScript で実装する。npm で配布し、`npx halo` で導入可能とし、外部バイナリ依存を排除してクロスプラットフォームに動作させる。プラグインは統一コントラクトがプロセス境界にあるため任意言語（bash / Python / Node いずれでも可）のまま維持する。
+Implement the core, CLI, and contract type definitions in TypeScript. Distribute via npm, make it adoptable with `npx halo`, and eliminate external-binary dependencies so it works cross-platform. Because the unified contract sits at the process boundary, plugins remain any-language (bash / Python / Node all fine).
 
 ## Alternatives Considered
 
-### 代替案1: bash によるコア実装
-- **Pros**: 依存が少なく、Unix 環境では追加ランタイム不要
-- **Cons**: OSS 配布導線が弱い（npm のような標準パッケージ導線がない）。Windows 系での動作に外部バイナリを要し、クロスプラットフォーム性が低い。型のある公開コントラクト定義を提供しづらい
-- **Why not**: OSS 配布性・`npx halo` による導入容易性・外部バイナリ依存排除・クロスプラットフォーム動作を満たせない。コントラクトはプロセス境界にあるため、コアを TS 化してもプラグインの言語自由度は損なわれない
+### Alternative 1: A bash core implementation
+- **Pros**: Few dependencies; no additional runtime needed in Unix environments.
+- **Cons**: A weak OSS distribution path (no standard package channel like npm). Requires external binaries to run on Windows-family systems, giving low cross-platform support. Hard to provide typed public contract definitions.
+- **Why not**: Cannot satisfy OSS distributability, ease of adoption via `npx halo`, elimination of external-binary dependencies, and cross-platform operation. Because the contract sits at the process boundary, making the core TS does not compromise plugins' freedom of language.
 
-### 代替案2: Go / Rust による単一バイナリ配布
-- **Pros**: 単一バイナリで配布が単純、実行が高速
-- **Cons**: npm エコシステム（devDependencies としての導入・プラグイン配布）から外れる。コントラクト型を JS/TS 利用者と共有しづらい
-- **Why not**: 導入は `npm i -D halo`（§8.2）を前提としており、npm 統合の利点（プラグイン配布・型共有）が単一バイナリの利点を上回る
+### Alternative 2: Single-binary distribution via Go / Rust
+- **Pros**: Simple distribution as a single binary, fast execution.
+- **Cons**: Falls outside the npm ecosystem (adoption as a devDependency, plugin distribution). Hard to share contract types with JS/TS users.
+- **Why not**: Adoption presupposes `npm i -D halo` (§8.2), and the benefits of npm integration (plugin distribution, type sharing) outweigh the benefits of a single binary.
 
 ## Consequences
 
 ### Positive
-- `npm i -D halo` / `npx halo` による標準的な導入・撤去導線（§8.2 のグローバル状態ゼロと整合、ADR-0009）
-- コントラクト型定義を TypeScript で公開でき、Node 製プラグインは型を直接共有できる
-- 外部バイナリ依存の排除によりクロスプラットフォームで動作
+- A standard adoption/teardown path via `npm i -D halo` / `npx halo` (consistent with zero global state in §8.2, ADR-0009).
+- Contract type definitions can be published in TypeScript, and Node-based plugins can share the types directly.
+- Cross-platform operation by eliminating external-binary dependencies.
 
 ### Negative
-- コア実行に Node ランタイムを要する（bash のみの環境より前提が増える）
-- プラグインが非 Node 言語の場合、型共有の恩恵は受けられずコントラクト（JSON スキーマ）への準拠を各自が担保する
+- Running the core requires a Node runtime (more prerequisites than a bash-only environment).
+- When a plugin is in a non-Node language, it does not benefit from type sharing and must each ensure conformance to the contract (JSON schema).
 
 ### Risks
-- コア TS 化がプラグインの言語自由度を暗黙に狭める懸念 → コントラクトをプロセス境界（stdin/stdout JSON + 終了コード）に固定する不変条件（ADR-0001）を維持し、プラグイン言語非依存を構造で担保
+- Concern that making the core TS implicitly narrows plugins' freedom of language → maintain the invariant of fixing the contract at the process boundary (JSON over stdin/stdout + exit code) (ADR-0001), structurally guaranteeing plugin language independence.

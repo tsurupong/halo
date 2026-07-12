@@ -1,36 +1,36 @@
-# 詳細設計書 02 — executor / worktree / runtime
+# Detailed Design Document 02 — executor / worktree / runtime
 
-> **v1.8 追随改訂済み（コア TS 化・specs/ 廃止を反映）**。呼び出し元のコアは `packages/core`（TypeScript）。executor 実体（`ports/executor.d/10-claude-headless.sh`）は bash プラグインのまま許容する（統一コントラクトに従う限り言語自由）。
+> **Revised to follow v1.8 (reflecting the core migration to TS and the removal of specs/)**. The calling core is `packages/core` (TypeScript). The executor implementation (`ports/executor.d/10-claude-headless.sh`) is allowed to remain a bash plugin (language is free as long as it follows the unified contract).
 
-| 項目 | 内容 |
+| Item | Content |
 |---|---|
-| 対象範囲 | ポート③ executor、使い捨て worktree ライフサイクル、ポート⑦ runtime、ポート⑧ kind（`.harness.yml`） |
-| 典拠 | HALO要件定義書 v1.8 §4.2③⑦⑧、ADR-0002（使い捨て worktree）、ADR-0007（runtime=成果物種別）、ADR-0010（コア TypeScript 化） |
-| ステータス | 実装フェーズ着手可能（Phase 1 で executor + runtime 1種、Phase 3 で docs-md 初運用） |
-| 呼び出し元 | 本書はコア（`packages/core`）から `runPort('executor', ...)` として呼ばれる executor と、その内部で委譲される runtime/kind の詳細を定義する。設計書 01（ports 総論）から本書へリンクされる想定 |
+| Scope | Port ③ executor, disposable worktree lifecycle, port ⑦ runtime, port ⑧ kind (`.harness.yml`) |
+| Basis | HALO Requirements Specification v1.8 §4.2③⑦⑧, ADR-0002 (disposable worktree), ADR-0007 (runtime = artifact type), ADR-0010 (core migration to TypeScript) |
+| Status | Ready to begin the implementation phase (executor + 1 runtime in Phase 1, first operation of docs-md in Phase 3) |
+| Caller | This document defines the executor called from the core (`packages/core`) as `runPort('executor', ...)`, along with the details of the runtime/kind delegated within it. It is expected to be linked from Design Document 01 (ports overview) to this document |
 
-本書は要件定義書 §4.2 の contract を実装レベルへ落とし込む詳細設計であり、要件定義書と矛盾する仕様は定義しない。数値（`--max-turns 40`、timeout 15分、retry 3回等）はすべて要件定義書 §6.2・§11.2 の初期値を踏襲する。
+This document is a detailed design that translates the contract in §4.2 of the Requirements Specification down to the implementation level; it does not define any specification that conflicts with the Requirements Specification. All numeric values (`--max-turns 40`, 15-minute timeout, 3 retries, etc.) follow the initial values in §6.2 and §11.2 of the Requirements Specification.
 
 ---
 
-## 1. executor（`claude -p` 実行コマンド仕様）
+## 1. executor (`claude -p` execution command specification)
 
-### 1.1 コントラクト（要件定義書 §4.2③）
+### 1.1 Contract (Requirements Specification §4.2③)
 
-executor は他ポートと同一の「stdin JSON + stdout JSON + 終了コード」規約に従う薄いアダプタ（`ports/executor.d/10-claude-headless.sh`）である。
+The executor is a thin adapter (`ports/executor.d/10-claude-headless.sh`) that follows the same "stdin JSON + stdout JSON + exit code" convention as the other ports.
 
 ```
-入力(stdin): {"prompt": "...", "workdir": "/home/<user>/halo/wt/issue-<N>",
+input(stdin): {"prompt": "...", "workdir": "/home/<user>/halo/wt/issue-<N>",
               "budget": {"max_turns": 40, "timeout_sec": 900}}
-出力(stdout): {"status": "done|stuck|timeout", "summary": "...", "cost": {...}}
+output(stdout): {"status": "done|stuck|timeout", "summary": "...", "cost": {...}}
 ```
 
-- `status` は `done`（正常終了）/ `stuck`（STUCK マーカー出力を検出）/ `timeout`（`timeout_sec` 超過）の3値。gate 判定は行わない（合否は gate ポートの責務）。
-- executor は成果物の正しさを判断しない。作業結果は worktree の作業ツリー（未コミットの diff）として残し、gate ポートがそれを検査する。
+- `status` takes one of three values: `done` (normal completion) / `stuck` (a STUCK marker output was detected) / `timeout` (`timeout_sec` exceeded). It does not make gate decisions (pass/fail is the responsibility of the gate ports).
+- The executor does not judge the correctness of the artifact. Work results remain as the worktree's working tree (uncommitted diff), and the gate ports inspect it.
 
-### 1.2 実行コマンド骨子
+### 1.2 Execution command skeleton
 
-要件定義書 §4.2③の骨子を実装形に展開する。
+The skeleton of §4.2③ of the Requirements Specification is expanded into an implementation form.
 
 ```bash
 timeout "${budget_timeout_sec}" \
@@ -45,120 +45,120 @@ bwrap --bind "$workdir" "$workdir" \
     --max-turns "${budget_max_turns}"
 ```
 
-各フラグの設計意図:
+Design intent of each flag:
 
-| フラグ | 値 | 意図 |
+| Flag | Value | Intent |
 |---|---|---|
-| `--mcp-config` | `$HARNESS_ROOT/mcp.json` | ハーネス管理の生成物のみを MCP 構成として渡す（§1.3 参照） |
-| `--strict-mcp-config` | （無引数） | プロジェクト内 `.mcp.json` とユーザーグローバル設定を無視し、ツール可視範囲を確定する。再現性とセキュリティ（プロンプトインジェクションで未知ツールを掴ませない）のため必須 |
-| `--allowedTools` | MCP 2種 + `Edit,Write,Bash` | ツール許可の最小化。codegraph/knowledge の read-only MCP と最小の編集・実行ツールに限定。要件定義書 §6.1 のツール許可最小化に対応 |
-| `--max-turns` | `budget.max_turns`（初期40） | ターン暴走の遮断（§6.2）。budget として実行時に注入し、プロファイル差し替えを可能にする |
+| `--mcp-config` | `$HARNESS_ROOT/mcp.json` | Pass only the harness-managed generated artifact as the MCP configuration (see §1.3) |
+| `--strict-mcp-config` | (no argument) | Ignore the project's `.mcp.json` and the user's global settings, fixing the range of tool visibility. Required for reproducibility and security (so that unknown tools cannot be handed over via prompt injection) |
+| `--allowedTools` | 2 MCP kinds + `Edit,Write,Bash` | Minimization of tool permissions. Limited to the read-only MCPs codegraph/knowledge and the minimal editing/execution tools. Corresponds to the tool permission minimization in §6.1 of the Requirements Specification |
+| `--max-turns` | `budget.max_turns` (initial 40) | Cutting off turn runaway (§6.2). Injected as budget at execution time, enabling profile substitution |
 
-- `timeout` は 15分/iteration（初期値、§6.2）を外側で強制し、超過時 executor は `{"status":"timeout"}` を返す。
-- bubblewrap の `--bind` 書込許可は **worktree ディレクトリに一致**させる（§2.5、ADR-0002）。`~/.ssh` / `~/.aws` は `sandbox.denyRead` により読取禁止（§6.1）。
-- Windows パス継承問題の回避のため、executor 起動前に PATH を Linux 側のみへ洗い直す（§6.1）。
+- `timeout` enforces 15 minutes/iteration (initial value, §6.2) on the outside, and on exceeding it the executor returns `{"status":"timeout"}`.
+- The bubblewrap `--bind` write permission is **matched to the worktree directory** (§2.5, ADR-0002). `~/.ssh` / `~/.aws` are read-prohibited by `sandbox.denyRead` (§6.1).
+- To avoid the Windows path inheritance problem, PATH is cleaned to the Linux side only before starting the executor (§6.1).
 
-### 1.3 mcp.json の生成（jq マージ）
+### 1.3 Generating mcp.json (jq merge)
 
-`mcp.json` は静的ファイルではなく、**起動時に `ports/mcp.d/*.json` を番号順に jq マージして生成**する。ディレクトリ規約による活性化（§3.2）を MCP 構成にも適用し、断片の追加・削除だけで executor に渡るツール集合を変えられるようにする。
+`mcp.json` is not a static file; it is **generated at startup by merging `ports/mcp.d/*.json` in numeric order with jq**. The directory-convention-based activation (§3.2) is also applied to the MCP configuration, so that the set of tools passed to the executor can be changed just by adding or removing fragments.
 
-生成データフロー:
+Generation data flow:
 
 ```
 ports/mcp.d/10-codegraph.json ┐
 ports/mcp.d/20-knowledge.json ┼─ jq -s reduce .[] as $x ({}; . * $x) ─→ $HARNESS_ROOT/mcp.json
-（将来: 30-github.json 等）   ┘        （mcpServers を deep-merge）
+(future: 30-github.json etc.) ┘        (deep-merge mcpServers)
 ```
 
-- 各断片は `{"mcpServers": {"<name>": {...}}}` 形式の部分構成とする。
-- マージは番号順（`conf.d` 方式）で行い、後勝ちの deep-merge とする。実装例: `jq -s 'reduce .[] as $x ({}; . * $x)' ports/mcp.d/*.json > mcp.json`。
-- 生成タイミングはプリフライト（軽量段は不要、重量段で1回）。生成物は `--strict-mcp-config` により唯一の MCP ソースとなる。
-- `mcp.d` 断片データスキーマ:
+- Each fragment is a partial configuration of the form `{"mcpServers": {"<name>": {...}}}`.
+- The merge is done in numeric order (the `conf.d` style), a last-wins deep-merge. Implementation example: `jq -s 'reduce .[] as $x ({}; . * $x)' ports/mcp.d/*.json > mcp.json`.
+- The generation timing is preflight (not needed in the lightweight stage, once in the heavyweight stage). The generated artifact becomes the sole MCP source by virtue of `--strict-mcp-config`.
+- `mcp.d` fragment data schema:
 
-| フィールド | 型 | 必須 | 説明 |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `mcpServers` | object | ○ | サーバー名をキーとするマップ |
-| `mcpServers.<name>.command` | string | ○ | 起動コマンド（例: knowledge MCP のエントリ） |
-| `mcpServers.<name>.args` | string[] | 任意 | 引数 |
-| `mcpServers.<name>.env` | object | 任意 | 環境変数。knowledge MCP は read-only でグラフを開く指定を含む |
+| `mcpServers` | object | ○ | Map keyed by server name |
+| `mcpServers.<name>.command` | string | ○ | Startup command (e.g., the entry of the knowledge MCP) |
+| `mcpServers.<name>.args` | string[] | Optional | Arguments |
+| `mcpServers.<name>.env` | object | Optional | Environment variables. The knowledge MCP includes a specification to open the graph read-only |
 
 ---
 
-## 2. 使い捨て worktree ライフサイクル
+## 2. Disposable worktree lifecycle
 
-### 2.1 原則（ADR-0002）
+### 2.1 Principle (ADR-0002)
 
-1 Issue = 1 ブランチ = 1 worktree。AI の作業はすべて生滅する worktree 内で行い、人間の作業ディレクトリと物理分離する。フレッシュコンテキスト原則をファイルシステムにも適用し、cleanup ロジックのバグが構造的に存在しない状態（後始末は削除一発）を作る。
+1 Issue = 1 branch = 1 worktree. All of the AI's work is done inside an ephemeral worktree, physically separated from the human's working directory. The fresh-context principle is applied to the filesystem as well, creating a state where bugs in cleanup logic are structurally absent (cleanup is a single deletion).
 
-### 2.2 状態遷移図
+### 2.2 State transition diagram
 
 ```mermaid
 stateDiagram-v2
     [*] --> Created: git worktree add ~/halo/wt/issue-N -b feature/issue-N
-    Created --> KindResolved: kind解決（.harness.yml の kinds 引き）
-    KindResolved --> NeedsHuman: .harness.yml 無し / kind 未定義
-    KindResolved --> SetUp: setup.sh（採用runtime群へ委譲）
-    SetUp --> Running: executor 実行（bwrap 境界=worktree）
-    Running --> GateEval: 作業ツリー diff を gate へ
-    GateEval --> Passed: 全gate pass (exit 0)
-    GateEval --> Failing: いずれかfail (exit 2)
-    Failing --> Running: reason再注入で再実行（retry_count < 3）
-    Failing --> Failed: retry_count == 3（needs-human）
-    Running --> Stuck: STUCKマーカー / timeout
+    Created --> KindResolved: resolve kind (look up kinds in .harness.yml)
+    KindResolved --> NeedsHuman: no .harness.yml / kind undefined
+    KindResolved --> SetUp: setup.sh (delegates to the adopted runtime set)
+    SetUp --> Running: run executor (bwrap boundary = worktree)
+    Running --> GateEval: pass working-tree diff to gate
+    GateEval --> Passed: all gates pass (exit 0)
+    GateEval --> Failing: any fail (exit 2)
+    Failing --> Running: re-run with reason re-injected (retry_count < 3)
+    Failing --> Failed: retry_count == 3 (needs-human)
+    Running --> Stuck: STUCK marker / timeout
     Stuck --> Failed
-    Passed --> PRCreated: sink（commit / PR作成）
+    Passed --> PRCreated: sink (commit / create PR)
     PRCreated --> Removed: git worktree remove --force
     Failed --> Removed: git worktree remove --force
     NeedsHuman --> Removed: git worktree remove --force
     Removed --> [*]
 ```
 
-要件定義書 §4.2③の骨子 `add → runtime 検出 → setup → 実行 → (pass: PR / fail: そのまま) → remove` を、retry ループ（§6.2 の同一 Issue 3回 fail で needs-human）と kind 解決失敗経路を含めて詳細化したもの。
+This is a detailing of the §4.2③ skeleton `add → runtime detection → setup → execute → (pass: PR / fail: leave as-is) → remove`, including the retry loop (needs-human after 3 fails on the same Issue in §6.2) and the kind resolution failure path.
 
-### 2.3 各状態の処理
+### 2.3 Processing of each state
 
-| 状態 | 処理 | 典拠 |
+| State | Processing | Basis |
 |---|---|---|
-| Created | `git worktree add ~/halo/wt/issue-<N> -b feature/issue-<N>`。同一ブランチの二重チェックアウトは git が禁止（並列時の衝突防止を無料で得る） | §4.2③1、ADR-0002 |
-| KindResolved | Issue ラベル `kind:<name>`（無指定は `code`）から `.harness.yml` の `kinds` を引き、runtime 群とプロンプトテンプレートを決定。`.harness.yml` 無し or 未定義 kind は NeedsHuman へ（暗黙検出しない） | §4.2③2⑧、ADR-0007 |
-| SetUp | 採用 runtime 群の `setup.sh` に委譲（env 注入・依存実体化・キャッシュ外出し） | §4.2③3⑦ |
-| Running | bubblewrap 書込許可を worktree に一致させて executor 実行 | §4.2③4 |
-| Failing→Running | gate の reason を次イテレーションのプロンプトへ再注入して差し戻す | §4.2④ |
-| Removed | pass 時は PR 作成後、fail 確定（3回）/needs-human 時はそのまま `git worktree remove --force` | §4.2③5 |
+| Created | `git worktree add ~/halo/wt/issue-<N> -b feature/issue-<N>`. git prohibits double-checkout of the same branch (collision prevention during parallel execution is obtained for free) | §4.2③1, ADR-0002 |
+| KindResolved | From the Issue label `kind:<name>` (defaults to `code` if unspecified), look up `kinds` in `.harness.yml` and determine the runtime set and the prompt template. Missing `.harness.yml` or an undefined kind goes to NeedsHuman (no implicit detection) | §4.2③2⑧, ADR-0007 |
+| SetUp | Delegated to the `setup.sh` of the adopted runtime set (env injection, dependency materialization, cache externalization) | §4.2③3⑦ |
+| Running | Run the executor with the bubblewrap write permission matched to the worktree | §4.2③4 |
+| Failing→Running | Re-inject the gate's reason into the prompt of the next iteration and send it back | §4.2④ |
+| Removed | On pass, after PR creation; on confirmed fail (3 times) / needs-human, `git worktree remove --force` as-is | §4.2③5 |
 
-### 2.4 bubblewrap 境界一致
+### 2.4 Bubblewrap boundary matching
 
-executor（§1.2）の bubblewrap `--bind` は worktree ディレクトリと同一パスに固定する。これにより「サンドボックス境界 = タスクの作業スコープ」となり、監査上「このタスクが触れた場所」が worktree ディレクトリに閉じる（ADR-0002 Consequences）。worktree 外の共有キャッシュ（`~/halo/cache/`）は正しさに影響しない範囲でのみ書込を許容し、破損は gate が検出する前提とする。
+The bubblewrap `--bind` of the executor (§1.2) is fixed to the same path as the worktree directory. This makes "sandbox boundary = task's work scope", so that from an audit standpoint "the places this task touched" are confined to the worktree directory (ADR-0002 Consequences). The shared cache outside the worktree (`~/halo/cache/`) allows writes only within the range that does not affect correctness, on the premise that corruption is detected by the gate.
 
-### 2.5 配置制約（WSL2 ext4）
+### 2.5 Placement constraints (WSL2 ext4)
 
-リンクベースの依存共有・ハードリンク共有は**同一ファイルシステム内でのみ有効**なため、以下はすべて WSL2 の ext4 側（`/home` 配下）に置く。`/mnt/c/`（Windows ドライブ）配下への配置は禁止する（§4.2⑦ 配置制約）。
+Because link-based dependency sharing and hardlink sharing are **valid only within the same filesystem**, all of the following are placed on the WSL2 ext4 side (under `/home`). Placement under `/mnt/c/` (Windows drive) is prohibited (§4.2⑦ placement constraints).
 
-| 対象 | 配置 | 理由 |
+| Target | Placement | Reason |
 |---|---|---|
-| `wt/`（worktree 置き場） | `/home/<user>/halo/wt/` | ストアとの同一FS内リンクを成立させる |
-| 各 runtime のストア | `/home` 配下（pnpm store / uv cache / CARGO_TARGET_DIR） | ハードリンク・リンクベース sync の前提 |
-| `cache/`（横断キャッシュ） | `/home/<user>/halo/cache/` | 同上。破損時も gate が検出 |
+| `wt/` (worktree storage location) | `/home/<user>/halo/wt/` | Establishes same-FS links with the store |
+| Each runtime's store | Under `/home` (pnpm store / uv cache / CARGO_TARGET_DIR) | Prerequisite for hardlink / link-based sync |
+| `cache/` (cross-cutting cache) | `/home/<user>/halo/cache/` | Same as above. The gate detects even corruption |
 
 ---
 
-## 3. `.harness.yml`（kind）スキーマ定義
+## 3. `.harness.yml` (kind) schema definition
 
-### 3.1 位置づけ（要件定義書 §4.2⑧、ADR-0007）
+### 3.1 Positioning (Requirements Specification §4.2⑧, ADR-0007)
 
-対象リポジトリのルートに **必須**。存在しなければタスクを実行せず `needs-human` とする（暗黙の runtime 自動検出は行わない）。kind は「使用 runtime 群」と「プロンプトテンプレート」の2つを切り替える。
+**Required** at the root of the target repository. If it does not exist, the task is not executed and becomes `needs-human` (no implicit automatic runtime detection is done). The kind switches two things: the "runtime set to use" and the "prompt template".
 
-### 3.2 スキーマ
+### 3.2 Schema
 
 ```yaml
-# .harness.yml（対象リポジトリのルートに必須）
+# .harness.yml (required at the root of the target repository)
 kinds:
-  <kind名>:                    # 例: code, docs（Issue ラベル kind:<name> に対応）
-    runtimes: [<runtime名>, ...] # ports/runtime.d/<name>/ を参照。1つ以上
-    prompt: <パス>              # プロンプトテンプレート（リポジトリ相対）
+  <kind name>:                 # e.g. code, docs (corresponds to the Issue label kind:<name>)
+    runtimes: [<runtime name>, ...] # references ports/runtime.d/<name>/. One or more
+    prompt: <path>             # prompt template (repository-relative)
 ```
 
-具体例（要件定義書 §4.2⑧より）:
+Concrete example (from §4.2⑧ of the Requirements Specification):
 
 ```yaml
 kinds:
@@ -170,71 +170,71 @@ kinds:
     prompt: prompts/docs.md
 ```
 
-### 3.3 フィールド定義
+### 3.3 Field definitions
 
-| フィールド | 型 | 必須 | 制約・意味 |
+| Field | Type | Required | Constraints / meaning |
 |---|---|---|---|
-| `kinds` | object | ○ | kind 名をキーとするマップ。最低1エントリ |
-| `kinds.<name>` | object | ○ | kind 定義。`<name>` は Issue ラベル `kind:<name>` と一致（無指定 Issue は `code` に解決） |
-| `kinds.<name>.runtimes` | string[] | ○ | 採用 runtime 名の配列。各要素は `ports/runtime.d/<name>/` に実在すること。実在しなければ needs-human |
-| `kinds.<name>.prompt` | string | ○ | プロンプトテンプレートのリポジトリ相対パス。code 系はテスト必須等、docs 系は ADR フォーマット準拠・用語集語彙使用等を含む（指示分離） |
+| `kinds` | object | ○ | Map keyed by kind name. At least 1 entry |
+| `kinds.<name>` | object | ○ | Kind definition. `<name>` matches the Issue label `kind:<name>` (an unspecified Issue resolves to `code`) |
+| `kinds.<name>.runtimes` | string[] | ○ | Array of adopted runtime names. Each element must exist under `ports/runtime.d/<name>/`. If it does not exist, needs-human |
+| `kinds.<name>.prompt` | string | ○ | Repository-relative path of the prompt template. The code family includes requirements such as mandatory tests, and the docs family includes conformance to the ADR format, use of glossary vocabulary, etc. (instruction separation) |
 
-### 3.4 解決規則
+### 3.4 Resolution rules
 
-- Issue に `kind:` ラベルが無い場合は `code` を既定とする（§4.2⑧）。
-- `.harness.yml` 欠如、または該当 kind 未定義、または参照 runtime 不在のいずれも `needs-human` へ（再現性優先、ADR-0007 代替案2 却下理由）。
-- `runtimes` が複数の場合の gate 実行順・部分失敗の扱いは要件定義書 §11.3 で保留（モノレポ案件発生時に決定）。本設計では単一 runtime を前提とし、複数指定時は配列順に setup/check/test を実行する素朴実装に留める。
+- If the Issue has no `kind:` label, `code` is the default (§4.2⑧).
+- A missing `.harness.yml`, an undefined kind, or a referenced runtime that does not exist all go to `needs-human` (reproducibility priority; ADR-0007 rejection reason for alternative 2).
+- The gate execution order and handling of partial failures when there are multiple `runtimes` is deferred in §11.3 of the Requirements Specification (to be decided when a monorepo case arises). This design assumes a single runtime, and for multiple specifications it stays with a naive implementation that runs setup/check/test in array order.
 
 ---
 
-## 4. runtime（4種）の仕様と差分表
+## 4. runtime (4 kinds) specification and difference table
 
-### 4.1 インターフェース仕様（要件定義書 §4.2⑦、ADR-0007）
+### 4.1 Interface specification (Requirements Specification §4.2⑦, ADR-0007)
 
-runtime は「言語」ではなく「成果物の種類」を吸収するプラグイン。コード（node-pnpm / python-uv / rust）と文書（docs-md）を同列に扱う。1ディレクトリに3スクリプトを束ねる。
+A runtime is a plugin that absorbs not the "language" but the "kind of artifact". Code (node-pnpm / python-uv / rust) and documents (docs-md) are treated on the same footing. Three scripts are bundled in one directory.
 
 ```
 ports/runtime.d/<name>/
-├── setup.sh    # env注入 + 依存実体化 + キャッシュ外出し設定
-├── check.sh    # 静的検査（exit 2 = fail）
-└── test.sh     # 動的検証（exit 2 = fail）
+├── setup.sh    # env injection + dependency materialization + externalized cache config
+├── check.sh    # static inspection (exit 2 = fail)
+└── test.sh     # dynamic verification (exit 2 = fail)
 ```
 
-| スクリプト | コントラクト | 呼び出し元 |
+| Script | Contract | Caller |
 |---|---|---|
-| `setup.sh` | stdin JSON（workdir 等）を受け、依存を worktree 内へ高速に実体化。env 注入・キャッシュ外出しを行う | worktree ライフサイクルの SetUp（§2.3） |
-| `check.sh` | 静的検査。exit 0 = pass / exit 2 = fail（Claude Code hooks と同一規約） | gate.d `10-typecheck.sh` / `20-lint.sh`（薄いラッパー） |
-| `test.sh` | 動的検証。exit 0 = pass / exit 2 = fail | gate.d `30-test.sh`（薄いラッパー） |
+| `setup.sh` | Receives stdin JSON (workdir, etc.) and rapidly materializes dependencies into the worktree. Performs env injection and cache externalization | SetUp of the worktree lifecycle (§2.3) |
+| `check.sh` | Static inspection. exit 0 = pass / exit 2 = fail (same convention as Claude Code hooks) | gate.d `10-typecheck.sh` / `20-lint.sh` (thin wrappers) |
+| `test.sh` | Dynamic verification. exit 0 = pass / exit 2 = fail | gate.d `30-test.sh` (thin wrapper) |
 
-- コントラクトは他ポートと同一（stdin JSON + 終了コード）。
-- runtime の選択は `.harness.yml` の宣言によるため **`detect.sh` は持たない**（ADR-0007）。
-- gate.d の `10-typecheck.sh` / `20-lint.sh` / `30-test.sh` は実コマンドを持たず、採用 runtime の `check.sh` / `test.sh` へ委譲する薄いラッパー。実装コマンドの所在は runtime に一元化し、gate・executor・コアは無変更で新種別に対応する。
-- **抽象要件（ADR-0002 Negative）**: 使い捨て方式では setup が毎回走るため、各 runtime は「依存の実体化を高速に行えること」を満たす。実現手段は runtime の実装詳細。
+- The contract is the same as the other ports (stdin JSON + exit code).
+- Since runtime selection is by the declaration in `.harness.yml`, **it does not have `detect.sh`** (ADR-0007).
+- gate.d's `10-typecheck.sh` / `20-lint.sh` / `30-test.sh` hold no actual commands; they are thin wrappers that delegate to the `check.sh` / `test.sh` of the adopted runtime. The location of the implementation commands is centralized in the runtime, so the gate, executor, and core support new kinds without modification.
+- **Abstract requirement (ADR-0002 Negative)**: Because setup runs every time in the disposable approach, each runtime must satisfy "being able to materialize dependencies rapidly". The means of achieving this is a runtime implementation detail.
 
-### 4.2 4実装の差分表
+### 4.2 Difference table of the 4 implementations
 
-| 項目 | node-pnpm | python-uv | rust | docs-md |
+| Item | node-pnpm | python-uv | rust | docs-md |
 |---|---|---|---|---|
-| 吸収する成果物種別 | Node/TS コード | Python コード | Rust コード | 文書（設計書 / ADR） |
-| `setup.sh` 依存実体化 | `pnpm --offline`（グローバルストアのハードリンク共有） | `uv sync`（リンクベース） | 共有 `CARGO_TARGET_DIR` を指すのみ | ほぼ noop |
-| 高速化の手段（同一FS前提） | pnpm グローバルストア → worktree へハードリンク | uv cache → リンクベース sync | ビルド成果物を worktree 外の共有ターゲットへ | なし（依存なし） |
-| `check.sh`（静的検査） | tsc + eslint | mypy + ruff | cargo check + clippy | markdownlint + リンク切れ + ADR テンプレート準拠 |
-| `test.sh`（動的検証） | vitest | pytest | cargo test | 用語集整合チェック（文書中のドメイン用語をナレッジグラフの用語集ノードと照合） |
-| キャッシュ外出し先 | `~/halo/cache/`（pnpm store は `/home` 配下） | `~/halo/cache/`（uv cache は `/home` 配下） | 共有 `CARGO_TARGET_DIR`（`/home` 配下） | 対象外 |
-| 導入 Phase | Phase 1（runtime 1種の候補） | 拡張 | 拡張 | Phase 3（kind:docs 初運用） |
+| Artifact type absorbed | Node/TS code | Python code | Rust code | Documents (design docs / ADR) |
+| `setup.sh` dependency materialization | `pnpm --offline` (hardlink sharing of the global store) | `uv sync` (link-based) | Just points to the shared `CARGO_TARGET_DIR` | Almost noop |
+| Means of speedup (assuming same FS) | pnpm global store → hardlink into worktree | uv cache → link-based sync | Build artifacts to a shared target outside the worktree | None (no dependencies) |
+| `check.sh` (static inspection) | tsc + eslint | mypy + ruff | cargo check + clippy | markdownlint + broken links + ADR template conformance |
+| `test.sh` (dynamic verification) | vitest | pytest | cargo test | Glossary consistency check (collate domain terms in documents against the glossary nodes of the knowledge graph) |
+| Cache externalization destination | `~/halo/cache/` (pnpm store is under `/home`) | `~/halo/cache/` (uv cache is under `/home`) | Shared `CARGO_TARGET_DIR` (under `/home`) | Not applicable |
+| Introduction Phase | Phase 1 (candidate for the 1 runtime kind) | Extension | Extension | Phase 3 (first operation of kind:docs) |
 
-### 4.3 docs-md の特記事項
+### 4.3 Special notes on docs-md
 
-- `check`: markdownlint + リンク切れ検出 + ADR テンプレート準拠チェック。
-- `test`: **用語集整合チェック**。文書中のドメイン用語をナレッジグラフの用語集ノード（ユビキタス言語）と照合し、ユビキタス言語を自動ゲート化する。
-- 厳密度の初期方針（§11.2）: block は禁止語違反（`deprecated` / `synonyms`）のみ。未登録用語は PR 本文への追加候補提案に留め、block しない（過剰 block の緩和、ADR-0007 Risks）。厳密度は docs タスク10件の実績後に調整。
+- `check`: markdownlint + broken link detection + ADR template conformance check.
+- `test`: **Glossary consistency check**. Collates domain terms in the document against the glossary nodes of the knowledge graph (ubiquitous language), automatically gating the ubiquitous language.
+- Initial strictness policy (§11.2): block only for prohibited-term violations (`deprecated` / `synonyms`). Unregistered terms are limited to proposing addition candidates in the PR body and are not blocked (mitigation of excessive blocking, ADR-0007 Risks). The strictness is adjusted after a track record of 10 docs tasks.
 
 ---
 
-## 受入基準チェック
+## Acceptance criteria check
 
-| 受入基準 | 対応セクション |
+| Acceptance criterion | Corresponding section |
 |---|---|
-| worktree 状態遷移図が記載されている | §2.2（Mermaid stateDiagram） |
-| runtime インターフェース仕様と4実装の差分表がある | §4.1（インターフェース）+ §4.2（差分表） |
-| `.harness.yml` のスキーマ定義がある | §3.2（スキーマ）+ §3.3（フィールド定義） |
+| The worktree state transition diagram is documented | §2.2 (Mermaid stateDiagram) |
+| There is a runtime interface specification and a difference table of the 4 implementations | §4.1 (interface) + §4.2 (difference table) |
+| There is a schema definition for `.harness.yml` | §3.2 (schema) + §3.3 (field definitions) |

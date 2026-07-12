@@ -1,38 +1,38 @@
-# ADR-0007: runtime は「言語」ではなく「成果物種別」を吸収する
+# ADR-0007: Runtime Absorbs "Artifact Kind," Not "Language"
 
 **Date**: 2026-07-09
 **Status**: accepted
-**Deciders**: 本人（HALO要件定義書 v1.5 §4.2⑦⑧ より記録）
+**Deciders**: Owner (recorded from HALO Requirements Specification v1.5 §4.2⑦⑧)
 
 ## Context
 
-HALO のユースケースはアプリ開発だけでなく、設計書・ADR の作成修正も含む。文書タスクを特別扱いすると、コア・executor・gate に文書用の分岐が増殖する。
+HALO's use cases are not limited to app development; they also include creating and revising design docs and ADRs. Treating document tasks specially would proliferate document-specific branches across the core, executor, and gates.
 
 ## Decision
 
-runtime プラグインの抽象を「言語」ではなく「成果物の種類」とし、コード（node-pnpm / python-uv / rust）と文書（docs-md）を同列の runtime として扱う。docs-md の check は markdownlint + リンク切れ + ADR テンプレート準拠、test は用語集整合チェック（ナレッジグラフ照合）とする。タスクは Issue ラベル `kind:<name>` と `.harness.yml` の kinds 定義で runtime とプロンプトを切り替える。
+Make the runtime plugin's abstraction "kind of artifact" rather than "language," and treat code (node-pnpm / python-uv / rust) and documents (docs-md) as peer runtimes. docs-md's check is markdownlint + broken-link check + ADR-template conformance; its test is a glossary-consistency check (matching against the knowledge graph). Tasks switch runtime and prompt via the Issue label `kind:<name>` and the kinds definition in `.harness.yml`.
 
 ## Alternatives Considered
 
-### 代替案1: 文書用の別ループ（docs 専用パイプライン）
-- **Pros**: コード用ループがシンプルに保てる
-- **Cons**: ループ二重管理。安全装置・ログ・トリガーがすべて重複する
-- **Why not**: 「静的検査 + 動的検証で gate する」という構造は文書もコードも同型。抽象を一段上げれば1本のループで済む
+### Alternative 1: A separate loop for documents (a docs-only pipeline)
+- **Pros**: The code loop can be kept simple.
+- **Cons**: Double loop management. Safety devices, logs, and triggers all get duplicated.
+- **Why not**: The structure of "gating via static inspection + dynamic verification" is isomorphic for documents and code. Raising the abstraction one level lets a single loop suffice.
 
-### 代替案2: 暗黙の runtime 自動検出（detect.sh）
-- **Pros**: `.harness.yml` 不要で導入が楽
-- **Cons**: 検出誤りが誤った gate 実行につながり、原因切り分けが困難
-- **Why not**: `.harness.yml` 必須（なければ needs-human）の明示宣言方式を採用。再現性を優先
+### Alternative 2: Implicit runtime auto-detection (detect.sh)
+- **Pros**: Easy to introduce without `.harness.yml`.
+- **Cons**: Detection errors lead to running the wrong gates, making root-cause isolation difficult.
+- **Why not**: Adopt the explicit declaration approach with `.harness.yml` required (needs-human if absent). We prioritize reproducibility.
 
 ## Consequences
 
 ### Positive
-- 新種別（go / java / スライド等）対応がディレクトリ追加のみで完結
-- 用語集整合チェックによりユビキタス言語が自動ゲート化される
-- docs⇔code の双方向反映（docs マージ→再インデックス、code 変更→陳腐化検出→docs Issue 起票）が同一機構に乗る
+- Supporting a new kind (go / java / slides, etc.) is completed by adding a directory.
+- The glossary-consistency check auto-gates the ubiquitous language.
+- The bidirectional docs ⇔ code reflection (docs merge → reindex, code change → staleness detection → file a docs Issue) rides on the same mechanism.
 
 ### Negative
-- 文書の「test」概念（用語集整合）は初期は粗く、厳密度は docs タスク 10 件の実績後に調整
+- The "test" concept for documents (glossary consistency) is coarse initially; its strictness is tuned after a track record of 10 docs tasks.
 
 ### Risks
-- 用語集チェックの過剰 block → block は禁止語違反のみ、未登録用語は提案に留める初期方針で緩和
+- Excessive blocking by the glossary check → mitigated by an initial policy where only banned-term violations block, and unregistered terms remain suggestions.

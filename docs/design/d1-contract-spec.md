@@ -1,81 +1,81 @@
-# D1. コントラクト仕様書（HALO Contracts Specification）
+# D1. Contract Specification (HALO Contracts Specification)
 
-| 項目 | 内容 |
+| Item | Content |
 |---|---|
-| 文書バージョン | 1.0 |
-| 前提 | HALO要件定義書 v1.8 を最上位文書とする |
-| 位置づけ | **公開 API の正式定義**。`packages/contracts` の README を兼ねる |
-| 公開/私有 | 公開（OSS） |
-| 変更管理方針 | **全文書中で最も保守的に変更管理する。semver 厳守、破壊的変更 = メジャー**（後述 §7） |
-| ステータス | 実装着手前の確定対象（contracts の型定義と同時進行） |
+| Document version | 1.0 |
+| Premise | The HALO Requirements Specification v1.8 is the top-level document |
+| Positioning | **The formal definition of the public API**. Also serves as the README of `packages/contracts` |
+| Public/Private | Public (OSS) |
+| Change management policy | **Managed most conservatively of all documents. Strict semver; breaking change = major** (see §7 below) |
+| Status | Subject to finalization before implementation begins (progresses in parallel with the contracts type definitions) |
 
-> 本書は要件定義書 §3.2（設計原則）・§4（ポート仕様）を実装可能な粒度へ落としたものであり、要件と矛盾する内容は導入しない。数値パラメータ（retry 上限 3・max-turns 40・timeout 15 分等）は要件 §11.2 に従い「仮の初期値」として扱い、本書では **初期値** と明示する。
-
----
-
-## 0. スコープと不変条件
-
-HALO のコアループ（`packages/core`）とすべてのプラグインは、**プロセス境界を挟んで「stdin に JSON、stdout に JSON、終了コードで判定」の統一コントラクト**で通信する（要件 §3.2 原則2）。このコントラクトは OSS としての公開 API であり、以下を最重要の不変条件とする。
-
-1. **言語非依存**: コアは TypeScript（npm 配布、`npx halo`）で実装するが、プラグインは任意言語（bash / Python / Node いずれも可）。コントラクトがプロセス境界にあることで、コアの実装言語からプラグインを独立させる。
-2. **プロセス境界の固定**: 各プラグインは 1 プロセスとして起動され、stdin/stdout/終了コード以外の通信手段（共有メモリ・グローバル状態・環境変数への副作用の相互依存等）を前提にしない。
-3. **ディレクトリ規約による活性化**: `ports/<port名>.d/` に置けば有効、削除すれば無効。数字プレフィックスで実行順を制御する（`conf.d` 方式、§2 各ポート・§6）。
-
-> **v1.5 → v1.8 の変更点**: コアの実装言語が bash（`core/loop.sh` + `core/helpers.sh`）から TypeScript（npm 配布）へ変更された。本書ではコア内部の bash 実装（`helpers.sh` の関数群等）には言及せず、**プロセス境界のコントラクトのみ**を規定する。プラグインの実装言語は引き続き任意であり、本書中の bash 例はプラグイン実装例として有効である。
+> This document lowers §3.2 (design principles) and §4 (port specification) of the Requirements Specification to an implementable granularity, and does not introduce anything that contradicts the requirements. Numeric parameters (retry limit 3, max-turns 40, timeout 15 minutes, etc.) are treated as "provisional initial values" per requirements §11.2, and are explicitly marked as **initial values** in this document.
 
 ---
 
-## 1. 9 ポート別 I/O 型
+## 0. Scope and Invariants
 
-ポートは要件 §4.1 の 9 種（+ 補助 `mcp.d`）である。各ポートの JSON Schema は `packages/contracts` に配置し、TS 型と相互生成する（§6）。`$id` は `https://halo.dev/contracts/<port>.<io>.json` を採る。
+The HALO core loop (`packages/core`) and all plugins communicate over a **unified contract of "JSON on stdin, JSON on stdout, decision by exit code" across process boundaries** (requirements §3.2, principle 2). This contract is the public API of the OSS, and the following are treated as the most important invariants.
 
-すべての入力はプラグインの **stdin** に 1 個の JSON オブジェクトとして渡され、出力を要求するポートは **stdout** に 1 個の JSON オブジェクトを返す。判定は原則として**終了コード**で行う（§3）。
+1. **Language independence**: The core is implemented in TypeScript (distributed via npm, `npx halo`), but plugins may be in any language (bash / Python / Node are all acceptable). Because the contract sits at the process boundary, plugins are independent of the core's implementation language.
+2. **Fixed process boundary**: Each plugin is launched as a single process and does not assume any means of communication other than stdin/stdout/exit code (shared memory, global state, mutual dependence on side effects to environment variables, etc.).
+3. **Activation by directory convention**: Placing a plugin in `ports/<port-name>.d/` enables it; deleting it disables it. Execution order is controlled by a numeric prefix (the `conf.d` approach; §2 for each port, §6).
 
-### ポート責務一覧
+> **Changes from v1.5 → v1.8**: The core's implementation language was changed from bash (`core/loop.sh` + `core/helpers.sh`) to TypeScript (distributed via npm). This document does not refer to the core-internal bash implementation (the function set in `helpers.sh`, etc.) and specifies **only the process-boundary contract**. The plugin implementation language remains arbitrary, and the bash examples in this document are valid as plugin implementation examples.
 
-| # | ポート | 単一/複数 | 出力 stdout | 判定方式 |
+---
+
+## 1. I/O Types for Each of the 9 Ports
+
+The ports are the 9 kinds in requirements §4.1 (plus the auxiliary `mcp.d`). The JSON Schema for each port is placed in `packages/contracts` and is mutually generated with the TS types (§6). The `$id` follows `https://halo.dev/contracts/<port>.<io>.json`.
+
+Every input is passed to the plugin's **stdin** as a single JSON object, and ports that require output return a single JSON object on **stdout**. Decisions are, as a rule, made by **exit code** (§3).
+
+### Port Responsibility Overview
+
+| # | Port | Single/Multiple | stdout output | Decision method |
 |---|---|---|---|---|
-| ① | task-source | 単一（先頭のみ） | あり（op=next のみ） | 終了コード |
-| ② | context | 複数（全実行・マージ） | あり（fragments） | 常に success 扱い |
-| ③ | executor | 単一（先頭のみ） | あり（status） | stdout の status + 終了コード |
-| ④ | gate | 複数（全実行・論理 AND） | fail 時のみ | 終了コード（0=pass / 2=fail） |
-| ⑤ | sink | 複数（全実行・独立） | なし | ベストエフォート |
-| ⑥ | on-fail | 複数（全実行・独立） | なし | ベストエフォート |
-| ⑦ | runtime | 束（setup/check/test） | なし | 終了コード（0/2） |
-| ⑧ | kind | ポート非該当（`.harness.yml` 宣言） | — | — |
-| ⑨ | trigger | 束（install/uninstall/fire） | なし | 終了コード |
-| 補 | mcp.d | ポート非該当（構成断片） | — | — |
+| ① | task-source | Single (first only) | Yes (op=next only) | Exit code |
+| ② | context | Multiple (all run, merged) | Yes (fragments) | Always treated as success |
+| ③ | executor | Single (first only) | Yes (status) | status in stdout + exit code |
+| ④ | gate | Multiple (all run, logical AND) | Only on fail | Exit code (0=pass / 2=fail) |
+| ⑤ | sink | Multiple (all run, independent) | None | Best effort |
+| ⑥ | on-fail | Multiple (all run, independent) | None | Best effort |
+| ⑦ | runtime | Bundle (setup/check/test) | None | Exit code (0/2) |
+| ⑧ | kind | Not a port (`.harness.yml` declaration) | — | — |
+| ⑨ | trigger | Bundle (install/uninstall/fire) | None | Exit code |
+| Aux | mcp.d | Not a port (configuration fragment) | — | — |
 
-> ⑧ kind は「タスク種別による runtime・プロンプト切り替え」であり、実行可能プラグインではなく `.harness.yml` の宣言である（§1.8）。ポート番号としては 9 個に数えるが、I/O コントラクトを持つのは 8 ポート + mcp.d である。
+> ⑧ kind is "runtime/prompt switching based on task kind"; it is not an executable plugin but a declaration in `.harness.yml` (§1.8). It is counted as one of the 9 port numbers, but the ones that have an I/O contract are the 8 ports + mcp.d.
 
 ---
 
 ### 1.1 ① task-source
 
-タスクの取得・完了・失敗報告を担う。入力は `op` による判別（oneOf）。
+Responsible for fetching tasks and reporting completion/failure. The input is discriminated by `op` (oneOf).
 
-**入力（stdin）**
+**Input (stdin)**
 
-| op | 追加フィールド | 意味 |
+| op | Additional fields | Meaning |
 |---|---|---|
-| `next` | なし | 次の ready タスクを 1 件取得 |
-| `complete` | `task_id`, `pr_url` | タスク完了を記録 |
-| `fail` | `task_id`, `reason`, `retry_count` | タスク失敗を記録 |
+| `next` | None | Fetch one next ready task |
+| `complete` | `task_id`, `pr_url` | Record task completion |
+| `fail` | `task_id`, `reason`, `retry_count` | Record task failure |
 
-**出力（stdout、`op=next` のみ）**
+**Output (stdout, `op=next` only)**
 
-| フィールド | 型 | 必須 | 説明 |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `task_id` | `string \| null` | ✓ | `null` はタスク不在（ready 0 件）。この場合コアは exit 0 で即終了 |
-| `title` | `string` | | タスク表題 |
-| `body` | `string` | | タスク本文（要件記述。Phase 1〜3 は要件を直接記載） |
-| `kind` | `string` | | `kind:<name>` ラベル由来。無指定時は `code`（§1.8） |
-| `spec_refs` | `string[]` | | 凍結要件への参照（**kg:// URI**、§4）。loop-audit が実在検証する |
-| `write_set` | `string[]` | | Phase 5 の並列衝突回避用（任意） |
+| `task_id` | `string \| null` | ✓ | `null` means no task available (0 ready). In this case the core exits immediately with exit 0 |
+| `title` | `string` | | Task title |
+| `body` | `string` | | Task body (requirement description. In Phases 1–3 the requirements are written directly) |
+| `kind` | `string` | | Derived from the `kind:<name>` label. Defaults to `code` when unspecified (§1.8) |
+| `spec_refs` | `string[]` | | References to frozen requirements (**kg:// URI**, §4). loop-audit verifies their existence |
+| `write_set` | `string[]` | | For avoiding parallel conflicts in Phase 5 (optional) |
 
-`complete` / `fail` は副作用のみで出力を要求しない（exit 0 = 成功）。
+`complete` / `fail` produce only side effects and require no output (exit 0 = success).
 
-**例（入力 op=next / 出力）**
+**Example (input op=next / output)**
 
 ```json
 {"op": "next"}
@@ -83,26 +83,26 @@ HALO のコアループ（`packages/core`）とすべてのプラグインは、
 ```json
 {
   "task_id": "T-012",
-  "title": "ログイン失敗時のレート制限を追加",
+  "title": "Add rate limiting on login failures",
   "body": "...",
   "kind": "code",
   "spec_refs": ["kg://document/auth-login", "kg://decision/rate-limit-policy"]
 }
 ```
 
-**例（タスクなし）**
+**Example (no task)**
 
 ```json
 {"task_id": null}
 ```
 
-**GitHub Issues アダプタの挙動**（要件 §4.2①）:
+**Behavior of the GitHub Issues adapter** (requirements §4.2①):
 
-- `next`: `gh issue list --label ready` の先頭を取得し `in-progress` ラベルへ付け替え（多重取得防止のロック）。
-- `complete`: PR 本文の `Closes #番号` によりマージ時に自動クローズ。
-- `fail`: リトライ回数を Issue コメントに記録。同一 Issue で **3 回**（初期値）失敗したら `needs-human` ラベルを付与し人間へエスカレーション（無限ループ遮断）。
+- `next`: Fetch the first result of `gh issue list --label ready` and relabel it to `in-progress` (a lock to prevent duplicate acquisition).
+- `complete`: Auto-closed on merge via `Closes #<number>` in the PR body.
+- `fail`: Record the retry count in an Issue comment. If the same Issue fails **3 times** (initial value), attach the `needs-human` label and escalate to a human (breaking the infinite loop).
 
-**入力 JSON Schema**
+**Input JSON Schema**
 
 ```json
 {
@@ -125,7 +125,7 @@ HALO のコアループ（`packages/core`）とすべてのプラグインは、
 }
 ```
 
-**出力 JSON Schema（op=next）**
+**Output JSON Schema (op=next)**
 
 ```json
 {
@@ -136,12 +136,12 @@ HALO のコアループ（`packages/core`）とすべてのプラグインは、
   "required": ["task_id"],
   "properties": {
     "task_id": { "type": ["string", "null"],
-      "description": "null はタスク不在（ready 0 件）。コアは exit 0 で即終了" },
+      "description": "null means no task (0 ready). Core exits immediately with exit 0" },
     "title": { "type": "string" },
     "body": { "type": "string" },
     "kind": { "type": "string", "default": "code" },
     "spec_refs": { "type": "array", "items": { "type": "string", "format": "uri" },
-      "description": "kg:// URI。loop-audit が実在検証する" },
+      "description": "kg:// URI. loop-audit verifies its existence" },
     "write_set": { "type": "array", "items": { "type": "string" } }
   }
 }
@@ -151,38 +151,38 @@ HALO のコアループ（`packages/core`）とすべてのプラグインは、
 
 ### 1.2 ② context
 
-実行前の静的コンテキスト注入。全 context プラグインが実行され、コアが `fragments` を priority 降順に連結、トークン上限（要件 §3.2 原則4、100k 未満）で切り詰める。
+Static context injection before execution. All context plugins are run, and the core concatenates the `fragments` in descending order of priority, truncating at the token limit (requirements §3.2 principle 4, under 100k).
 
-**入力（stdin）**: task-source の `op=next` 出力そのもの（タスク情報）。
+**Input (stdin)**: The `op=next` output of task-source itself (task information).
 
-**出力（stdout）**
+**Output (stdout)**
 
-| フィールド | 型 | 必須 | 説明 |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `fragments` | `Fragment[]` | ✓ | コンテキスト断片の配列 |
+| `fragments` | `Fragment[]` | ✓ | Array of context fragments |
 
 `Fragment`:
 
-| フィールド | 型 | 必須 | 説明 |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `source` | `string` | ✓ | `codegraph` / `knowledge` / `recent-failures` 等 |
-| `content` | `string` | ✓ | 注入するテキスト |
-| `priority` | `integer` | ✓ | 大きいほど優先。コアが降順連結しトークン上限で切詰め |
+| `source` | `string` | ✓ | `codegraph` / `knowledge` / `recent-failures`, etc. |
+| `content` | `string` | ✓ | Text to inject |
+| `priority` | `integer` | ✓ | Higher values take priority. The core concatenates in descending order and truncates at the token limit |
 
-**例**
+**Example**
 
 ```json
 {
   "fragments": [
-    { "source": "codegraph", "content": "影響範囲: src/order.ts → src/payment.ts", "priority": 10 },
-    { "source": "recent-failures", "content": "直近: 30-test で境界値未考慮", "priority": 5 }
+    { "source": "codegraph", "content": "Impact scope: src/order.ts -> src/payment.ts", "priority": 10 },
+    { "source": "recent-failures", "content": "Recent: boundary values not considered in 30-test", "priority": 5 }
   ]
 }
 ```
 
-> **ハイブリッド方式**（要件 §4.2②）: context プラグインは軽い要約（影響範囲サマリ）のみ事前注入し、深掘りは実行中に AI 自身が MCP ツールで取得する。
+> **Hybrid approach** (requirements §4.2②): The context plugin pre-injects only a light summary (an impact-scope summary), and deeper investigation is fetched by the AI itself using MCP tools during execution.
 
-**出力 JSON Schema**
+**Output JSON Schema**
 
 ```json
 {
@@ -213,27 +213,27 @@ HALO のコアループ（`packages/core`）とすべてのプラグインは、
 
 ### 1.3 ③ executor
 
-プロンプトの実行。初期アダプタは `claude -p`（headless）。
+Prompt execution. The initial adapter is `claude -p` (headless).
 
-**入力（stdin）**
+**Input (stdin)**
 
-| フィールド | 型 | 必須 | 説明 |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `prompt` | `string` | ✓ | 実行プロンプト（context 連結・前回失敗の再注入済み） |
-| `workdir` | `string` | ✓ | 使い捨て worktree の絶対パス |
-| `budget` | `object` | ✓ | 実行予算 |
-| `budget.max_turns` | `integer` | ✓ | ターン上限（初期値 40） |
-| `budget.timeout_sec` | `integer` | ✓ | タイムアウト秒（初期値 900） |
+| `prompt` | `string` | ✓ | Execution prompt (context already concatenated and prior failures re-injected) |
+| `workdir` | `string` | ✓ | Absolute path of the disposable worktree |
+| `budget` | `object` | ✓ | Execution budget |
+| `budget.max_turns` | `integer` | ✓ | Turn limit (initial value 40) |
+| `budget.timeout_sec` | `integer` | ✓ | Timeout in seconds (initial value 900) |
 
-**出力（stdout）**
+**Output (stdout)**
 
-| フィールド | 型 | 必須 | 説明 |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `status` | `"done" \| "stuck" \| "timeout"` | ✓ | `done` 以外はコアの失敗経路へ（on-fail 起動） |
-| `summary` | `string` | ✓ | 実行結果の要約 |
-| `cost` | `object` | | コスト情報（ccusage 相当）。可観測性用に任意 |
+| `status` | `"done" \| "stuck" \| "timeout"` | ✓ | Anything other than `done` goes to the core's failure path (on-fail is triggered) |
+| `summary` | `string` | ✓ | Summary of the execution result |
+| `cost` | `object` | | Cost information (equivalent to ccusage). Optional, for observability |
 
-**例（入力 / 出力）**
+**Example (input / output)**
 
 ```json
 {
@@ -243,10 +243,10 @@ HALO のコアループ（`packages/core`）とすべてのプラグインは、
 }
 ```
 ```json
-{ "status": "done", "summary": "レート制限ミドルウェアを追加、テスト 3 件追加", "cost": { "usd": 0.42 } }
+{ "status": "done", "summary": "Added rate limiting middleware, added 3 tests", "cost": { "usd": 0.42 } }
 ```
 
-**実行コマンドの骨子**（要件 §4.2③）:
+**Outline of the execution command** (requirements §4.2③):
 
 ```bash
 claude -p "$PROMPT" \
@@ -256,11 +256,11 @@ claude -p "$PROMPT" \
   --max-turns 40
 ```
 
-- `--strict-mcp-config` によりハーネス管理の `mcp.json` のみを読む（ツール可視範囲の確定＝再現性・セキュリティ）。
-- `mcp.json` は `ports/mcp.d/*.json` をマージして起動時に生成する（§1.10）。
-- worktree ライフサイクル（add → runtime 検出 → setup → 実行 → remove）は要件 §4.2③ に従い、bubblewrap の書込許可を `workdir` に一致させる。
+- `--strict-mcp-config` reads only the harness-managed `mcp.json` (fixing the visible tool scope = reproducibility and security).
+- `mcp.json` is generated at startup by merging `ports/mcp.d/*.json` (§1.10).
+- The worktree lifecycle (add → runtime detection → setup → execution → remove) follows requirements §4.2③, matching bubblewrap's write permission to `workdir`.
 
-**入出力 JSON Schema**
+**Input/Output JSON Schema**
 
 ```json
 {
@@ -302,38 +302,38 @@ claude -p "$PROMPT" \
 
 ### 1.4 ④ gate
 
-成果物の合否判定。**判定は出力ではなく終了コード**（exit 0 = pass / exit 2 = fail、Claude Code hooks と同一規約）。コアは gate.d を番号順に全実行し、1 つでも fail なら全体 fail（論理 AND）とし、fail の reason を次イテレーションのプロンプトへ再注入する（§5）。
+Pass/fail judgment of the deliverable. **The decision is by exit code, not by output** (exit 0 = pass / exit 2 = fail, the same convention as Claude Code hooks). The core runs all of gate.d in numeric order; if even one fails, the whole is a fail (logical AND), and the fail reason is re-injected into the next iteration's prompt (§5).
 
-**入力（stdin）**
+**Input (stdin)**
 
-| フィールド | 型 | 必須 | 説明 |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `task_id` | `string` | ✓ | タスク ID |
-| `workdir` | `string` | ✓ | 検査対象の worktree 絶対パス |
-| `changed_files` | `string[]` | ✓ | 変更ファイル一覧 |
+| `task_id` | `string` | ✓ | Task ID |
+| `workdir` | `string` | ✓ | Absolute path of the worktree under inspection |
+| `changed_files` | `string[]` | ✓ | List of changed files |
 
-**出力（stdout、fail 時のみ）**
+**Output (stdout, only on fail)**
 
-| フィールド | 型 | 必須 | 説明 |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `reason` | `string` | ✓ | 例: `coverage 87% < 90%` |
-| `hint` | `string` | | 例: `src/order.ts のテスト不足` |
-| `gate` | `string` | | 失敗したゲート名（例: `30-test`） |
+| `reason` | `string` | ✓ | e.g. `coverage 87% < 90%` |
+| `hint` | `string` | | e.g. `insufficient tests for src/order.ts` |
+| `gate` | `string` | | Name of the gate that failed (e.g. `30-test`) |
 
-- gate.d の `10-typecheck` / `20-lint` / `30-test` は実コマンドを持たず、採用 runtime の `check.sh` / `test.sh` へ委譲する薄いラッパー（§1.7）。
-- `40-ai-review`（evaluator agent）・`50-loop-audit`（自己改変禁止等の構造検査、要件 §11.1）も同列のゲート。
-- evaluator は「懐疑的」に調整するが、correctness / 要件に影響するギャップのみを指摘させ過剰指摘を防ぐ（初期値、要件 §11.2）。
+- The `10-typecheck` / `20-lint` / `30-test` in gate.d have no real commands; they are thin wrappers that delegate to the adopted runtime's `check.sh` / `test.sh` (§1.7).
+- `40-ai-review` (evaluator agent) and `50-loop-audit` (structural checks such as the self-modification ban, requirements §11.1) are gates of the same rank.
+- The evaluator is tuned to be "skeptical," but it is made to flag only gaps affecting correctness / requirements to prevent over-flagging (initial value, requirements §11.2).
 
-**例（入力 / fail 出力）**
+**Example (input / fail output)**
 
 ```json
 { "task_id": "T-012", "workdir": "/tmp/halo-wt-issue-12", "changed_files": ["src/order.ts"] }
 ```
 ```json
-{ "reason": "coverage 87% < 90%", "hint": "src/order.ts のテスト不足", "gate": "30-test" }
+{ "reason": "coverage 87% < 90%", "hint": "insufficient tests for src/order.ts", "gate": "30-test" }
 ```
 
-**入出力 JSON Schema**
+**Input/Output JSON Schema**
 
 ```json
 {
@@ -368,33 +368,33 @@ claude -p "$PROMPT" \
 
 ### 1.5 ⑤ sink
 
-合格後の副作用（自律度でフィルタ）。合格後のみ実行され、1 つの sink が失敗しても他の sink は続行する（ベストエフォート）。
+Side effects after passing (filtered by autonomy level). Run only after passing; even if one sink fails, the other sinks continue (best effort).
 
-**入力（stdin）**
+**Input (stdin)**
 
-| フィールド | 型 | 必須 | 説明 |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `task_id` | `string` | ✓ | タスク ID |
-| `workdir` | `string` | ✓ | 成果物の worktree 絶対パス |
-| `summary` | `string` | ✓ | executor の実行要約 |
+| `task_id` | `string` | ✓ | Task ID |
+| `workdir` | `string` | ✓ | Absolute path of the deliverable worktree |
+| `summary` | `string` | ✓ | Execution summary from the executor |
 
-**出力**: なし（副作用のみ）。
+**Output**: None (side effects only).
 
-**自律度フィルタ**: 各 sink は `plugin.json` の `minAutonomy` で最低必要自律度を宣言する（§2）。コアは現在の `AUTONOMY` 未満の sink をスキップする。
+**Autonomy filter**: Each sink declares its minimum required autonomy level via `minAutonomy` in `plugin.json` (§2). The core skips any sink below the current `AUTONOMY`.
 
-| AUTONOMY | 有効な sink（初期構成） |
+| AUTONOMY | Enabled sinks (initial configuration) |
 |---|---|
-| L1 | `20-progress-log` のみ |
-| L2 | `20-progress-log` + `10-git-commit` + `15-create-pr`（**draft PR**） |
-| L3 | L2 の全 sink + `15-create-pr`（**通常 PR**、本文に `Closes #番号`） |
+| L1 | `20-progress-log` only |
+| L2 | `20-progress-log` + `10-git-commit` + `15-create-pr` (**draft PR**) |
+| L3 | All L2 sinks + `15-create-pr` (**normal PR**, with `Closes #<number>` in the body) |
 
-自律度レベルは累積的である（L3 ⊇ L2 ⊇ L1）。上位レベルは下位レベルで有効な sink をすべて実行する。
+Autonomy levels are cumulative (L3 ⊇ L2 ⊇ L1). A higher level runs all sinks enabled at lower levels.
 
-`15-create-pr` の `minAutonomy` は `L2` であり、単一の sink が `AUTONOMY` env を読んで **L2 では draft PR・L3 では通常 PR** を作り分ける（draft/normal をレベル別の別 sink に分割しない）。
+The `minAutonomy` of `15-create-pr` is `L2`, and a single sink reads the `AUTONOMY` env to produce **a draft PR at L2 and a normal PR at L3** (draft/normal is not split into separate per-level sinks).
 
-初期構成: `10-git-commit` / `15-create-pr` / `20-progress-log`。将来: `30-reindex-graph`（マージ後の再インデックス）、`35-reindex-knowledge`（docs マージ後のナレッジグラフ再インデックス）。
+Initial configuration: `10-git-commit` / `15-create-pr` / `20-progress-log`. Future: `30-reindex-graph` (re-index after merge), `35-reindex-knowledge` (knowledge-graph re-index after a docs merge).
 
-**入力 JSON Schema**
+**Input JSON Schema**
 
 ```json
 {
@@ -415,29 +415,29 @@ claude -p "$PROMPT" \
 
 ### 1.6 ⑥ on-fail
 
-失敗時の処理。gate fail または executor の stuck/timeout 時に番号順で全実行する（ベストエフォート、個別失敗は他へ波及しない）。
+Processing on failure. On a gate fail or the executor's stuck/timeout, all are run in numeric order (best effort; an individual failure does not propagate to others).
 
-**入力（stdin）**
+**Input (stdin)**
 
-| フィールド | 型 | 必須 | 説明 |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `task_id` | `string` | ✓ | タスク ID |
-| `reason` | `string` | ✓ | 失敗理由 |
-| `retry_count` | `integer` | ✓ | リトライ回数（0 以上） |
-| `gate` | `string` | | 失敗ゲート名。executor 起因時は `stuck`/`timeout` |
-| `workdir` | `string` | | 対象 worktree 絶対パス |
+| `task_id` | `string` | ✓ | Task ID |
+| `reason` | `string` | ✓ | Reason for failure |
+| `retry_count` | `integer` | ✓ | Retry count (0 or greater) |
+| `gate` | `string` | | Name of the failed gate. When caused by the executor, `stuck`/`timeout` |
+| `workdir` | `string` | | Absolute path of the target worktree |
 
-**出力**: なし（副作用のみ）。
+**Output**: None (side effects only).
 
-初期構成:
+Initial configuration:
 
-- `10-record-failure`: `.halo/failure-catalog.md` にインシデント形式（日時 / タスク / 失敗ゲート / 理由 / 対処）で追記。
-- `20-escalate`: `retry_count` が閾値（初期値 3）に達したら `needs-human` ラベル付与と in-progress 解除。
-- `30-suggest-sign`: 失敗ログから PROMPT への sign 候補を生成し `.halo/signs-proposed.md` に出力（採用は人間が判断）。
+- `10-record-failure`: Appends to `.halo/failure-catalog.md` in incident format (timestamp / task / failed gate / reason / remedy).
+- `20-escalate`: When `retry_count` reaches the threshold (initial value 3), attaches the `needs-human` label and clears in-progress.
+- `30-suggest-sign`: Generates candidate signs for PROMPT from the failure log and writes them to `.halo/signs-proposed.md` (a human decides on adoption).
 
-失敗カタログは context.d（`30-recent-failures`）が読み取り、直近の失敗パターンを次イテレーションへ注入する（「失敗 → 記録 → 再注入」の学習経路）。
+The failure catalog is read by context.d (`30-recent-failures`), which injects recent failure patterns into the next iteration (the "fail → record → re-inject" learning path).
 
-**入力 JSON Schema**
+**Input JSON Schema**
 
 ```json
 {
@@ -460,46 +460,46 @@ claude -p "$PROMPT" \
 
 ### 1.7 ⑦ runtime
 
-成果物種別固有のセットアップと検査コマンドの提供。**runtime が吸収するのは「言語」ではなく「成果物の種類」**であり、コード（node-pnpm / python-uv / rust）と文書（docs-md）を同列に扱う。他ポートと異なりディレクトリ束だが、各スクリプトのコントラクトは同一（stdin JSON + 終了コード）。
+Provides deliverable-kind-specific setup and inspection commands. **What runtime absorbs is not the "language" but the "kind of deliverable"**, treating code (node-pnpm / python-uv / rust) and documents (docs-md) on the same footing. Unlike other ports it is a directory bundle, but the contract of each script is identical (stdin JSON + exit code).
 
 ```
 ports/runtime.d/<name>/
-├── setup.sh    # env 注入 + 依存実体化 + キャッシュ外出し設定
-├── check.sh    # 静的検査（exit 2 = fail）
-└── test.sh     # 動的検証（exit 2 = fail）
+├── setup.sh    # env injection + dependency materialization + cache externalization setup
+├── check.sh    # static check (exit 2 = fail)
+└── test.sh     # dynamic verification (exit 2 = fail)
 ```
 
-- 選択は `.harness.yml` の宣言による（`detect.sh` は持たない）。
-- gate.d の `10-typecheck` / `20-lint` / `30-test` は採用 runtime の `check.sh` / `test.sh` へ委譲する薄いラッパー。
-- `setup.sh` は依存の実体化を高速に行うこと（node-pnpm ハードリンク / python-uv リンク / rust 共有 `CARGO_TARGET_DIR`）。
+- Selection is by declaration in `.harness.yml` (there is no `detect.sh`).
+- The `10-typecheck` / `20-lint` / `30-test` in gate.d are thin wrappers delegating to the adopted runtime's `check.sh` / `test.sh`.
+- `setup.sh` must materialize dependencies quickly (node-pnpm hard links / python-uv links / rust shared `CARGO_TARGET_DIR`).
 
-**共通入力（setup/check/test）**
+**Common input (setup/check/test)**
 
-| フィールド | 型 | 必須 | 説明 |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `workdir` | `string` | ✓ | 対象 worktree 絶対パス |
-| `changed_files` | `string[]` | | check/test の対象絞り込み用（任意） |
+| `workdir` | `string` | ✓ | Absolute path of the target worktree |
+| `changed_files` | `string[]` | | For narrowing the check/test scope (optional) |
 
-**判定**: `check.sh` / `test.sh` は exit 0 = pass / exit 2 = fail。
+**Decision**: For `check.sh` / `test.sh`, exit 0 = pass / exit 2 = fail.
 
-初期実装:
+Initial implementations:
 
 | runtime | setup | check | test |
 |---|---|---|---|
-| `node-pnpm` | pnpm `--offline`（ハードリンク共有） | tsc / eslint | vitest |
-| `python-uv` | `uv sync`（リンクベース） | mypy / ruff | pytest |
-| `rust` | 共有 `CARGO_TARGET_DIR` | cargo check / clippy | cargo test |
-| `docs-md` | ほぼ noop | markdownlint + リンク切れ + ADR テンプレート準拠 | 用語集整合チェック |
+| `node-pnpm` | pnpm `--offline` (hard-link sharing) | tsc / eslint | vitest |
+| `python-uv` | `uv sync` (link-based) | mypy / ruff | pytest |
+| `rust` | Shared `CARGO_TARGET_DIR` | cargo check / clippy | cargo test |
+| `docs-md` | Mostly noop | markdownlint + broken-link check + ADR template compliance | Glossary consistency check |
 
-> **配置制約（WSL2）**: リンクベースの依存共有は同一ファイルシステム内でのみ有効なため、worktree・各ストア・cache は WSL2 の ext4 側（`/home` 配下）に置く。`/mnt/c/` 配下への配置は禁止。
+> **Placement constraint (WSL2)**: Because link-based dependency sharing works only within the same filesystem, the worktree, each store, and the cache are placed on the WSL2 ext4 side (under `/home`). Placement under `/mnt/c/` is prohibited.
 
-**共通入力 JSON Schema**
+**Common input JSON Schema**
 
 ```json
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://halo.dev/contracts/runtime.in.json",
-  "title": "runtime script input (setup/check/test 共通)",
+  "title": "runtime script input (common to setup/check/test)",
   "type": "object",
   "required": ["workdir"],
   "properties": {
@@ -511,12 +511,12 @@ ports/runtime.d/<name>/
 
 ---
 
-### 1.8 ⑧ kind（`.harness.yml`）
+### 1.8 ⑧ kind (`.harness.yml`)
 
-kind はポートスクリプトではなく、対象リポジトリのルートに**必須**の `.harness.yml` の宣言である。コアは Issue の `kind:<name>` ラベル（無指定時 `code`）から定義を引き、使用する runtime 群とプロンプトテンプレートを決定する。`.harness.yml` が存在しないリポジトリはタスクを実行せず `needs-human`（暗黙の自動検出は行わない）。
+kind is not a port script but a declaration in `.harness.yml`, which is **required** at the root of the target repository. From the Issue's `kind:<name>` label (defaulting to `code` when unspecified), the core looks up the definition and determines the runtime set and prompt template to use. A repository without a `.harness.yml` does not run tasks and is marked `needs-human` (no implicit auto-detection is performed).
 
 ```yaml
-# .harness.yml（対象リポジトリのルートに必須・コミット対象）
+# .harness.yml (required at the root of the target repository, committed)
 kinds:
   code:
     runtimes: [node-pnpm]
@@ -544,8 +544,8 @@ kinds:
         "required": ["runtimes", "prompt"],
         "properties": {
           "runtimes": { "type": "array", "minItems": 1, "items": { "type": "string" },
-            "description": "runtime.d 配下のディレクトリ名" },
-          "prompt": { "type": "string", "description": "プロンプトテンプレートのパス" }
+            "description": "directory name under runtime.d" },
+          "prompt": { "type": "string", "description": "path to the prompt template" }
         }
       }
     }
@@ -557,26 +557,26 @@ kinds:
 
 ### 1.9 ⑨ trigger
 
-コアの起動（halo CLI を呼ぶ唯一の入口）。3 スクリプト束で、stdin JSON コントラクトは持たない（引数はプロファイル名のみ）。
+Startup of the core (the sole entry point that calls the halo CLI). A bundle of 3 scripts; it has no stdin JSON contract (the only argument is the profile name).
 
 ```
 ports/trigger.d/<name>/
-├── install.sh   # トリガーの登録（スケジューラ登録・timer 有効化等）
-├── uninstall.sh # 解除
-└── fire         # OS へ登録する起動エントリ（node_modules/.bin/halo run <profile> の絶対パス）
+├── install.sh   # register the trigger (scheduler registration, timer enablement, etc.)
+├── uninstall.sh # unregister
+└── fire         # launch entry registered with the OS (absolute path to node_modules/.bin/halo run <profile>)
 ```
 
-- `fire` は halo CLI（`node_modules/.bin/halo`）を起動する唯一の入口であり、CLI 以下（プリフライト・loop・ポート群）はトリガーが何であるかを知らない。
-- 無人実行では `npx` を経由せず `.bin` への絶対パスを直接叩く（バージョン固定・ネットワーク非依存）。
-- 初期実装: `schedule/`（Windows タスクスケジューラによる定時起動）、`polling/`（高頻度定時起動 + 「ready タスク 0 件なら即終了」）。将来: `webhook/` / `manual/`（`fire` 以下は無変更で差し替え可）。
+- `fire` is the sole entry point that starts the halo CLI (`node_modules/.bin/halo`), and everything below the CLI (preflight, loop, ports) does not know what the trigger is.
+- In unattended execution it invokes the absolute path to `.bin` directly rather than going through `npx` (version-pinned and network-independent).
+- Initial implementations: `schedule/` (scheduled startup via the Windows Task Scheduler), `polling/` (high-frequency scheduled startup + "exit immediately if 0 ready tasks"). Future: `webhook/` / `manual/` (everything below `fire` is swappable without change).
 
-> **起動プロファイル**（要件 §4.4）はループの実行設定（自律度・上限・タスクフィルタ・予算）を束ねた環境変数ファイル群であり、`.halo/profiles/` に置く。トリガーは `halo run <profile>` をプロファイル名指定で起動するだけとする。プロファイルの内部形式は D2/D3 の管轄とし、本書のコントラクト対象外とする。
+> **Startup profiles** (requirements §4.4) are a set of environment-variable files bundling the loop's execution settings (autonomy, limits, task filter, budget), placed in `.halo/profiles/`. The trigger merely starts `halo run <profile>` by specifying the profile name. The internal format of a profile is under the jurisdiction of D2/D3 and is outside the scope of this document's contract.
 
 ---
 
-### 1.10 補 mcp.d
+### 1.10 Aux mcp.d
 
-ポートではなく executor に渡す MCP 構成断片。`ports/mcp.d/*.json` をマージして起動時に `.halo/mcp.json` を生成し、`claude -p --mcp-config <mcp.json> --strict-mcp-config` で読ませる。各断片は MCP サーバー定義オブジェクト（`mcpServers` キー配下）に準拠する。
+Not a port but an MCP configuration fragment passed to the executor. `ports/mcp.d/*.json` is merged to generate `.halo/mcp.json` at startup, which is read via `claude -p --mcp-config <mcp.json> --strict-mcp-config`. Each fragment conforms to an MCP server definition object (under the `mcpServers` key).
 
 ```json
 {
@@ -588,24 +588,24 @@ ports/trigger.d/<name>/
 
 ---
 
-## 2. plugin.json マニフェスト仕様
+## 2. plugin.json Manifest Specification
 
-各プラグインは自身のディレクトリに `plugin.json` を持ち、コアがプラグインを起動する際のメタデータを宣言する。
+Each plugin has a `plugin.json` in its own directory, declaring the metadata the core uses when launching the plugin.
 
-> **v1.8 での位置づけ**: v1.5-era の設計書 01 は自律度宣言を「sink ファイル冒頭のメタコメント `# min-autonomy: L3`」で表現していた。v1.8 では **`plugin.json` の構造化フィールド `minAutonomy`** に統一する（bash 以外の言語でも宣言でき、機械検証しやすいため）。メタコメント方式は互換のための代替表現として D5 プラグイン開発ガイドで扱う。
+> **Positioning in v1.8**: The v1.5-era design document 01 expressed the autonomy declaration as a meta-comment at the top of the sink file (`# min-autonomy: L3`). In v1.8 this is unified into the **structured field `minAutonomy` in `plugin.json`** (because it can be declared in languages other than bash and is easier to machine-verify). The meta-comment style is treated as an alternative representation for compatibility in the D5 Plugin Development Guide.
 
-| フィールド | 型 | 必須 | 説明 |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `name` | `string` | ✓ | プラグイン識別子（`@halo/plugin-*` 等） |
-| `version` | `string` | ✓ | プラグイン自身の semver |
-| `port` | `string` | ✓ | 属するポート（`task-source` / `context` / `executor` / `gate` / `sink` / `on-fail` / `runtime` / `trigger`） |
-| `exec` | `string` | ✓ | 実行体への相対パス（bash / node / python いずれも可） |
-| `order` | `integer` | | 実行順（数字プレフィックス相当。省略時はファイル名の数字プレフィックスに従う） |
-| `minAutonomy` | `"L1" \| "L2" \| "L3"` | | sink 等の自律度フィルタ。未宣言時は最も安全側（= L3 とみなし L1/L2 ではスキップ） |
-| `timeoutSec` | `integer` | | 当該プラグインの実行タイムアウト（初期値はポート既定に従う） |
-| `env` | `object` | | 起動時に注入する環境変数（キー = 変数名、値 = 既定値 or 参照） |
+| `name` | `string` | ✓ | Plugin identifier (`@halo/plugin-*`, etc.) |
+| `version` | `string` | ✓ | The plugin's own semver |
+| `port` | `string` | ✓ | The port it belongs to (`task-source` / `context` / `executor` / `gate` / `sink` / `on-fail` / `runtime` / `trigger`) |
+| `exec` | `string` | ✓ | Relative path to the executable (bash / node / python all acceptable) |
+| `order` | `integer` | | Execution order (equivalent to the numeric prefix; when omitted, follows the numeric prefix of the file name) |
+| `minAutonomy` | `"L1" \| "L2" \| "L3"` | | Autonomy filter for sinks, etc. When undeclared, treated as the safest side (= regarded as L3 and skipped at L1/L2) |
+| `timeoutSec` | `integer` | | Execution timeout for this plugin (the initial value follows the port default) |
+| `env` | `object` | | Environment variables to inject at startup (key = variable name, value = default or reference) |
 
-**例（sink プラグイン）**
+**Example (sink plugin)**
 
 ```json
 {
@@ -620,7 +620,7 @@ ports/trigger.d/<name>/
 }
 ```
 
-> `15-create-pr` は `minAutonomy: "L2"` で有効化され、`AUTONOMY` env を読んで L2 では draft PR・L3 では通常 PR を作り分ける（単一 sink で分岐）。
+> `15-create-pr` is enabled at `minAutonomy: "L2"` and reads the `AUTONOMY` env to produce a draft PR at L2 and a normal PR at L3 (branching within a single sink).
 
 **`plugin.json` JSON Schema**
 
@@ -647,66 +647,66 @@ ports/trigger.d/<name>/
 }
 ```
 
-> runtime / trigger はディレクトリ束（固定名スクリプト）であり、`exec` は束のエントリ（runtime は省略可、trigger は `fire`）を指す。番号プレフィックスは付けず、選択は `.harness.yml` の宣言（runtime）/ trigger の install（trigger）による。
+> runtime / trigger are directory bundles (fixed-name scripts), and `exec` points to the bundle's entry (omittable for runtime, `fire` for trigger). No numeric prefix is attached; selection is by declaration in `.harness.yml` (runtime) / by the trigger's install (trigger).
 
 ---
 
-## 3. 実行規約
+## 3. Execution Convention
 
-すべてのプラグインは以下の統一規約で実行される。
+All plugins are run under the following unified convention.
 
-### 3.1 終了コード
+### 3.1 Exit Codes
 
-| 終了コード | 意味 | コアの扱い |
+| Exit code | Meaning | Core handling |
 |---|---|---|
-| `0` | pass / 正常 | 成功として続行 |
-| `2` | fail | 判定的失敗（gate: 差し戻し、runtime check/test: fail） |
-| その他（`1` 含む） | エラー（異常終了） | 安全側に倒して fail 扱い。プラグイン不在（構成不備）はコア停止 |
+| `0` | pass / normal | Continue as success |
+| `2` | fail | Decision-level failure (gate: sent back; runtime check/test: fail) |
+| Other (including `1`) | Error (abnormal termination) | Falls to the safe side and treated as fail. A missing plugin (misconfiguration) stops the core |
 
-- **gate / runtime check・test**: exit 0 = pass、exit 2 = fail（Claude Code hooks と同一規約）。exit 2 以外の異常終了も安全側に倒して fail とみなす。
-- **task-source `next`**: 「タスクなし」を意図する `{"task_id": null}` + exit 0 は正常。
-- **executor**: 判定は stdout の `status` で行い（`done` 以外は失敗経路）、プロセス自体の異常終了はエラー扱い。
-- **sink / on-fail**: ベストエフォート。個別プラグインの非 0 終了は他プラグインの実行を妨げない。
+- **gate / runtime check/test**: exit 0 = pass, exit 2 = fail (the same convention as Claude Code hooks). Abnormal terminations other than exit 2 are also treated as fail on the safe side.
+- **task-source `next`**: `{"task_id": null}` + exit 0, intending "no task," is normal.
+- **executor**: The decision is made by `status` in stdout (anything other than `done` is the failure path); abnormal termination of the process itself is treated as an error.
+- **sink / on-fail**: Best effort. A non-zero exit of an individual plugin does not impede the execution of other plugins.
 
 ### 3.2 stdin / stdout
 
-- **stdin**: 各プラグインへは 1 個の JSON オブジェクトを stdin で渡す。
-- **stdout**: 出力を要求するポート（task-source next / context / executor / gate fail 時）は stdout に 1 個の JSON オブジェクトを返す。**stdout は JSON 専用チャネル**であり、デバッグ出力等を混在させてはならない（パース失敗の原因）。
+- **stdin**: A single JSON object is passed to each plugin via stdin.
+- **stdout**: Ports that require output (task-source next / context / executor / gate on fail) return a single JSON object on stdout. **stdout is a JSON-only channel**, and debug output and the like must not be mixed in (a cause of parse failures).
 
-### 3.3 stderr の扱い
+### 3.3 Handling of stderr
 
-- **stderr は診断・ログ専用**とし、コントラクト上の意味を持たない。
-- コアはプラグインの stderr を捕捉し、当該イテレーションの構造化ログ（`.halo/logs/iter_N.json`）へ退避する（要件 §6.3）。
-- stderr の内容で合否は判定しない（判定は終了コード / status）。プラグインは人間可読な進捗・警告を stderr へ書いてよい。
+- **stderr is for diagnostics/logging only** and has no contractual meaning.
+- The core captures the plugin's stderr and offloads it to that iteration's structured log (`.halo/logs/iter_N.json`) (requirements §6.3).
+- Pass/fail is not judged by the content of stderr (the decision is by exit code / status). A plugin may write human-readable progress and warnings to stderr.
 
 ---
 
-## 4. kg:// URI 形式（spec_refs のノード ID 参照）
+## 4. kg:// URI Format (node-ID references in spec_refs)
 
-`spec_refs` はナレッジグラフの文書/決定ノード ID を指す**ファイルパスではない**参照であり、`kg://` スキームで表現する（要件 §4.2①）。
+`spec_refs` are references to document/decision node IDs in the knowledge graph, which are **not file paths**, and are expressed with the `kg://` scheme (requirements §4.2①).
 
-### 4.1 形式
+### 4.1 Format
 
 ```
 kg://<node-type>/<node-id>
 ```
 
-| 要素 | 説明 | 例 |
+| Element | Description | Example |
 |---|---|---|
-| `<node-type>` | ナレッジグラフのノード種別（要件 §11.1 の 5 種に対応） | `document` / `decision` / `term` / `context` / `aggregate` |
-| `<node-id>` | 種別内で一意のスラグ（kebab-case 推奨） | `auth-login` / `rate-limit-policy` |
+| `<node-type>` | The node kind in the knowledge graph (corresponds to the 5 kinds in requirements §11.1) | `document` / `decision` / `term` / `context` / `aggregate` |
+| `<node-id>` | A slug unique within the kind (kebab-case recommended) | `auth-login` / `rate-limit-policy` |
 
-**ノード種別**（要件 §11.1 のナレッジグラフ 5 種）:
+**Node kinds** (the 5 knowledge-graph kinds in requirements §11.1):
 
-| node-type | 対応ノード | 用途 |
+| node-type | Corresponding node | Purpose |
 |---|---|---|
-| `context` | 境界づけられたコンテキスト | 対象ドメインの境界参照 |
-| `aggregate` | 集約 | 実装コンポーネントとの橋渡し起点 |
-| `term` | ドメイン用語 | ユビキタス言語の語彙参照 |
-| `document` | 文書 | 設計書・要件・受け入れ条件の参照 |
-| `decision` | 決定 | ADR 等の決定ノード参照 |
+| `context` | Bounded context | Reference to the target domain's boundary |
+| `aggregate` | Aggregate | Bridging starting point with implementation components |
+| `term` | Domain term | Reference to the vocabulary of the ubiquitous language |
+| `document` | Document | Reference to design docs, requirements, acceptance criteria |
+| `decision` | Decision | Reference to decision nodes such as ADRs |
 
-**例**
+**Example**
 
 ```
 kg://document/auth-login
@@ -714,111 +714,111 @@ kg://decision/rate-limit-policy
 kg://aggregate/order
 ```
 
-### 4.2 検証
+### 4.2 Verification
 
-- **実在検証**: loop-audit（gate `50-loop-audit`）がループ開始時にグラフを照会し、`spec_refs` の各 kg:// URI が実在するノードを指すことを検証する（要件 §11.1）。実在しない参照は fail（構造系チェック①）。
-- **解決実装**: kg:// URI からグラフノードへの解決は私有プラグイン（knowledge MCP）の管轄であり、D6 グラフ設計書で規定する。コントラクトとしては**形式（`kg://<type>/<id>`）と「グラフノードを指す」という意味のみ**を規定する。
+- **Existence verification**: loop-audit (gate `50-loop-audit`) queries the graph at the start of the loop and verifies that each kg:// URI in `spec_refs` points to an existing node (requirements §11.1). A reference that does not exist is a fail (structural check ①).
+- **Resolution implementation**: Resolving a kg:// URI to a graph node is under the jurisdiction of a private plugin (knowledge MCP) and is specified in the D6 Graph Design document. As a contract, this document specifies **only the format (`kg://<type>/<id>`) and the meaning "points to a graph node."**
 
-> **保留**（要件 §9 経過措置）: グラフ導入前（Phase 1〜3）は `spec_refs` を空とし、要件は Issue 本文に直接記述する。Phase 4 のナレッジグラフ導入をもって kg:// 参照と凍結性担保（要件 §5.3）が有効化される。本節の node-type の網羅性・追加規則は Phase 4 着手時に D6 と整合させる（**保留**）。
+> **Deferred** (requirements §9 transitional measures): Before the graph is introduced (Phases 1–3), `spec_refs` is left empty and the requirements are written directly in the Issue body. With the introduction of the knowledge graph in Phase 4, kg:// references and the freeze guarantee (requirements §5.3) are activated. The exhaustiveness of node-types and the addition rules in this section will be aligned with D6 when Phase 4 begins (**deferred**).
 
 ---
 
-## 5. STUCK マーカー規約
+## 5. STUCK Marker Convention
 
-executor が「これ以上進められない」状態（スタック）を検出した場合の停止規約（要件 §6.2）。
+The stopping convention for when the executor detects a state where it "cannot proceed further" (stuck) (requirements §6.2).
 
-### 5.1 executor 出力による表明
+### 5.1 Declaration via executor output
 
-executor は自らのスタックを stdout の `status` で表明する。
+The executor declares its own stuck state via `status` in stdout.
 
-| status | 意味 | コアの扱い |
+| status | Meaning | Core handling |
 |---|---|---|
-| `stuck` | 論理的な行き詰まり（同一箇所の反復・矛盾する制約等） | else 節へ落とし on-fail 起動 |
-| `timeout` | `budget.timeout_sec` 超過 | 同上 |
+| `stuck` | Logical impasse (repetition at the same spot, conflicting constraints, etc.) | Falls to the else branch and triggers on-fail |
+| `timeout` | `budget.timeout_sec` exceeded | Same as above |
 
-`status != done` はコアの失敗経路（on-fail 起動）へ落ち、`retry_count` が加算される。同一 Issue が閾値（初期値 3）回 fail すると on-fail `20-escalate` が `needs-human` を付与し再注入ループを打ち切る（無限ループ遮断）。
+`status != done` falls to the core's failure path (on-fail triggered), and `retry_count` is incremented. When the same Issue fails the threshold number of times (initial value 3), on-fail `20-escalate` attaches `needs-human` and breaks off the re-injection loop (breaking the infinite loop).
 
-### 5.2 STUCK マーカー（エージェント内からの表明）
+### 5.2 STUCK Marker (declaration from within the agent)
 
-エージェント（claude -p）が実行中にスタックを自己申告する手段として、**成果物内に STUCK マーカーを出力**する規約を設ける。executor アダプタはこれを検出して `status: "stuck"` に変換する。
+As a means for the agent (claude -p) to self-report a stuck state during execution, a convention to **emit a STUCK marker within the deliverable** is provided. The executor adapter detects this and converts it to `status: "stuck"`.
 
-- **マーカー形式**: 実行ログ（stdout の最終メッセージ）または worktree 内の `STUCK` ファイルに、理由を伴って出力する。
-- **推奨表現**: 1 行目に `STUCK:` プレフィックス + 理由（例: `STUCK: 依存パッケージのバージョン矛盾を解消できない`）。
-- executor アダプタは STUCK 検出時、`summary` に理由を格納し `status: "stuck"` を返す。
+- **Marker format**: Emitted, with a reason, either in the execution log (the final message on stdout) or in a `STUCK` file within the worktree.
+- **Recommended form**: A `STUCK:` prefix on the first line + the reason (e.g. `STUCK: cannot resolve the version conflict of a dependency package`).
+- On detecting STUCK, the executor adapter stores the reason in `summary` and returns `status: "stuck"`.
 
-> **初期値/保留**: マーカーの厳密な検出方法（最終メッセージのパターン / ファイル存在）は executor アダプタの実装詳細であり、Phase 1 の実装から抽出して確定させる（D2 コア詳細設計・executor アダプタ実装で規定）。本書ではコントラクトとして「executor は stuck を `status: "stuck"` で表明する」ことのみを規定する。
+> **Initial value/deferred**: The exact detection method of the marker (final-message pattern / file existence) is an implementation detail of the executor adapter and will be finalized by extracting it from the Phase 1 implementation (specified in the D2 Core Detailed Design and the executor adapter implementation). As a contract, this document specifies only that "the executor declares stuck via `status: "stuck"`."
 
-> **キルスイッチとの区別**: `.halo/STOP` ファイル（要件 §4.4）は**人間が**ループを停止させるキルスイッチであり、STUCK マーカー（エージェント/executor が自己申告する行き詰まり）とは別機構である。STOP は各イテレーション冒頭でコアが確認し即 exit 0 する。
+> **Distinction from the kill switch**: The `.halo/STOP` file (requirements §4.4) is a kill switch by which **a human** stops the loop, and is a separate mechanism from the STUCK marker (an impasse self-reported by the agent/executor). STOP is checked by the core at the start of each iteration, which then immediately exits with exit 0.
 
 ---
 
-## 6. JSON Schema 自動生成と非 TS プラグインでの検証
+## 6. JSON Schema Auto-Generation and Verification in Non-TS Plugins
 
-### 6.1 生成の仕組み（TS 型 → JSON Schema 単一ソース）
+### 6.1 Generation mechanism (TS types → JSON Schema single source)
 
-- コントラクトの**単一の真実の源は `packages/contracts` の TypeScript 型定義**とする。JSON Schema は型定義から自動生成し、両者の乖離を構造的に防ぐ。
-- 生成物（`*.json` Schema、Draft 2020-12）は `packages/contracts` に同梱し、公開パッケージの一部として配布する（`$id` は `https://halo.dev/contracts/<port>.<io>.json`）。
-- 生成には TS 型 → JSON Schema 変換（例: `ts-json-schema-generator` 相当）を用いる。生成コマンドと CI での乖離検出（生成物がコミット済みと一致するか）は D8 テスト戦略書で規定する。
-- TS プラグイン・コアは型定義を直接 import して**コンパイル時**に契約を守る。
+- The **single source of truth for contracts is the TypeScript type definitions in `packages/contracts`**. JSON Schemas are auto-generated from the type definitions, structurally preventing divergence between the two.
+- The generated artifacts (`*.json` Schema, Draft 2020-12) are bundled in `packages/contracts` and distributed as part of the public package (`$id` is `https://halo.dev/contracts/<port>.<io>.json`).
+- Generation uses TS types → JSON Schema conversion (e.g. something equivalent to `ts-json-schema-generator`). The generation command and divergence detection in CI (whether the generated artifacts match the committed ones) are specified in the D8 Test Strategy document.
+- TS plugins and the core import the type definitions directly to uphold the contract at **compile time**.
 
-> **決定（`additionalProperties: false`）**: 生成される Schema は全 12 契約で `additionalProperties: false`（手書き例より厳格）とする。多言語プラグインの typo・未文書フィールドを早期検出することを優先する意図的な決定である。将来、前方互換が必要になった境界（例: `executor.out`）が生じた場合のみ、その契約に限って個別に緩和を検討する。
+> **Decision (`additionalProperties: false`)**: The generated Schemas use `additionalProperties: false` (stricter than the hand-written examples) across all 12 contracts. This is a deliberate decision prioritizing early detection of typos and undocumented fields in multilingual plugins. Relaxation will be considered on a per-contract basis only for a boundary that later requires forward compatibility (e.g. `executor.out`).
 
-### 6.2 非 TS プラグインでの検証
+### 6.2 Verification in non-TS plugins
 
-プラグインは任意言語であるため、bash / Python 等の非 TS プラグインは**実行時に JSON Schema で自己検証**する経路を提供する。
+Because plugins may be in any language, non-TS plugins such as bash / Python are given a path to **self-verify at runtime with JSON Schema**.
 
-| 手段 | 説明 |
+| Means | Description |
 |---|---|
-| 配布 Schema の参照 | プラグインは `packages/contracts` 同梱の `*.json` Schema を参照し、任意の JSON Schema バリデータ（例: `ajv` CLI、Python `jsonschema`、`check-jsonschema` 等）で stdin/stdout を検証できる |
-| contract test | 各見本プラグインの I/O を配布 Schema で検証する contract test を用意する（入力例・期待出力例を Schema に通す）。全見本プラグインが対象（D8 テスト戦略書・D5 プラグイン開発ガイドで規定） |
-| コア側の境界検証 | コアはプラグインの stdout を受領した時点で該当出力 Schema に照らして検証し、不正 JSON / スキーマ違反は当該ポートの規約（context: スキップ、gate: 安全側 fail 等）に従って扱う |
+| Referencing the distributed Schema | The plugin references the `*.json` Schema bundled in `packages/contracts` and can verify stdin/stdout with any JSON Schema validator (e.g. the `ajv` CLI, Python `jsonschema`, `check-jsonschema`, etc.) |
+| contract test | A contract test is provided that verifies each sample plugin's I/O against the distributed Schema (running input examples and expected-output examples through the Schema). All sample plugins are covered (specified in the D8 Test Strategy document and the D5 Plugin Development Guide) |
+| Boundary verification on the core side | Upon receiving a plugin's stdout, the core verifies it against the relevant output Schema, and invalid JSON / schema violations are handled per that port's convention (context: skip, gate: fail on the safe side, etc.) |
 
-> **設計意図**: TS 側はコンパイル時、非 TS 側は実行時（配布 Schema + 汎用バリデータ）で同一のコントラクトを守る。これにより「コアは TS、プラグインは任意言語」（要件 §2.1・§3.2 原則2）を型安全性を犠牲にせず両立させる。生成・検証の具体手順・CI 統合は D8 に委ね、本書は**単一ソース（TS 型）と配布形態（同梱 JSON Schema）**を規定する。
-
----
-
-## 7. 変更管理（semver ポリシー）
-
-本書が定義するコントラクトは HALO の公開 API であり、**全設計文書中で最も保守的に変更管理する**（要件 §8.1 の公開境界・設計書一覧 D1 の位置づけ）。
-
-| 変更種別 | semver | 例 |
-|---|---|---|
-| **破壊的変更 = メジャー** | MAJOR | 必須フィールドの追加・削除・改名、型の変更、終了コード規約の変更、ポートの削除、kg:// 形式の非互換変更 |
-| 後方互換な機能追加 = マイナー | MINOR | 任意フィールドの追加、新ポート・新 status 値の追加（既存を壊さない範囲）、`plugin.json` 任意フィールド追加 |
-| 後方互換な修正 = パッチ | PATCH | 説明文・例の修正、Schema の記述明確化（意味を変えない） |
-
-- コントラクトのバージョンは `packages/contracts` の package version と一致させ、本書の文書バージョンと対応付ける。
-- 破壊的変更は既存の全プラグイン（見本 4 種を含む）と対象リポジトリに影響するため、メジャー更新時は移行ガイドを D5 で提供する。
-- 初期値/保留として本書がマークした項目（数値パラメータ、kg:// の node-type 追加規則、STUCK マーカーの検出詳細）の確定は、**意味を変えない範囲ならパッチ、契約を変えるならマイナー以上**として扱う。
+> **Design intent**: The TS side upholds the same contract at compile time, and the non-TS side at runtime (distributed Schema + a general-purpose validator). This makes "the core in TS, plugins in any language" (requirements §2.1, §3.2 principle 2) achievable without sacrificing type safety. The concrete procedures for generation/verification and CI integration are left to D8; this document specifies **the single source (TS types) and the distribution form (bundled JSON Schema)**.
 
 ---
 
-## 付録 A. コントラクト一覧（`packages/contracts` 配置）
+## 7. Change Management (semver policy)
 
-| ファイル | ポート | I/O |
+The contract defined by this document is HALO's public API and is **managed most conservatively of all design documents** (the public boundary in requirements §8.1 and the positioning of D1 in the design-document list).
+
+| Change kind | semver | Example |
 |---|---|---|
-| `task-source.in.json` | ① | 入力（oneOf: next/complete/fail） |
-| `task-source.out.json` | ① | 出力（op=next） |
-| `context.out.json` | ② | 出力（fragments） |
-| `executor.in.json` | ③ | 入力 |
-| `executor.out.json` | ③ | 出力 |
-| `gate.in.json` | ④ | 入力 |
-| `gate.out.json` | ④ | 出力（fail のみ） |
-| `sink.in.json` | ⑤ | 入力 |
-| `on-fail.in.json` | ⑥ | 入力 |
-| `runtime.in.json` | ⑦ | 入力（setup/check/test 共通） |
+| **Breaking change = major** | MAJOR | Adding/removing/renaming a required field, changing a type, changing the exit-code convention, removing a port, incompatible changes to the kg:// format |
+| Backward-compatible feature addition = minor | MINOR | Adding an optional field, adding a new port or new status value (within a range that does not break existing behavior), adding an optional field to `plugin.json` |
+| Backward-compatible fix = patch | PATCH | Fixing descriptions/examples, clarifying Schema wording (without changing meaning) |
+
+- The contract version is kept in sync with the package version of `packages/contracts` and mapped to this document's version.
+- Because breaking changes affect all existing plugins (including the 4 samples) and target repositories, a migration guide is provided in D5 on a major update.
+- Finalizing the items this document marked as initial value/deferred (numeric parameters, kg:// node-type addition rules, STUCK marker detection details) is treated as **a patch if it does not change meaning, and minor or higher if it changes the contract**.
+
+---
+
+## Appendix A. Contract List (placed in `packages/contracts`)
+
+| File | Port | I/O |
+|---|---|---|
+| `task-source.in.json` | ① | Input (oneOf: next/complete/fail) |
+| `task-source.out.json` | ① | Output (op=next) |
+| `context.out.json` | ② | Output (fragments) |
+| `executor.in.json` | ③ | Input |
+| `executor.out.json` | ③ | Output |
+| `gate.in.json` | ④ | Input |
+| `gate.out.json` | ④ | Output (fail only) |
+| `sink.in.json` | ⑤ | Input |
+| `on-fail.in.json` | ⑥ | Input |
+| `runtime.in.json` | ⑦ | Input (common to setup/check/test) |
 | `harness-yml.json` | ⑧ | `.harness.yml` |
-| `plugin.json`（schema） | 全 | マニフェスト |
+| `plugin.json` (schema) | All | Manifest |
 
-> context の入力は task-source の `op=next` 出力そのものであり専用 Schema を持たない。sink / on-fail / runtime / trigger は副作用中心のため出力 Schema を持たない。trigger / mcp.d は stdin JSON コントラクトを持たない（§1.9・§1.10）。
+> The input to context is the `op=next` output of task-source itself and has no dedicated Schema. sink / on-fail / runtime / trigger are side-effect-centric and have no output Schema. trigger / mcp.d have no stdin JSON contract (§1.9, §1.10).
 
-## 付録 B. 用語
+## Appendix B. Glossary
 
-| 用語 | 定義 |
+| Term | Definition |
 |---|---|
-| ポート | コアと外部の接点。stdin/stdout JSON + 終了コードで通信する抽象境界 |
-| プラグイン（アダプタ） | ポートの具体実装。`ports/<port>.d/` に配置し活性化 |
-| 使い捨て worktree | AI 作業用の一時 git worktree（`$TMPDIR/halo-wt-issue-N/`）。fail 時は削除 |
-| 自律度（AUTONOMY） | L1（報告のみ）/ L2（commit + draft PR）/ L3（無人 PR 作成）。sink フィルタで実装 |
-| kg:// URI | ナレッジグラフのノード ID 参照形式（§4） |
-| STUCK | executor / エージェントが行き詰まりを自己申告する状態表明（§5） |
+| Port | The contact point between the core and the outside. An abstract boundary communicating via stdin/stdout JSON + exit code |
+| Plugin (adapter) | A concrete implementation of a port. Placed in `ports/<port>.d/` and activated |
+| Disposable worktree | A temporary git worktree for AI work (`$TMPDIR/halo-wt-issue-N/`). Deleted on fail |
+| Autonomy (AUTONOMY) | L1 (report only) / L2 (commit + draft PR) / L3 (unattended PR creation). Implemented via the sink filter |
+| kg:// URI | The node-ID reference format for the knowledge graph (§4) |
+| STUCK | A state declaration by which the executor / agent self-reports an impasse (§5) |

@@ -1,60 +1,60 @@
-# D8. テスト戦略書（HALO Test Strategy）
+# D8. Test Strategy (HALO Test Strategy)
 
-| 項目 | 内容 |
+| Item | Content |
 |---|---|
-| 文書バージョン | 1.0 |
-| 前提 | HALO要件定義書 v1.8 を最上位文書とし、D1 コントラクト仕様書を契約定義の正とする |
-| 位置づけ | **公開**（OSS としての品質保証方針。`packages/core` および見本プラグインの CI に反映） |
-| 品質基準 | 本書のカバレッジ目標・件数・閾値は **初期値** として扱う（要件 §11.2 の思想に従い事前固定しない。実測から調整する） |
-| ステータス | Phase 1 実装と並走（実装から抽出する形で確定させる） |
+| Document version | 1.0 |
+| Premise | HALO Requirements Specification v1.8 is the top-level document, and D1 Contract Specification is the authority for contract definitions |
+| Positioning | **Public** (quality assurance policy as OSS; reflected in the CI of `packages/core` and the sample plugins) |
+| Quality basis | The coverage targets, counts, and thresholds in this document are treated as **initial values** (following the philosophy of requirements §11.2, they are not fixed in advance; they are adjusted from measurements) |
+| Status | Runs in parallel with Phase 1 implementation (confirmed by extracting from the implementation) |
 
-> 本書は要件定義書 §11（安全不変条件・数値パラメータ方針）と D1 §6（JSON Schema 自動生成と非 TS プラグインでの検証）を実装可能なテスト方針へ落としたものである。D1 が定めるコントラクト（stdin JSON / stdout JSON / 終了コード）を検証の基準とし、D1 と矛盾する判定規約は導入しない。
-
----
-
-## 0. テスト戦略の全体像
-
-HALO は「コアは TypeScript、プラグインは任意言語、通信はプロセス境界の JSON コントラクト」という構造を持つ（D1 §0）。この構造に対応して、テストを 4 層に分ける。**API 課金（実 executor 呼び出し）を伴うのは E2E 層のみ**とし、他の 3 層は課金ゼロで高速に回せることを設計制約とする。
-
-| 層 | 対象 | 目的 | API 課金 | 実行タイミング |
-|---|---|---|---|---|
-| ① core 単体テスト | 純粋関数化した core 9 モジュール | ロジックの正当性 | なし | PR ごと |
-| ② ループ回帰テスト | loop 状態機械（executor モック） | ループ制御・終了条件の回帰防止 | なし（固定 JSON 返却） | PR ごと |
-| ③ contract test | 全見本プラグインの I/O | コントラクト（D1）適合 | なし | PR ごと |
-| ④ E2E | 実 GitHub 相手のスモーク | 統合・実配線の確認 | あり（dry-run で最小化） | リリース前 |
-
-**設計原則**: ①〜③ は決定論的・高速・課金ゼロであることを保証し、PR ごとに必ず通す。④ は非決定性と課金を伴うため、頻度を絞り（リリース前）、`MAX_ITER=1` の dry-run で影響とコストを最小化する。
+> This document translates Requirements Specification §11 (safety invariants, numeric parameter policy) and D1 §6 (automatic JSON Schema generation and validation in non-TS plugins) into an implementable test policy. It takes the contract defined by D1 (stdin JSON / stdout JSON / exit code) as the basis for verification, and introduces no decision rules that contradict D1.
 
 ---
 
-## 1. core 単体テスト（純粋関数化した 9 モジュール）
+## 0. Overall Picture of the Test Strategy
 
-### 1.1 方針
+HALO has the structure "core in TypeScript, plugins in any language, communication via a JSON contract at process boundaries" (D1 §0). Corresponding to this structure, tests are divided into 4 layers. **Only the E2E layer incurs API charges (real executor calls)**; the design constraint is that the other 3 layers can be run fast with zero cost.
 
-D2 コア詳細設計書が定める core の 9 モジュールを **純粋関数**として実装し、副作用（プロセス spawn / ファイル I/O / ネットワーク）を境界へ押し出す。純粋関数部分を `vitest` で網羅的に検証する。副作用を持つ薄い境界層はモックで包む。
-
-- **テストランナー**: `vitest`（core は TypeScript / npm 配布のため）。
-- **配置**: `packages/core/**/*.test.ts`（実装と同一ディレクトリ、co-located）。
-- **構造**: Arrange-Act-Assert。テスト名は振る舞いを説明する記述形（例: `returns exit 0 immediately when task_id is null`）。
-- **カバレッジ計測**: `vitest --coverage`（初期目標は下表、初期値として扱う）。
-
-### 1.2 モジュール別のテスト観点
-
-| # | モジュール | 純粋関数化の対象 | 主なテスト観点 | カバレッジ目標（初期値） |
+| Layer | Target | Purpose | API charge | Timing |
 |---|---|---|---|---|
-| 1 | config | 起動プロファイル・環境変数の解決 | 既定値のマージ順序、必須値欠落時のエラー、上書き規則（CLI > profile > 既定） | 90% |
-| 2 | discovery | `*.d` 走査・order ソート・有効化判定 | 数字プレフィックスの昇順ソート、無効化（削除）の反映、`plugin.json` の `order` 優先、重複順序の安定ソート | 90% |
-| 3 | runPort | spawn 引数の組み立て・stdout パース・判定 | stdin JSON 直列化、終了コード → 判定（0/2/その他）の写像、stdout の JSON パース失敗時の扱い、timeout 引数の付与 | 85% |
-| 4 | loop | 状態遷移関数（次状態の決定） | next→context→execute→gate→sink/onFail の遷移、retry 判定、終了条件 5 種（§2.3） | 90% |
-| 5 | preflight | プリフライト 2 段の判定順序 | 段の順序、いずれかで停止する短絡、`.harness.yml` 不在時の `needs-human` 判定 | 90% |
-| 6 | budget | 当日実績の集計アルゴリズム | `logs/` 当日分の集計、上限超過の真偽判定、境界値（丁度上限・空ログ） | 90% |
-| 7 | autonomy | sink の `minAutonomy` フィルタ | L1/L2/L3 と sink 有効/スキップの写像、未宣言時の最安全側（= L3 扱い）判定 | 95% |
-| 8 | lock | ロック取得/解放の状態判定 | 二重取得の拒否、残留ロックの検出ロジック（flock 相当の純粋部分） | 85% |
-| 9 | logger | 構造化ログ（`iter_N.json`）の整形 | stderr 退避の整形、フィールド欠落時の既定、機微情報の非混入 | 85% |
+| ① core unit test | The 9 core modules made into pure functions | Correctness of the logic | None | Per PR |
+| ② loop regression test | loop state machine (executor mock) | Prevent regression of loop control and termination conditions | None (fixed JSON returned) | Per PR |
+| ③ contract test | I/O of all sample plugins | Conformance to the contract (D1) | None | Per PR |
+| ④ E2E | Smoke against real GitHub | Confirm integration and real wiring | Yes (minimized by dry-run) | Before release |
 
-> **純粋関数化の指針**: 「入力 → 出力」で表せる判定・写像・整形はすべて純粋関数に切り出す。プロセス起動やファイル書込は境界関数に閉じ込め、単体テストでは境界をモックする（実プロセスは起動しない）。境界の実挙動は ② ループ回帰テスト・④ E2E で確認する。
+**Design principle**: ① to ③ are guaranteed to be deterministic, fast, and zero-cost, and are always run per PR. Because ④ involves non-determinism and charges, its frequency is limited (before release) and its impact and cost are minimized with a `MAX_ITER=1` dry-run.
 
-### 1.3 例（autonomy フィルタ）
+---
+
+## 1. core Unit Tests (the 9 modules made into pure functions)
+
+### 1.1 Policy
+
+The 9 core modules defined by the D2 Core Detailed Design are implemented as **pure functions**, pushing side effects (process spawn / file I/O / network) out to the boundary. The pure-function portions are exhaustively verified with `vitest`. The thin boundary layer that carries side effects is wrapped with mocks.
+
+- **Test runner**: `vitest` (since core is TypeScript / distributed via npm).
+- **Placement**: `packages/core/**/*.test.ts` (same directory as the implementation, co-located).
+- **Structure**: Arrange-Act-Assert. Test names are descriptive of the behavior (e.g., `returns exit 0 immediately when task_id is null`).
+- **Coverage measurement**: `vitest --coverage` (initial targets in the table below, treated as initial values).
+
+### 1.2 Test Perspectives per Module
+
+| # | Module | Target of pure-function extraction | Main test perspectives | Coverage target (initial value) |
+|---|---|---|---|---|
+| 1 | config | Resolution of launch profile and environment variables | Merge order of defaults, error on missing required values, override rules (CLI > profile > default) | 90% |
+| 2 | discovery | `*.d` scanning / order sort / activation decision | Ascending sort by numeric prefix, reflection of deactivation (deletion), priority of `plugin.json`'s `order`, stable sort of duplicate orders | 90% |
+| 3 | runPort | Assembly of spawn arguments / stdout parsing / decision | stdin JSON serialization, mapping exit code → decision (0/2/other), handling of stdout JSON parse failure, adding the timeout argument | 85% |
+| 4 | loop | State transition function (deciding the next state) | Transitions next→context→execute→gate→sink/onFail, retry decision, the 5 termination conditions (§2.3) | 90% |
+| 5 | preflight | Decision order of the 2 preflight stages | Order of stages, short-circuit stopping at either one, `needs-human` decision when `.harness.yml` is absent | 90% |
+| 6 | budget | Aggregation algorithm for the day's actuals | Aggregation of `logs/` for the day, boolean decision of cap overrun, boundary values (exactly at the cap, empty logs) | 90% |
+| 7 | autonomy | The sink's `minAutonomy` filter | Mapping of L1/L2/L3 to sink enabled/skipped, safest-side decision when undeclared (= treated as L3) | 95% |
+| 8 | lock | State decision of lock acquisition/release | Rejection of double acquisition, detection logic for a leftover lock (the pure portion equivalent to flock) | 85% |
+| 9 | logger | Formatting of structured logs (`iter_N.json`) | Formatting of stderr capture, defaults on missing fields, non-inclusion of sensitive information | 85% |
+
+> **Guideline for pure-function extraction**: extract into pure functions every decision, mapping, and formatting that can be expressed as "input → output." Enclose process launches and file writes in boundary functions, and mock the boundary in unit tests (do not launch real processes). The real behavior of the boundary is confirmed in ② loop regression tests and ④ E2E.
+
+### 1.3 Example (autonomy filter)
 
 ```typescript
 // packages/core/autonomy.test.ts
@@ -78,45 +78,45 @@ test('treats undeclared minAutonomy as most restrictive (L3)', () => {
 
 ---
 
-## 2. ループ回帰テスト（executor モック = 固定 JSON 返却）
+## 2. Loop Regression Tests (executor mock = fixed JSON returned)
 
-### 2.1 方針
+### 2.1 Policy
 
-loop 状態機械（§1.2 の module 4）を、**実 executor を固定 JSON 返却のモックに差し替え**て end-to-end に近い形で回す。executor は D1 §1.3 の `{ "status": ..., "summary": ... }` を stdout に返すプロセスであり、これをスクリプト（固定 JSON を echo する bash / node）に置換すれば **API 課金ゼロ**でループ全体の制御を検証できる。
+The loop state machine (module 4 of §1.2) is run in a near end-to-end form by **replacing the real executor with a mock that returns fixed JSON**. The executor is a process that returns `{ "status": ..., "summary": ... }` (D1 §1.3) on stdout; by replacing it with a script (bash / node that echoes fixed JSON), the entire loop control can be verified with **zero API charge**.
 
-- **課金ゼロの担保**: モック executor は `claude -p` を一切呼ばず、テストが指定した固定 JSON を返すのみ。CI 上で実行しても課金・ネットワークは発生しない。
-- **決定論**: モックは入力に対して固定の出力を返すため、ループ挙動が完全に再現可能。回帰の検出に適する。
-- **対象**: loop の分岐と終了条件、retry の再注入、on-fail 起動、gate の論理 AND、sink の自律度フィルタ連携。
+- **Guarantee of zero charge**: the mock executor never calls `claude -p` and only returns the fixed JSON the test specifies. Even when run on CI, no charges or network access occur.
+- **Determinism**: because the mock returns fixed output for a given input, loop behavior is fully reproducible. Suitable for detecting regressions.
+- **Targets**: loop branches and termination conditions, re-injection on retry, on-fail invocation, the logical AND of gates, and coordination with the sink autonomy filter.
 
-### 2.2 モック executor の構成
+### 2.2 Structure of the Mock executor
 
-| モック応答 | executor 出力（固定 JSON） | 検証する経路 |
+| Mock response | executor output (fixed JSON) | Path verified |
 |---|---|---|
-| 成功 | `{"status":"done","summary":"ok"}` | gate 全 pass → sink 実行 → complete |
-| gate fail | `{"status":"done","summary":"ok"}` + gate モックが exit 2 | fail reason の再注入、retry_count 加算 |
-| stuck | `{"status":"stuck","summary":"..."}` | on-fail 起動、失敗経路 |
-| timeout | `{"status":"timeout","summary":"..."}` | on-fail 起動、失敗経路 |
-| タスクなし | task-source モックが `{"task_id":null}` | exit 0 即終了 |
+| Success | `{"status":"done","summary":"ok"}` | all gates pass → sink runs → complete |
+| gate fail | `{"status":"done","summary":"ok"}` + gate mock exits 2 | re-injection of fail reason, increment of retry_count |
+| stuck | `{"status":"stuck","summary":"..."}` | on-fail invocation, failure path |
+| timeout | `{"status":"timeout","summary":"..."}` | on-fail invocation, failure path |
+| no task | task-source mock returns `{"task_id":null}` | immediate exit 0 |
 
-> gate / task-source も同様にモック化する（D1 §3 の終了コード規約に従う固定挙動のスクリプト）。これによりループの全分岐を課金なしで再現する。
+> gate / task-source are mocked in the same way (scripts with fixed behavior conforming to the exit code rules of D1 §3). This reproduces all loop branches without charge.
 
-### 2.3 終了条件 5 種の回帰（D2 と整合）
+### 2.3 Regression of the 5 Termination Conditions (consistent with D2)
 
-loop の終了条件はすべて回帰テストで固定する（各条件で正しく exit 0 に落ちること）。
+All of loop's termination conditions are fixed by regression tests (each condition correctly falls to exit 0).
 
-| # | 終了条件 | モックの仕込み | 期待挙動 |
+| # | Termination condition | Mock setup | Expected behavior |
 |---|---|---|---|
-| 1 | タスクなし | task-source が `{"task_id":null}` | exit 0 で即終了 |
-| 2 | STOP キルスイッチ | `.halo/STOP` を配置 | イテレーション冒頭で exit 0 |
-| 3 | MAX_ITER 到達 | `MAX_ITER=N` 設定 | N イテレーションで停止 |
-| 4 | 予算超過 | budget モックが超過を返す | 当該イテレーション前に停止 |
-| 5 | エスカレーション | 同一タスクが閾値（初期値 3）回 fail | `needs-human` 付与・再注入打ち切り |
+| 1 | no task | task-source returns `{"task_id":null}` | immediate exit 0 |
+| 2 | STOP kill switch | place `.halo/STOP` | exit 0 at the start of the iteration |
+| 3 | MAX_ITER reached | set `MAX_ITER=N` | stop after N iterations |
+| 4 | budget overrun | budget mock returns overrun | stop before that iteration |
+| 5 | escalation | the same task fails the threshold number (initial value 3) of times | apply `needs-human`, cut off re-injection |
 
-### 2.4 例（retry と再注入）
+### 2.4 Example (retry and re-injection)
 
 ```typescript
 test('re-injects gate fail reason into next iteration prompt', async () => {
-  // Arrange: executor は done を返すが gate モックが 1 回目 fail・2 回目 pass
+  // Arrange: executor returns done, but the gate mock fails on the 1st and passes on the 2nd
   const executor = mockExecutor({ status: 'done', summary: 'ok' });
   const gate = mockGateSequence([
     { exit: 2, out: { reason: 'coverage 87% < 90%', gate: '30-test' } },
@@ -132,47 +132,47 @@ test('re-injects gate fail reason into next iteration prompt', async () => {
 
 ---
 
-## 3. contract test（全見本プラグインの I/O を JSON Schema で検証）
+## 3. contract test (verify the I/O of all sample plugins with JSON Schema)
 
-### 3.1 方針
+### 3.1 Policy
 
-D1 §6 に従い、コントラクトの単一の真実の源は `packages/contracts` の TypeScript 型定義であり、そこから生成された JSON Schema（Draft 2020-12）を配布する。contract test は **全見本プラグインの入出力を、配布 Schema に通して検証**する。言語非依存のコントラクトを、言語横断で機械検証する層である。
+Following D1 §6, the single source of truth for the contract is the TypeScript type definitions in `packages/contracts`, and the JSON Schema (Draft 2020-12) generated from them is distributed. The contract test **verifies the input/output of all sample plugins by running them through the distributed Schema**. It is the layer that machine-verifies the language-independent contract across languages.
 
-- **対象**: 見本プラグイン全種（D5 が解説する 4 種を含む）。
-  - `task-source-github` / `runtime-node-pnpm` / `gate-loop-audit` / `trigger-polling`（初期の見本 4 種）。
-  - 以降に追加される全見本プラグインを対象に含める。
-- **検証器**: 任意の JSON Schema バリデータ（`ajv`（TS）、Python `jsonschema` / `check-jsonschema` 等）。CI では `ajv` を標準採用。
-- **検証内容**: 各プラグインの入力例・期待出力例を、該当ポートの Schema（D1 付録 A の一覧）に通して pass/fail を確認する。
+- **Targets**: all sample plugin types (including the 4 types explained in D5).
+  - `task-source-github` / `runtime-node-pnpm` / `gate-loop-audit` / `trigger-polling` (the initial 4 sample types).
+  - All sample plugins added thereafter are included as targets.
+- **Validator**: any JSON Schema validator (`ajv` (TS), Python `jsonschema` / `check-jsonschema`, etc.). CI adopts `ajv` as standard.
+- **Verification content**: run each plugin's input example and expected output example through the Schema of the relevant port (the list in D1 Appendix A) and confirm pass/fail.
 
-### 3.2 プラグイン種別ごとの検証項目
+### 3.2 Verification Items per Plugin Type
 
-| プラグイン（例） | ポート | 入力検証 | 出力検証 | 終了コード規約 |
+| Plugin (example) | Port | Input verification | Output verification | Exit code rule |
 |---|---|---|---|---|
-| task-source-github | ① task-source | `task-source.in.json`（oneOf: next/complete/fail） | `task-source.out.json`（op=next、`task_id` 必須・null 可） | next: 0 / complete・fail: 0 |
-| （context 見本） | ② context | task-source `op=next` 出力（専用 Schema なし） | `context.out.json`（`fragments[]`、priority 整数） | 常に success 扱い |
-| （executor 見本） | ③ executor | `executor.in.json`（prompt/workdir/budget） | `executor.out.json`（status enum / summary 必須） | status で判定 |
-| gate-loop-audit | ④ gate | `gate.in.json`（task_id/workdir/changed_files） | `gate.out.json`（fail 時のみ、reason 必須） | 0=pass / 2=fail |
-| （sink 見本） | ⑤ sink | `sink.in.json`（task_id/workdir/summary） | 出力なし | ベストエフォート |
-| （on-fail 見本） | ⑥ on-fail | `on-fail.in.json`（reason/retry_count 等） | 出力なし | ベストエフォート |
-| runtime-node-pnpm | ⑦ runtime | `runtime.in.json`（workdir、setup/check/test 共通） | 出力なし | check/test: 0=pass / 2=fail |
-| trigger-polling | ⑨ trigger | stdin JSON コントラクトなし（引数のみ） | 出力なし | install/uninstall/fire の終了コード |
+| task-source-github | ① task-source | `task-source.in.json` (oneOf: next/complete/fail) | `task-source.out.json` (op=next, `task_id` required, null allowed) | next: 0 / complete/fail: 0 |
+| (context sample) | ② context | task-source `op=next` output (no dedicated Schema) | `context.out.json` (`fragments[]`, priority integer) | always treated as success |
+| (executor sample) | ③ executor | `executor.in.json` (prompt/workdir/budget) | `executor.out.json` (status enum / summary required) | decided by status |
+| gate-loop-audit | ④ gate | `gate.in.json` (task_id/workdir/changed_files) | `gate.out.json` (only on fail, reason required) | 0=pass / 2=fail |
+| (sink sample) | ⑤ sink | `sink.in.json` (task_id/workdir/summary) | no output | best-effort |
+| (on-fail sample) | ⑥ on-fail | `on-fail.in.json` (reason/retry_count, etc.) | no output | best-effort |
+| runtime-node-pnpm | ⑦ runtime | `runtime.in.json` (workdir, common to setup/check/test) | no output | check/test: 0=pass / 2=fail |
+| trigger-polling | ⑨ trigger | no stdin JSON contract (arguments only) | no output | exit codes of install/uninstall/fire |
 
-> trigger / mcp.d は stdin JSON コントラクトを持たない（D1 §1.9・§1.10）。trigger の contract test は「`fire` が `halo run <profile>` を絶対パスで起動する」ことと install/uninstall の終了コードのみを対象とし、JSON Schema 検証は行わない。
+> trigger / mcp.d have no stdin JSON contract (D1 §1.9/§1.10). The contract test for trigger targets only "`fire` launches `halo run <profile>` by absolute path" and the exit codes of install/uninstall, and performs no JSON Schema validation.
 
-### 3.3 Schema 乖離検出（TS 型 ↔ 生成物）
+### 3.3 Schema Divergence Detection (TS type ↔ generated artifact)
 
-D1 §6.1 が委ねる「生成コマンドと CI での乖離検出」を本書で規定する。
+This document specifies the "generation command and divergence detection in CI" that D1 §6.1 defers.
 
-- **生成**: TS 型 → JSON Schema 変換（`ts-json-schema-generator` 相当）を生成コマンドとして固定する。
-- **CI での検出**: CI で Schema を再生成し、`packages/contracts` にコミット済みの `*.json` と **差分ゼロ**であることを検証する（差分があれば fail = 型と配布 Schema の乖離）。これにより「TS はコンパイル時、非 TS は配布 Schema」の二経路が同一コントラクトを守ることを保証する。
+- **Generation**: fix the TS type → JSON Schema conversion (equivalent to `ts-json-schema-generator`) as the generation command.
+- **Detection in CI**: in CI, regenerate the Schema and verify that it is **zero-diff** against the `*.json` already committed in `packages/contracts` (a diff means fail = divergence between the type and the distributed Schema). This guarantees that the two paths, "TS at compile time, non-TS via the distributed Schema," protect the same contract.
 
-### 3.4 例（gate 出力の Schema 検証）
+### 3.4 Example (Schema verification of gate output)
 
 ```typescript
 test('gate-loop-audit fail output conforms to gate.out.json', () => {
   // Arrange
   const output = { reason: 'spec_ref not found', gate: '50-loop-audit' };
-  const validate = ajv.compile(gateOutSchema); // packages/contracts 同梱
+  const validate = ajv.compile(gateOutSchema); // bundled with packages/contracts
   // Act
   const valid = validate(output);
   // Assert
@@ -181,87 +181,87 @@ test('gate-loop-audit fail output conforms to gate.out.json', () => {
 
 test('rejects gate output missing required reason', () => {
   const validate = ajv.compile(gateOutSchema);
-  expect(validate({ gate: '30-test' })).toBe(false); // reason 必須
+  expect(validate({ gate: '30-test' })).toBe(false); // reason required
 });
 ```
 
 ---
 
-## 4. E2E（dry-run: MAX_ITER=1、実 GitHub 相手のスモーク）
+## 4. E2E (dry-run: MAX_ITER=1, smoke against real GitHub)
 
-### 4.1 方針
+### 4.1 Policy
 
-①〜③ で個々の部品とコントラクトを固めた上で、**実配線のスモークテスト**として E2E を行う。非決定性と API 課金を伴うため、**`MAX_ITER=1` の dry-run** で 1 イテレーションのみ実行し、影響範囲とコストを最小化する。
+Having solidified the individual parts and contracts in ① to ③, E2E is performed as a **smoke test of the real wiring**. Because it involves non-determinism and API charges, only 1 iteration is run with a **`MAX_ITER=1` dry-run** to minimize impact scope and cost.
 
-- **目的**: 実 GitHub（Issue 取得・ラベル操作・PR 作成）と実 executor・worktree・runtime の配線が通ることの確認。ロジックの網羅ではなく「実際に一周する」ことの確認。
-- **範囲の限定**: `MAX_ITER=1` で 1 タスク・1 周のみ。dry-run により副作用（sink）を抑えた構成（自律度 L1: `20-progress-log` のみ、または draft PR）で実行し、本番相当のマージは行わない。
-- **課金の許容**: この層のみ実 executor（`claude -p`）を呼ぶため課金が発生する。頻度を絞る（リリース前）ことで総コストを抑える。
+- **Purpose**: confirm that the wiring of real GitHub (Issue fetch, label operations, PR creation), the real executor, worktree, and runtime is connected. Not exhaustive logic coverage, but confirmation that it "actually completes one lap."
+- **Scope limitation**: only 1 task and 1 lap with `MAX_ITER=1`. Run with a configuration where side effects (sink) are suppressed via dry-run (autonomy L1: `20-progress-log` only, or a draft PR), and do not perform a production-equivalent merge.
+- **Tolerance of charges**: only this layer calls the real executor (`claude -p`), so charges occur. Total cost is kept down by limiting frequency (before release).
 
-### 4.2 スモークの検査項目
+### 4.2 Smoke Inspection Items
 
-| # | 検査 | 期待 |
+| # | Inspection | Expected |
 |---|---|---|
-| 1 | task-source: `ready` Issue 取得 | 先頭 Issue を取得し `in-progress` へ付け替え |
-| 2 | worktree ライフサイクル | `$TMPDIR/halo-wt-issue-N` の生成 → 実行 → 破棄 |
-| 3 | runtime setup/check/test | setup 実体化、check/test の終了コード（0/2）が伝播 |
-| 4 | executor 実行 | `claude -p` が起動し `status` を返す（1 周） |
-| 5 | gate 判定 | gate.d が番号順に実行され論理 AND で合否 |
-| 6 | sink（dry-run 構成） | 自律度に応じた sink のみ実行（L1: 進捗ログ / draft PR） |
-| 7 | ログ・予算 | `iter_1.json` 生成、budget 集計が動く |
-| 8 | doctor | `gh` / `claude` / `git` の存在・権限・トリガー生存を検査（前提確認） |
+| 1 | task-source: fetch `ready` Issue | fetch the first Issue and relabel it to `in-progress` |
+| 2 | worktree lifecycle | creation → execution → disposal of `$TMPDIR/halo-wt-issue-N` |
+| 3 | runtime setup/check/test | setup materialized, exit codes (0/2) of check/test propagate |
+| 4 | executor execution | `claude -p` launches and returns `status` (1 lap) |
+| 5 | gate decision | gate.d runs in numeric order, pass/fail by logical AND |
+| 6 | sink (dry-run config) | only sinks matching the autonomy run (L1: progress log / draft PR) |
+| 7 | log / budget | `iter_1.json` generated, budget aggregation works |
+| 8 | doctor | inspects existence/permissions of `gh` / `claude` / `git` and trigger liveness (precondition check) |
 
-### 4.3 実行環境
+### 4.3 Runtime Environment
 
-- **対象リポジトリ**: E2E 専用のサンドボックス GitHub リポジトリ（`.harness.yml` をコミット済み）。本番リポジトリを対象にしない。
-- **配置（WSL2）**: worktree・各ストア・cache は ext4 側（`/home` 配下）に置く。`/mnt/c/` 配下は禁止（D1 §1.7 の配置制約）。
-- **PAT**: fine-grained・最小権限（PR 作成 + ラベル操作のみ、D4 準拠）を CI シークレットで供給。
-- **前提**: 実行前に `halo doctor` を通し、`gh`/`claude`/`git` の存在と権限を確認する。
+- **Target repository**: a sandbox GitHub repository dedicated to E2E (with `.harness.yml` committed). Do not target the production repository.
+- **Placement (WSL2)**: place the worktree, each store, and cache on the ext4 side (under `/home`). Under `/mnt/c/` is prohibited (the placement constraint of D1 §1.7).
+- **PAT**: supply a fine-grained, least-privilege PAT (PR creation + label operations only, per D4) via CI secrets.
+- **Precondition**: before running, pass `halo doctor` to confirm the existence and permissions of `gh`/`claude`/`git`.
 
 ---
 
-## 5. CI 構成（PR ごとに ①-③、リリース前に ④）
+## 5. CI Configuration (① to ③ per PR, ④ before release)
 
-### 5.1 パイプライン
+### 5.1 Pipeline
 
-| ジョブ | 契機 | 内容 | 課金 | 失敗時 |
+| Job | Trigger | Content | Charge | On failure |
 |---|---|---|---|---|
-| unit | PR ごと（必須） | ① core 単体テスト（`vitest --coverage`） | なし | ブロック |
-| loop-regression | PR ごと（必須） | ② ループ回帰（executor モック固定 JSON） | なし | ブロック |
-| contract | PR ごと（必須） | ③ contract test + Schema 乖離検出（§3.3） | なし | ブロック |
-| e2e-smoke | リリース前（タグ / release ブランチ） | ④ E2E dry-run（`MAX_ITER=1`、実 GitHub） | あり | リリース阻止 |
+| unit | Per PR (required) | ① core unit tests (`vitest --coverage`) | None | Block |
+| loop-regression | Per PR (required) | ② loop regression (executor mock, fixed JSON) | None | Block |
+| contract | Per PR (required) | ③ contract test + Schema divergence detection (§3.3) | None | Block |
+| e2e-smoke | Before release (tag / release branch) | ④ E2E dry-run (`MAX_ITER=1`, real GitHub) | Yes | Block release |
 
-### 5.2 ゲーティング
+### 5.2 Gating
 
-- **PR マージ条件**: unit / loop-regression / contract の 3 ジョブがすべて green であること（①〜③ は課金ゼロなので全 PR で必須化してよい）。
-- **リリース条件**: 上記に加え e2e-smoke が green であること。E2E は課金・非決定性を伴うため PR ごとには回さず、リリース前のみとする。
-- **カバレッジ**: unit ジョブで §1.2 の目標（初期値）を下回った場合は警告（初期は block ではなく warn とし、実測に応じて閾値を確定させる。要件 §11.2）。
+- **PR merge condition**: all 3 jobs unit / loop-regression / contract must be green (since ① to ③ are zero-cost, they may be required for all PRs).
+- **Release condition**: in addition to the above, e2e-smoke must be green. Because E2E involves charges and non-determinism, it is not run per PR but only before release.
+- **Coverage**: if the unit job falls below the §1.2 target (initial value), warn (initially warn rather than block; the threshold is confirmed according to measurement. Requirements §11.2).
 
-### 5.3 コスト・再現性の設計制約
+### 5.3 Design Constraints for Cost and Reproducibility
 
-| 制約 | 理由 |
+| Constraint | Reason |
 |---|---|
-| ①〜③ は課金ゼロ・決定論 | 全 PR で回すため。executor モック・Schema 検証はネットワーク非依存 |
-| ④ のみ実課金・頻度限定 | 実 executor 呼び出しは `MAX_ITER=1` dry-run に限定しコストを最小化 |
-| Schema はコミット済み生成物と一致必須 | TS 型と配布 Schema の乖離を CI で構造的に防ぐ（D1 §6.1） |
-| WSL2 は ext4 側配置 | リンクベース依存共有・worktree の前提（D1 §1.7） |
+| ① to ③ are zero-cost and deterministic | Because they run on all PRs. The executor mock and Schema verification are network-independent |
+| Only ④ incurs real charges, with limited frequency | Real executor calls are limited to a `MAX_ITER=1` dry-run to minimize cost |
+| Schema must match the committed generated artifact | Structurally prevent divergence between the TS type and the distributed Schema in CI (D1 §6.1) |
+| WSL2 placed on the ext4 side | Premise for link-based dependency sharing and the worktree (D1 §1.7) |
 
 ---
 
-## 付録 A. テスト層と D1 コントラクトの対応
+## Appendix A. Correspondence of Test Layers to D1 Contracts
 
-| テスト層 | 検証するコントラクト（D1） | 課金 |
+| Test layer | Contract verified (D1) | Charge |
 |---|---|---|
-| ① core 単体 | 判定写像（終了コード §3.1、autonomy フィルタ §1.5、budget） | なし |
-| ② ループ回帰 | loop 状態機械・終了条件・retry 再注入・on-fail 経路（§3・§5） | なし |
-| ③ contract | 全ポート I/O Schema（付録 A）・plugin.json・実行規約（§3） | なし |
-| ④ E2E | プロセス境界の実配線・worktree・runtime・実 GitHub | あり |
+| ① core unit | decision mappings (exit code §3.1, autonomy filter §1.5, budget) | None |
+| ② loop regression | loop state machine, termination conditions, retry re-injection, on-fail path (§3/§5) | None |
+| ③ contract | I/O Schema of all ports (Appendix A), plugin.json, execution rules (§3) | None |
+| ④ E2E | real wiring at process boundaries, worktree, runtime, real GitHub | Yes |
 
-## 付録 B. 用語
+## Appendix B. Glossary
 
-| 用語 | 定義 |
+| Term | Definition |
 |---|---|
-| executor モック | `claude -p` を呼ばず固定 JSON を返す代替プロセス。ループ回帰の課金ゼロ化に用いる |
-| contract test | 見本プラグインの I/O を配布 JSON Schema で検証するテスト（D1 §6.2） |
-| Schema 乖離検出 | TS 型から再生成した Schema がコミット済み生成物と一致するかの CI チェック |
-| dry-run（E2E） | `MAX_ITER=1` で 1 周のみ実行し副作用を抑えたスモーク実行 |
-| 純粋関数化 | 副作用を境界へ押し出し、入力→出力で表せる部分を単体テスト可能にする設計 |
+| executor mock | A substitute process that returns fixed JSON without calling `claude -p`. Used to make loop regression zero-cost |
+| contract test | A test that verifies the I/O of sample plugins against the distributed JSON Schema (D1 §6.2) |
+| Schema divergence detection | A CI check for whether the Schema regenerated from the TS types matches the committed generated artifact |
+| dry-run (E2E) | A smoke run of only 1 lap with `MAX_ITER=1`, suppressing side effects |
+| pure-function extraction | A design that pushes side effects to the boundary and makes the input→output portion unit-testable |

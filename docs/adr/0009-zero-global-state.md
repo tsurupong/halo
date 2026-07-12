@@ -1,38 +1,38 @@
-# ADR-0009: グローバル状態ゼロ（全状態を対象リポジトリ配下に置く）
+# ADR-0009: Zero Global State (place all state under the target repository)
 
 **Date**: 2026-07-11
 **Status**: accepted
-**Deciders**: 本人（HALO要件定義書 v1.8 §8.2 より記録）
+**Deciders**: Owner (recorded from HALO Requirements Specification v1.8 §8.2)
 
 ## Context
 
-HALO は複数プロジェクトで並行利用され得る汎用フレームワークである。マシングローバルな状態（登録簿・予算台帳・ロックディレクトリ等）を持つと、導入・撤去の手順が増え、プロジェクト間で状態が干渉し、「どのマシンで動かしたか」に挙動が依存する。個人検証環境（WSL2 単一マシン）でも、環境の再現性と撤去の容易さを最優先したい。
+HALO is a general-purpose framework that may be used in parallel across multiple projects. Holding machine-global state (a registry, a budget ledger, a lock directory, etc.) increases setup/teardown steps, causes state interference between projects, and makes behavior depend on "which machine it ran on." Even in a personal verification environment (a single WSL2 machine), we want to prioritize environment reproducibility and ease of teardown above all.
 
 ## Decision
 
-HALO はマシングローバルな状態を一切持たない。永続状態はすべて対象リポジトリ配下の `.halo/`（gitignore）に、コミット対象の宣言は `.harness.yml` と CLAUDE.md にのみ置く。導入は `npm i -D halo`、撤去は `.halo/` 削除とパッケージ削除で完了する。成果物の真実の源は GitHub（ブランチ / PR / Issue ラベル）、揮発物（flock / 使い捨て worktree）は OS の tmpdir に置く。
+HALO holds no machine-global state whatsoever. All persistent state goes under the target repository's `.halo/` (gitignored); committed declarations go only in `.harness.yml` and CLAUDE.md. Setup is `npm i -D halo`; teardown is completed by deleting `.halo/` and removing the package. The source of truth for artifacts is GitHub (branches / PRs / Issue labels); volatile items (flock / disposable worktrees) go in the OS tmpdir.
 
 ## Alternatives Considered
 
-### 代替案1: `~/.halo/` にグローバル状態（登録簿・予算台帳）を持つ
-- **Pros**: 複数プロジェクトの一覧・横断予算管理が中央で可能
-- **Cons**: 撤去にマシン単位のクリーンアップが必要。プロジェクト間で状態が干渉し、再現性が落ちる
-- **Why not**: 排他は OS の flock、ビルドキャッシュは各ツール標準のグローバルストア（pnpm store / CARGO_TARGET_DIR 等）、トリガー登録状態は OS スケジューラ自身が台帳、予算は台帳を持たず実行時に都度計測できる。中央状態は不要であり、持てば撤去容易性と再現性を損なう
+### Alternative 1: Hold global state (registry, budget ledger) in `~/.halo/`
+- **Pros**: A central list of multiple projects and cross-cutting budget management become possible.
+- **Cons**: Teardown requires machine-level cleanup. State interferes across projects, reducing reproducibility.
+- **Why not**: Exclusion is handled by the OS's flock, build caches by each tool's standard global store (pnpm store / CARGO_TARGET_DIR, etc.), trigger registration state by the OS scheduler itself as the ledger, and the budget can be measured on the fly at runtime without a ledger. Central state is unnecessary, and holding it would harm ease of teardown and reproducibility.
 
-### 代替案2: プロジェクト登録簿（管理下リポジトリ一覧）を持つ
-- **Pros**: 「どのリポジトリが HALO 管理下か」を一元把握できる
-- **Cons**: 登録簿とディレクトリ実体の二重管理・不整合が発生する
-- **Why not**: 「`.halo/` の存在＝管理下」で判定でき、登録簿は冗長。トリガーはプロジェクト単位で `.bin/halo` への絶対パスを登録すればよい
+### Alternative 2: Hold a project registry (a list of managed repositories)
+- **Pros**: You can centrally grasp "which repositories are under HALO management."
+- **Cons**: Double management and inconsistency between the registry and the actual directories arise.
+- **Why not**: You can judge by "the existence of `.halo/` = under management," making a registry redundant. The trigger only needs to register the absolute path to `.bin/halo` per project.
 
 ## Consequences
 
 ### Positive
-- 導入・撤去がパッケージ操作と `.halo/` 削除で完結し、マシンに痕跡を残さない
-- プロジェクト間で状態が干渉せず、環境の再現性が高い
-- 状態の4分類（宣言 / 永続状態 / 成果物 / 揮発物）が置き場所で明確に分離される
+- Setup and teardown are completed by package operations and deleting `.halo/`, leaving no trace on the machine.
+- State does not interfere across projects, giving high environment reproducibility.
+- The four categories of state (declaration / persistent state / artifact / volatile) are clearly separated by their location.
 
 ### Negative
-- 横断的な予算・実績集計は各 `.halo/logs/` を集めない限り得られない（中央ダッシュボードは持たない）
+- Cross-cutting budget/results aggregation is unavailable unless you collect each `.halo/logs/` (no central dashboard is held).
 
 ### Risks
-- `.gitignore` に `.halo/` を含め忘れるとローカル状態がコミットされる → 導入時に `.gitignore` へ `.halo/` を必ず追加することを標準手順として明記
+- Forgetting to include `.halo/` in `.gitignore` causes local state to be committed → make it standard procedure at setup to always add `.halo/` to `.gitignore`.

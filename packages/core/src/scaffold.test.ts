@@ -1,6 +1,6 @@
 import { expect, test, describe } from 'vitest';
 import { renderHarnessYml, scaffold, PROFILE_TEMPLATES } from './scaffold.js';
-import { memFs } from '../testkit.js';
+import { memFs } from './testkit.js';
 
 describe('scaffold (T24)', () => {
   test('renderHarnessYml emits one block per kind with runtime + prompt', () => {

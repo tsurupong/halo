@@ -1,38 +1,38 @@
-# ADR-0011: specs/ 廃止とナレッジグラフへの要件一元化
+# ADR-0011: Abolishing specs/ and Consolidating Requirements into the Knowledge Graph
 
 **Date**: 2026-07-11
 **Status**: accepted
-**Deciders**: 本人（HALO要件定義書 v1.8 §5.3 より記録）
+**Deciders**: Owner (recorded from HALO Requirements Specification v1.8 §5.3)
 
 ## Context
 
-要件・仕様・受け入れ条件の格納場所を確定する必要がある。当初は専用ディレクトリ（specs/）にファイルとして置き、その凍結性（「AI がゴールを書き換えられない」）をディレクトリの git 管理で担保する案があった。しかし要件はナレッジグラフ（ADR-0003 / ADR-0005）にも投入され、ファイルとグラフの二重管理・不整合が生じる。凍結性の本質は「ループ実行中にゴールが改変されないこと」であり、ディレクトリの存在そのものではない。
+We need to settle where requirements, specifications, and acceptance criteria are stored. Initially there was a plan to place them as files in a dedicated directory (specs/) and guarantee their frozenness ("the AI cannot rewrite the goal") via git management of the directory. However, requirements are also ingested into the knowledge graph (ADR-0003 / ADR-0005), causing double management and inconsistency between files and the graph. The essence of frozenness is "that the goal is not modified during loop execution," not the existence of the directory itself.
 
 ## Decision
 
-要件・仕様はナレッジグラフに一元管理し、専用ディレクトリ（specs/）は持たない。凍結性はディレクトリ凍結ではなく、グラフへの書き込み制御とハッシュ照合で担保する: (1) ループ実行中、knowledge MCP はグラフを read-only で開く、(2) 書き込みは「人間の手作業」と「sink 35（PR レビューを通過した docs マージ後の再インデックス）」の 2 経路に限定、(3) loop-audit ⑦がグラフファイルのハッシュをループ開始時と照合し、実行中の直接改変を fail とする。要件原本（md 等）を人間がどこで管理するかは HALO の関知外とする（グラフに投入されていればよい）。
+Manage requirements and specifications centrally in the knowledge graph, with no dedicated directory (specs/). Guarantee frozenness not by directory freezing but by write control to the graph plus hash verification: (1) during loop execution, the knowledge MCP opens the graph read-only; (2) writes are limited to two paths — "human manual work" and "sink 35 (reindex after a docs merge that has passed PR review)"; (3) loop-audit ⑦ verifies the graph file's hash against the value at loop start and fails on direct modification during execution. Where a human manages the requirement originals (md, etc.) is outside HALO's concern (it suffices that they are ingested into the graph).
 
 ## Alternatives Considered
 
-### 代替案1: specs/ ディレクトリを維持し、git 管理で凍結性を担保
-- **Pros**: 要件がファイルとして直接読め、既存の spec-driven ワークフローに馴染む
-- **Cons**: グラフと specs/ の二重管理・不整合。ファイルは実行中でもエージェントが書き換え可能で、「実行中の凍結」を git だけでは保証できない
-- **Why not**: 凍結性の本質は実行中の書き込み制御であり、read-only オープン + ハッシュ照合の方が確実。二重管理も回避できる
+### Alternative 1: Keep the specs/ directory and guarantee frozenness via git management
+- **Pros**: Requirements can be read directly as files, familiar to existing spec-driven workflows.
+- **Cons**: Double management and inconsistency between the graph and specs/. Files remain rewritable by the agent even during execution, and git alone cannot guarantee "freezing during execution."
+- **Why not**: The essence of frozenness is write control during execution, and read-only opening + hash verification is more reliable. It also avoids double management.
 
-### 代替案2: 要件を Issue 本文にのみ持ち、グラフに投入しない
-- **Pros**: 仕組みが単純、グラフ構築の初期コストが不要
-- **Cons**: spec_refs によるノード参照・トレーサビリティ（trace_spec_to_code）が成立しない
-- **Why not**: 経過措置として Phase 1〜3 は spec_refs 空・Issue 本文記述で運用するが（§9）、Phase 4 のグラフ導入をもって一元管理と凍結性担保を有効化する方針。恒久策としては不十分
+### Alternative 2: Hold requirements only in the Issue body, not ingested into the graph
+- **Pros**: A simple mechanism; no initial cost of building the graph.
+- **Cons**: Node references via spec_refs and traceability (trace_spec_to_code) do not hold.
+- **Why not**: As a transitional measure, Phases 1–3 operate with empty spec_refs and descriptions in the Issue body (§9), but the policy is to enable centralized management and frozenness guarantees upon graph introduction in Phase 4. As a permanent measure it is insufficient.
 
 ## Consequences
 
 ### Positive
-- 要件の格納先がナレッジグラフ 1 箇所となり、specs/ との二重管理・不整合が消える
-- 凍結性が「実行中 read-only + 書き込み経路限定 + ハッシュ照合」で構造的に担保され、実行中のゴール改変を fail 検出できる（ADR-0004 の自己改変禁止と同型の機構を再利用）
+- Requirements have a single storage location — the knowledge graph — eliminating double management and inconsistency with specs/.
+- Frozenness is structurally guaranteed by "read-only during execution + limited write paths + hash verification," and goal modification during execution can be detected as fail (reusing a mechanism isomorphic to the self-modification prohibition of ADR-0004).
 
 ### Negative
-- 要件を直接ファイルで grep する導線が公式には無くなり、参照は MCP ツール（search_docs / trace_spec_to_code）経由が基本になる
+- The path to grep requirements directly as files officially disappears; reference is fundamentally via MCP tools (search_docs / trace_spec_to_code).
 
 ### Risks
-- グラフ未導入の Phase 1〜3 で凍結性が働かない → 経過措置として spec_refs を空とし要件を Issue 本文に置く運用を明記。Phase 4 導入時に spec_refs と凍結性担保を有効化
-- 書き込み経路 (b) の sink 35 が PR レビュー未通過の変更を通す事故 → 書き込みを「レビュー通過済み docs マージ後の再インデックス」に限定し、それ以外の実行中書き込みはハッシュ照合で fail
+- Frozenness does not operate in Phases 1–3 before the graph is introduced → as a transitional measure, document operating with empty spec_refs and requirements in the Issue body. Enable spec_refs and the frozenness guarantee upon Phase 4 introduction.
+- An accident where write path (b), sink 35, lets through a change that has not passed PR review → limit writes to "reindex after a review-passed docs merge," and any other write during execution fails via hash verification.

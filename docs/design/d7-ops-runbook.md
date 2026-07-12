@@ -1,279 +1,279 @@
-# D7. 運用ランブック
+# D7. Operations Runbook
 
-| 項目 | 内容 |
+| Item | Content |
 |---|---|
-| 文書バージョン | 0.1（骨子） |
-| 前提 | [HALO要件定義書](../../../docs/HALO要件定義書.md) v1.8 を最上位文書とする（本書は §6.2 / §7 / §9 / §11.2 の運用面を実務手順へ落とす） |
-| 位置づけ | 公開（運用例として価値が高い） |
-| 制約 | **実測値は Phase 1〜2 の実運用後に記入する**。本書は骨子であり、手順の構造と記録様式（record templates）のみを先に確定する。閾値・レート・所要時間等の数値は「実測後に記入」プレースホルダのまま残す（先に数値を置くと偽の精度になる。要件定義書 §11.2） |
-| 関連文書 | [D2 コア詳細設計書] / [D3 CLI 仕様書] / [D4 セキュリティ設計書](./d4-security-design.md) / [D8 テスト戦略書] / [ADR-006 自律度 L1-L3] / [ADR-0012 数値パラメータを事前固定しない] |
-| 実行環境 | WSL2 / Arch Linux 想定。CLI は `packages/cli`（`halo` コマンド）、コアは `packages/core`（TypeScript） |
+| Document version | 0.1 (skeleton) |
+| Premise | [HALO Requirements Specification](../../../docs/HALO要件定義書.md) v1.8 is the top-level document (this document translates the operational aspects of §6.2 / §7 / §9 / §11.2 into practical procedures) |
+| Positioning | Public (high value as an operations example) |
+| Constraint | **Measured values are to be filled in after actual operation in Phase 1-2**. This document is a skeleton; only the structure of procedures and the record templates are fixed first. Numeric values such as thresholds, rates, and durations remain as "fill in after measurement" placeholders (placing numbers first would create false precision. Requirements Specification §11.2) |
+| Related documents | [D2 Core Detailed Design] / [D3 CLI Specification] / [D4 Security Design](./d4-security-design.md) / [D8 Test Strategy] / [ADR-006 Autonomy L1-L3] / [ADR-0012 Do not fix numeric parameters in advance] |
+| Runtime environment | Assumes WSL2 / Arch Linux. The CLI is `packages/cli` (the `halo` command), the core is `packages/core` (TypeScript) |
 
-本書は要件定義書 §11.2 の思想（**実測なしの閾値は偽の精度**）に従い、Phase 1〜2 の実運用から手順と数値を「抽出」する立場を取る。したがって本骨子は **記録様式を先に固定**し、そこに溜まる実測データから昇格閾値・監視レート・トラブル対処手順を後追いで確定する。
+Following the philosophy of Requirements Specification §11.2 (**a threshold without measurement is false precision**), this document takes the stance of "extracting" procedures and numbers from actual Phase 1-2 operation. Accordingly, this skeleton **fixes the record templates first**, and later confirms promotion thresholds, monitoring rates, and troubleshooting procedures from the measured data accumulated there.
 
-> **記入規約**: 本書中の `〔実測後に記入〕` は Phase 1〜2 の運用データが揃うまで空欄とするプレースホルダである。数値・閾値・所要時間・頻度をここに埋めるのは実測後に限る。構造（手順の順序・記録様式のフィールド）は骨子段階で確定してよい。
+> **Fill-in convention**: `〔fill in after measurement〕` in this document is a placeholder left blank until the Phase 1-2 operational data is available. Numbers, thresholds, durations, and frequencies should only be filled in here after measurement. The structure (order of procedures, fields of record templates) may be fixed at the skeleton stage.
 
 ---
 
-## 1. 自律度昇格・降格の運用
+## 1. Operating Autonomy Promotion and Demotion
 
-自律度 `AUTONOMY`（L1=報告のみ / L2=commit+draft PR / L3=無人 PR 作成）は sink フィルタの実行時パラメータであり（ADR-006）、昇格・降格は**環境変数（プロファイルの `AUTONOMY`）の変更のみ**で完結する。判定は人間が行い、ログはその一次データに徹する（要件定義書 §11.2）。
+The autonomy level `AUTONOMY` (L1 = report only / L2 = commit + draft PR / L3 = unattended PR creation) is a runtime parameter of the sink filter (ADR-006), and promotion/demotion is completed **solely by changing an environment variable (the profile's `AUTONOMY`)**. The judgment is made by a human, and logs serve strictly as the primary data (Requirements Specification §11.2).
 
-### 1.1 L1 採点の手順
+### 1.1 L1 Scoring Procedure
 
-新規ループ・新規プラグイン導入直後は必ず L1（`daytime-l1` プロファイル等）で観察運転する。毎営業日、前日分の L1 実行結果を人間が採点する。
+Immediately after introducing a new loop or new plugin, always run in observation mode at L1 (e.g., the `daytime-l1` profile). Every business day, a human scores the previous day's L1 execution results.
 
-| 手順 | 操作 | 参照 |
+| Step | Operation | Reference |
 |---|---|---|
-| 1 | `halo status` で前日の L1 実行サマリ（イテレーション数・outcome 内訳）を確認 | D3 status |
-| 2 | `logs/` の当日分 `iter_N.json`（`outcome` / `gates` / 計画報告）を1件ずつ読む | D6/06 可観測性 |
-| 3 | 各イテレーションの「計画の妥当性」を後述 §1.2 の採点様式で記録 | §1.2 |
-| 4 | 妥当率・所見を `logs/scoring/<date>.md`（後述様式）へ追記 | §1.2 |
+| 1 | Check the previous day's L1 execution summary (number of iterations, outcome breakdown) with `halo status` | D3 status |
+| 2 | Read each `iter_N.json` (`outcome` / `gates` / plan report) in `logs/` for that day, one at a time | D6/06 Observability |
+| 3 | Record the "validity of the plan" for each iteration using the scoring template in §1.2 below | §1.2 |
+| 4 | Append the validity rate and findings to `logs/scoring/<date>.md` (template below) | §1.2 |
 
-- 採点対象は「AI が出した計画・実行結果が、人間が承認できる品質か」。L1 はコード変更を成果物として残さず計画報告のみを残すため、採点は**判断品質の評価**である。
-- **昇格閾値をログ側にハードコードしない**（要件定義書 §11.2）。閾値は §1.3 の実測欄が埋まってから設定する。
+- The scoring target is "whether the plan/execution result produced by the AI is of a quality a human can approve." Because L1 leaves only plan reports rather than code changes as artifacts, scoring is an **evaluation of judgment quality**.
+- **Do not hardcode the promotion threshold on the log side** (Requirements Specification §11.2). The threshold is set only after the measured columns of §1.3 are filled in.
 
-### 1.2 L1 採点の記録様式（record template）
+### 1.2 L1 Scoring Record Template
 
-`logs/scoring/<YYYY-MM-DD>.md` に日次で1ファイル。1イテレーション1行で記録する。
+One file per day at `logs/scoring/<YYYY-MM-DD>.md`. Record one line per iteration.
 
 ```markdown
-# L1 採点 — <YYYY-MM-DD>（採点者: <name>）
+# L1 scoring — <YYYY-MM-DD> (scorer: <name>)
 
-| iter | task_id | kind | 計画の妥当性 | 是正の要否 | 所見 |
+| iter | task_id | kind | plan validity | correction needed | notes |
 |------|---------|------|:-----------:|:---------:|------|
-| 1    | #123    | code | 妥当 / 要修正 / 却下 | 不要 / 軽微 / 重大 | <一言> |
+| 1    | #123    | code | valid / needs fix / rejected | none / minor / major | <one line> |
 
-## 日次サマリ
-- 採点件数: <n>
-- 妥当率: <妥当 / 採点件数>（%）
-- 重大な誤り: <n> 件（内容: ...）
-- 所感: <昇格判断に効く定性メモ>
+## Daily summary
+- scored count: <n>
+- valid rate: <valid / scored count> (%)
+- major errors: <n> (details: ...)
+- impressions: <qualitative notes relevant to the promotion decision>
 ```
 
-| フィールド | 意味 | 取り得る値 |
+| Field | Meaning | Possible values |
 |---|---|---|
-| 計画の妥当性 | AI の計画/成果が承認水準か | `妥当` / `要修正` / `却下` |
-| 是正の要否 | 人間の介入がどの程度必要だったか | `不要` / `軽微` / `重大` |
-| 妥当率 | 昇格判定の主指標（暫定） | 集計値 |
+| Plan validity | Whether the AI's plan/result meets the approval bar | `valid` / `needs fix` / `rejected` |
+| Correction needed | How much human intervention was required | `none` / `minor` / `major` |
+| Validity rate | The primary (provisional) metric for the promotion decision | Aggregate value |
 
-### 1.3 昇格判定
+### 1.3 Promotion Decision
 
-L1 → L2 → L3 の昇格は、採点データが一定量たまった時点で人間が判断する。段階は要件定義書 §11.2 の実測主義に従う。
+Promotion from L1 → L2 → L3 is decided by a human once a certain amount of scoring data has accumulated. The staging follows the measurement-based principle of Requirements Specification §11.2.
 
-| 判定項目 | 骨子での扱い | 実測後に確定する値 |
+| Decision item | Handling in the skeleton | Value confirmed after measurement |
 |---|---|---|
-| 昇格に必要な採点晩数 | Phase 2 完了時（10 晩実測が目安） | 〔実測後に記入〕 |
-| 妥当率の昇格閾値 | 「妥当率 N% 以上が M 晩連続」の形で設定予定 | N = 〔実測後に記入〕 / M = 〔実測後に記入〕 |
-| 重大な誤りの許容 | 0 件が原則（重大誤り発生で昇格リセット） | 〔実測後に確認〕 |
-| L2→L3 の追加条件 | draft PR のレビュー承認率で判断 | 〔実測後に記入〕 |
+| Number of scored nights required for promotion | At Phase 2 completion (10 nights of measurement is the target) | 〔fill in after measurement〕 |
+| Validity-rate promotion threshold | Planned to be set as "validity rate N% or higher for M consecutive nights" | N = 〔fill in after measurement〕 / M = 〔fill in after measurement〕 |
+| Tolerance for major errors | 0 in principle (a major error resets promotion) | 〔confirm after measurement〕 |
+| Additional condition for L2→L3 | Decided by the review approval rate of draft PRs | 〔fill in after measurement〕 |
 
-- 昇格は不可逆ではない。昇格後に品質が落ちれば人間判断で降格してよい。
-- ハーネス自身への変更（dogfooding）は**恒久的に L2 上限**（人間承認必須、要件定義書 §11.1）。この上限は昇格判定の対象外で、loop-audit ⑤が gate 層で確定ブロックする（D4 §4）。
+- Promotion is not irreversible. If quality drops after promotion, a human may demote at their discretion.
+- Changes to the harness itself (dogfooding) are **permanently capped at L2** (human approval required, Requirements Specification §11.1). This cap is outside the scope of the promotion decision, and loop-audit ⑤ definitively blocks it at the gate layer (D4 §4).
 
-### 1.4 重大インシデント時の即 L1 降格
+### 1.4 Immediate Demotion to L1 on a Serious Incident
 
-**重大インシデント（自己改変検出・機密アクセス試行）1 件で即 L1 に降格する**（要件定義書 §11.2、確定事項）。gate 通過率ベースの降格閾値は実測後に設定する。
+**A single serious incident (detection of self-modification or an attempt to access secrets) demotes immediately to L1** (Requirements Specification §11.2, confirmed). Demotion thresholds based on gate pass rate are set after measurement.
 
-| 手順 | 操作 |
+| Step | Operation |
 |---|---|
-| 1 | インシデント検知（loop-audit ⑤/⑦ fail、PreToolUse hook #4/#5/#8 発火、`needs-human` 付与のログ）を確認 |
-| 2 | 稼働中プロファイルの `AUTONOMY` を `L1` に変更（環境変数のみ）。必要なら `.halo/STOP` を配置して即時停止 |
-| 3 | 該当 worktree の残骸を確認・除去（§5.4）。漏洩が疑われる場合は PAT を即時失効・ローテーション（D4 §3、security ルール） |
-| 4 | インシデントを §3 failure-catalog および `logs/incidents/<date>.md`（後述様式）へ記録 |
-| 5 | 原因是正（PROMPT / hook / deny の見直し）まで L1 固定を維持。復帰は §1.3 の昇格手順を再度踏む |
+| 1 | Confirm incident detection (loop-audit ⑤/⑦ fail, PreToolUse hook #4/#5/#8 firing, logs with `needs-human` applied) |
+| 2 | Change the running profile's `AUTONOMY` to `L1` (environment variable only). If necessary, place `.halo/STOP` for an immediate stop |
+| 3 | Check for and remove remnants of the relevant worktree (§5.4). If leakage is suspected, immediately revoke and rotate the PAT (D4 §3, security rules) |
+| 4 | Record the incident in the §3 failure-catalog and in `logs/incidents/<date>.md` (template below) |
+| 5 | Keep L1 pinned until root-cause correction (review of PROMPT / hook / deny). Recovery again follows the promotion procedure of §1.3 |
 
-**インシデント記録様式** `logs/incidents/<YYYY-MM-DD>.md`:
+**Incident record template** `logs/incidents/<YYYY-MM-DD>.md`:
 
 ```markdown
-# インシデント — <ISO8601>
-- 種別: 自己改変検出 / 機密アクセス試行 / その他
-- 検知経路: loop-audit⑤ / PreToolUse#N / ...
-- task_id: #<n>（worktree: <path>）
-- 影響範囲: <触れた場所・漏洩有無>
-- 即応: L1 降格 / STOP / PAT ローテーション の実施状況
-- 恒久対策: <PROMPT/hook/deny の変更>（採用は人間ゲート）
+# Incident — <ISO8601>
+- type: self-modification detected / secret access attempt / other
+- detection path: loop-audit⑤ / PreToolUse#N / ...
+- task_id: #<n> (worktree: <path>)
+- impact scope: <where it touched / whether leaked>
+- immediate response: status of L1 demotion / STOP / PAT rotation
+- permanent fix: <changes to PROMPT/hook/deny> (adoption is a human gate)
 ```
 
 ---
 
-## 2. needs-human 対応フロー
+## 2. needs-human Handling Flow
 
-`needs-human` ラベルは on-fail `20-escalate`（同一 Issue 3 回 fail・仮）または kind 解決失敗（`.harness.yml` 不在等）で付与される、ループから人間への**出口**（要件定義書 §7-6）。以降の処理は人間が担う。
+The `needs-human` label is applied by on-fail `20-escalate` (three fails on the same Issue, tentative) or by a kind-resolution failure (e.g., missing `.harness.yml`), and is the **exit** from the loop to a human (Requirements Specification §7-6). Subsequent processing is handled by a human.
 
-### 2.1 対応フロー
+### 2.1 Handling Flow
 
 ```
-needs-human 付与
-  ├─ 原因分類（下表）
-  │    ├─ 仕様が曖昧/誤り     → 仕様修正 → ready 戻し（§2.2）
-  │    ├─ タスクが大きすぎる  → タスク分割（§2.3）
-  │    ├─ 環境/構成不備       → .harness.yml 等を修正 → ready 戻し
-  │    └─ 実装難度が高い      → 人間が実装 or 保留
-  └─ 対応後: needs-human 解除 / クローズ
+needs-human applied
+  ├─ cause classification (table below)
+  │    ├─ spec ambiguous/wrong     → fix spec → return to ready (§2.2)
+  │    ├─ task too large           → split task (§2.3)
+  │    ├─ environment/config issue → fix .harness.yml etc. → return to ready
+  │    └─ high implementation difficulty → human implements or defers
+  └─ after handling: remove needs-human / close
 ```
 
-### 2.2 仕様修正 → ready 戻し
+### 2.2 Specification Fix → Return to ready
 
-- Issue 本文・spec_refs（グラフ上の凍結要件）を見直し、曖昧さや誤りを是正する。要件はグラフに一元管理されるため、仕様の修正はグラフ書込 2 経路（人間の手作業 / sink 35、D4 §5）を通す。
-- 是正後、`needs-human` を外し `ready` を付け直してキューへ戻す。`in-progress` の残留があれば解除する。
-- gate の reason 履歴（`gate_failure.json` / failure-catalog）を確認し、AI が繰り返し詰まった箇所を仕様側で明示する。
+- Review the Issue body and spec_refs (frozen requirements on the graph) and correct any ambiguity or errors. Since requirements are centrally managed on the graph, specification fixes go through the two graph-write paths (manual human work / sink 35, D4 §5).
+- After correction, remove `needs-human`, reapply `ready`, and return it to the queue. If `in-progress` remains, clear it.
+- Check the gate reason history (`gate_failure.json` / failure-catalog) and make explicit on the specification side the points where the AI repeatedly got stuck.
 
-### 2.3 タスク分割の判断基準
+### 2.3 Criteria for Deciding to Split a Task
 
-| 判断材料 | 分割を検討する目安 | 骨子での扱い |
+| Decision material | Guideline for considering a split | Handling in the skeleton |
 |---|---|---|
-| loop-audit ⑥ diff 行数 fail | 1500 行上限（§11.1 確定）に繰り返し達する | 確定閾値。超過が常態なら分割 |
-| 3 回 fail の reason 傾向 | 複数の独立した是正点が同時に要求されている | 独立点ごとに Issue を分ける |
-| spec_refs の対象範囲 | 1 タスクが複数集約（Aggregate）にまたがる | 集約単位に分割 |
-| 1 タスクの平均所要イテレーション | 〔実測後に記入〕 を超える | 実測後に基準化 |
+| loop-audit ⑥ diff line-count fail | Repeatedly hitting the 1500-line cap (§11.1, confirmed) | Confirmed threshold. Split if overruns become the norm |
+| Reason trend of 3 fails | Multiple independent correction points are demanded simultaneously | Split into separate Issues per independent point |
+| Scope covered by spec_refs | One task spans multiple aggregates | Split by aggregate unit |
+| Average iterations per task | Exceeds 〔fill in after measurement〕 | Standardize after measurement |
 
-- 分割後は各子 Issue に `ready` を付け、親 Issue はトラッキング用に残すかクローズするかを運用で決める。
+- After splitting, apply `ready` to each child Issue; whether the parent Issue is kept for tracking or closed is decided operationally.
 
 ---
 
-## 3. failure-catalog の読み方と sign 昇格の運用
+## 3. Reading the failure-catalog and Operating sign Promotion
 
-失敗学習ループは「失敗 → `failure-catalog.md` 記録 → `signs-proposed.md` へ sign 候補 → **人間判断で PROMPT へ反映**」の閉ループ（03/06）。PROMPT への直接追記は自己改変禁止に抵触するため（ADR-0004）、sign 採用は必ず人間ゲートを経由する（要件定義書 §7）。
+The failure-learning loop is a closed loop of "failure → record in `failure-catalog.md` → sign candidate in `signs-proposed.md` → **reflected into PROMPT by human judgment**" (03/06). Because directly appending to PROMPT would violate the ban on self-modification (ADR-0004), sign adoption must always pass through a human gate (Requirements Specification §7).
 
-### 3.1 failure-catalog.md の読み方
+### 3.1 How to Read failure-catalog.md
 
-`harness/failure-catalog.md` は on-fail `10-record-failure` が追記するインシデント台帳。
+`harness/failure-catalog.md` is an incident ledger appended to by on-fail `10-record-failure`.
 
-| 着目点 | 読み取ること |
+| Focus point | What to read |
 |---|---|
-| 失敗ゲート（`gate`）の分布 | どのゲート（30-test / 40-ai-review / 50-loop-audit 等）で詰まるか。偏りは runtime 設定や PROMPT の不足を示唆 |
-| reason の反復 | 同種 reason が繰り返し出るなら sign 化の候補 |
-| task kind との相関 | code / docs で失敗傾向が違うか（kind 別 PROMPT の調整材料） |
-| 対処欄の空白 | 未対応のインシデント。人間または suggest-sign が埋める |
+| Distribution of failing gates (`gate`) | Which gate (30-test / 40-ai-review / 50-loop-audit, etc.) gets stuck. A bias suggests insufficient runtime configuration or PROMPT |
+| Repetition of reasons | If the same kind of reason recurs, it is a candidate for turning into a sign |
+| Correlation with task kind | Whether failure tendencies differ between code / docs (material for tuning per-kind PROMPT) |
+| Blanks in the handling column | Unaddressed incidents. Filled in by a human or by suggest-sign |
 
-### 3.2 signs-proposed.md → PROMPT 反映の人間判断
+### 3.2 signs-proposed.md → Human Judgment for Reflecting into PROMPT
 
-on-fail `30-suggest-sign` が生成した候補（`signs-proposed.md`）を人間がレビューし、採用するものだけを `PROMPT.md` / `prompts/<kind>.md` へ反映する。
+A human reviews the candidates generated by on-fail `30-suggest-sign` (`signs-proposed.md`) and reflects only the adopted ones into `PROMPT.md` / `prompts/<kind>.md`.
 
-| 手順 | 操作 |
+| Step | Operation |
 |---|---|
-| 1 | `signs-proposed.md` の各候補を読み、対応する failure-catalog の実インシデントに遡って妥当性を確認 |
-| 2 | 採用可否を判断（下表の基準）。採用分のみ PROMPT へ人間が手で追記（グラフ/ファイル書込は人間経路） |
-| 3 | 反映した sign が同種失敗の再発を抑えたか、後続の failure-catalog で追跡 |
-| 4 | 反映済み候補を `signs-proposed.md` から除去（または採用/却下を明記） |
+| 1 | Read each candidate in `signs-proposed.md` and verify its validity by tracing back to the actual incident in failure-catalog it corresponds to |
+| 2 | Decide whether to adopt (criteria in the table below). Only adopted items are manually appended to PROMPT by a human (graph/file writes go through the human path) |
+| 3 | Track in the subsequent failure-catalog whether the reflected sign suppressed recurrence of the same kind of failure |
+| 4 | Remove reflected candidates from `signs-proposed.md` (or clearly mark them adopted/rejected) |
 
-**sign 採用の判断基準（骨子）**:
+**Criteria for adopting a sign (skeleton)**:
 
-| 基準 | 採用寄り | 却下寄り |
+| Criterion | Leans toward adoption | Leans toward rejection |
 |---|---|---|
-| 一般性 | 複数タスクに効く恒久指示 | 単発タスク固有の事情 |
-| 具体性 | 「次はこうせよ」が明確 | 曖昧・解釈余地が大きい |
-| 副作用 | 既存 PROMPT と矛盾しない | 他の正しい挙動を抑制しうる |
-| 再発頻度 | 〔実測後に記入〕 件以上の反復 | 1 回限りの失敗 |
+| Generality | A permanent instruction effective across multiple tasks | Circumstances specific to a single task |
+| Specificity | "Do this next time" is clear | Vague, with much room for interpretation |
+| Side effects | Does not contradict existing PROMPT | Could suppress other correct behaviors |
+| Recurrence frequency | Repeated 〔fill in after measurement〕 times or more | A one-off failure |
 
-- sign 反映は Phase 2 で本格運用を開始する（要件定義書 §9）。反映効果（再発減）の定量評価は実測データが揃ってから記入する。
+- Full-scale operation of sign reflection begins in Phase 2 (Requirements Specification §9). Quantitative evaluation of the reflection effect (reduced recurrence) is filled in once measured data is available.
 
 ---
 
-## 4. 予算監視
+## 4. Budget Monitoring
 
-日次予算は当日 `logs/` の実績から都度算出され、超過時は起動しても即終了する（04/06、要件定義書 §6.2）。固定カウンタを持たず、ログが単一の真実源。
+The daily budget is computed each time from that day's actuals in `logs/`, and on overrun the process terminates immediately even if launched (04/06, Requirements Specification §6.2). It holds no fixed counter; the logs are the single source of truth.
 
-### 4.1 status の見方
+### 4.1 How to Read status
 
-| 確認項目 | `halo status` で見るもの | 判断 |
+| Check item | What to look at in `halo status` | Judgment |
 |---|---|---|
-| 当日イテレーション実績 | `USED`（当日完了レコード件数）と `DAILY_MAX_ITERATIONS` | `USED` が上限に接近 = その日は打ち止め近い |
-| プロファイル別稼働 | continuous / daytime-l1 / nightly の実行有無 | 想定外プロファイルの稼働がないか |
-| コスト概算 | `iter_N.json` の `executor.cost`（ccusage 相当、任意フィールド） | 消費レートの傾向把握 |
-| 月次見込み | 日次実績 × 稼働日 の外挿 | $200 超見込みで API キー + spend limit へ切替検討（要件定義書 §6.2） |
+| Today's iteration actuals | `USED` (count of completed records for the day) and `DAILY_MAX_ITERATIONS` | `USED` approaching the cap = the day is near its limit |
+| Activity per profile | Whether continuous / daytime-l1 / nightly ran | Check for activity from unexpected profiles |
+| Cost estimate | `executor.cost` in `iter_N.json` (ccusage-equivalent, optional field) | Grasp the trend of the consumption rate |
+| Monthly projection | Extrapolation of daily actuals × operating days | If projected to exceed $200, consider switching to API key + spend limit (Requirements Specification §6.2) |
 
-### 4.2 超過時の対処
+### 4.2 Handling Overruns
 
-| 事象 | 対処 |
+| Event | Handling |
 |---|---|
-| 日次予算超過（`USED >= DAILY_MAX_ITERATIONS`） | 当日はプリフライトで自動的に起動抑止。追加消化が必要なら人間が `DAILY_MAX_ITERATIONS` を一時引き上げ（プロファイル env）。恒久調整は実測ベースで |
-| 消費レートが想定を超える | プロファイルの `MAX_ITER` / `TIMEOUT` を絞る。`.halo/STOP` で即時停止も可 |
-| 月次 $200 接近 | 直接 API キー + spend limit への切替を人間判断（要件定義書 §6.2, §10） |
-| クレジットプール枯渇 | 重量プリフライトの credit probe で起動前に検出。枯渇時は再チャージまで停止 |
+| Daily budget overrun (`USED >= DAILY_MAX_ITERATIONS`) | For that day, launch is automatically suppressed in preflight. If additional consumption is needed, a human temporarily raises `DAILY_MAX_ITERATIONS` (profile env). Permanent adjustment is measurement-based |
+| Consumption rate exceeds expectations | Tighten the profile's `MAX_ITER` / `TIMEOUT`. Immediate stop with `.halo/STOP` is also possible |
+| Approaching $200 monthly | A human decides whether to switch to a direct API key + spend limit (Requirements Specification §6.2, §10) |
+| Credit pool exhaustion | Detected before launch by the heavy-preflight credit probe. On exhaustion, stop until recharge |
 
-**予算チューニングの実測欄**:
+**Measured columns for budget tuning**:
 
-| パラメータ | 初期値 | 実測後の調整値 |
+| Parameter | Initial value | Adjusted value after measurement |
 |---|---|---|
-| `DAILY_MAX_ITERATIONS`（continuous / daytime-l1 / nightly） | 60 / 12 / 50（仮） | 〔実測後に記入〕 |
-| 1 イテレーション平均コスト | — | 〔実測後に記入〕 |
-| 月次消費見込み | — | 〔実測後に記入〕 |
+| `DAILY_MAX_ITERATIONS` (continuous / daytime-l1 / nightly) | 60 / 12 / 50 (tentative) | 〔fill in after measurement〕 |
+| Average cost per iteration | — | 〔fill in after measurement〕 |
+| Monthly consumption projection | — | 〔fill in after measurement〕 |
 
 ---
 
-## 5. トラブルシュート
+## 5. Troubleshooting
 
-### 5.1 doctor の使い方
+### 5.1 Using doctor
 
-`halo doctor` は環境健全性の一括点検（D3）。トリガー生存（パス移動検出）、`gh` / `claude` / `git` の存在・権限を検査する。
+`halo doctor` is a one-shot health check of the environment (D3). It inspects trigger liveness (detecting a moved path) and the existence/permissions of `gh` / `claude` / `git`.
 
-| 症状 | doctor が示すもの | 一次対処 |
+| Symptom | What doctor indicates | Primary handling |
 |---|---|---|
-| トリガーが動かない | トリガー登録の生存・パス整合 | §5.2 へ |
-| PR 作成失敗 | `gh` の認証・PAT 権限 | PAT スコープ（D4 §3）を確認 |
-| executor 起動不可 | `claude` の存在・PATH | PATH 洗い直し（WSL2）確認、`claude` 再インストール |
-| worktree 生成失敗 | `git` バージョン・ディスク残量 | §5.4 / ディスク確保 |
+| Trigger not firing | Liveness of the trigger registration and path consistency | Go to §5.2 |
+| PR creation failure | `gh` authentication / PAT permissions | Check PAT scope (D4 §3) |
+| executor cannot launch | Existence of `claude` / PATH | Re-check the PATH (WSL2), reinstall `claude` |
+| worktree creation failure | `git` version / free disk space | §5.4 / secure disk space |
 
-### 5.2 トリガー不発
+### 5.2 Trigger Misfire
 
-主因は WSL2 VM の自動停止と Windows パス継承（04、ADR-008）。
+The main causes are the WSL2 VM's automatic shutdown and Windows path inheritance (04, ADR-008).
 
-| 確認順 | 項目 | 対処 |
+| Order | Item | Handling |
 |---|---|---|
-| 1 | Windows タスクスケジューラに `HALO_<profile>` タスクが存在するか | `install.sh` を再実行して登録 |
-| 2 | `wsl.exe -d <distro>` のディストリ名が正しいか | install スクリプトの distro 名を修正 |
-| 3 | 深夜/日中に VM が起動しているか（タスク起動＝VM 起動の想定） | 初回 dry-run（`MAX_ITER=1`）で起動経路を検証（04 §4.3） |
-| 4 | `fire.sh` の PATH 洗い直しが効いているか（`/mnt/c/` 混入） | fire.sh の PATH 再構築を確認 |
-| 5 | ready タスクが実在するか（0 件なら軽量プリフライトで即終了＝正常） | `halo status` で ready 件数を確認 |
+| 1 | Whether a `HALO_<profile>` task exists in the Windows Task Scheduler | Re-run `install.sh` to register |
+| 2 | Whether the distro name in `wsl.exe -d <distro>` is correct | Fix the distro name in the install script |
+| 3 | Whether the VM is running late at night / during the day (task launch = VM startup is assumed) | Verify the launch path with an initial dry-run (`MAX_ITER=1`) (04 §4.3) |
+| 4 | Whether `fire.sh`'s PATH re-cleaning is effective (contamination by `/mnt/c/`) | Confirm the PATH reconstruction in fire.sh |
+| 5 | Whether a ready task actually exists (if 0, immediate termination via lightweight preflight = normal) | Check the ready count with `halo status` |
 
-- 想定発火頻度に対する実際の発火成功率は Phase 1 の起動テストで測る（実測欄: 〔実測後に記入〕）。
+- The actual firing success rate against the expected firing frequency is measured in the Phase 1 launch test (measured column: 〔fill in after measurement〕).
 
-### 5.3 flock 残留
+### 5.3 flock Remnants
 
-`flock`（`$TMPDIR/halo.lock` または `$TMPDIR/halo.<profile>.lock`）は多重起動防止（04 §4.7）。プロセス異常終了でロックが残ると後続が起動しなくなる。
+`flock` (`$TMPDIR/halo.lock` or `$TMPDIR/halo.<profile>.lock`) prevents concurrent launches (04 §4.7). If the lock remains after an abnormal process termination, subsequent launches will not start.
 
-| 手順 | 操作 |
+| Step | Operation |
 |---|---|
-| 1 | ロックを保持するプロセスの生存確認（`ps` でロック名に対応する run 実体があるか） |
-| 2 | 実体プロセスが存在しなければロックは OS がプロセス終了時に解放する（`flock(2)` は fd に紐づくため通常は残らない）。ファイルだけが残っても実害はないことを確認 |
-| 3 | それでも起動が弾かれる場合、稼働中の別イテレーションがロックを正当に保持していないか（`halo status`）を確認 |
-| 4 | 誤って生成した明示ロックファイルがあれば、実体プロセス不在を確認のうえ除去 |
+| 1 | Confirm liveness of the process holding the lock (whether a run corresponding to the lock name exists via `ps`) |
+| 2 | If no such actual process exists, the OS releases the lock at process termination (since `flock(2)` is tied to an fd, it usually does not remain). Confirm that even a leftover file causes no real harm |
+| 3 | If launches are still rejected, check (via `halo status`) whether another running iteration legitimately holds the lock |
+| 4 | If there is an explicit lock file created by mistake, remove it after confirming the absence of the actual process |
 
-- 原則: ロックは fd 生存に紐づくため「残留」は稀。安易な削除より**保持プロセスの実在確認を先**に行う（稼働中の削除は二重起動を招く）。
+- Principle: because the lock is tied to fd liveness, a "remnant" is rare. Rather than deleting hastily, **first confirm the actual existence of the holding process** (deleting during operation invites a double launch).
 
-### 5.4 worktree 残骸
+### 5.4 worktree Remnants
 
-使い捨て worktree（`$TMPDIR/halo-wt-issue-<N>/`、D2）は fail 確定・needs-human・完了時に `git worktree remove --force` で削除される（02）。異常終了で残骸が出ることがある。
+The disposable worktree (`$TMPDIR/halo-wt-issue-<N>/`, D2) is deleted with `git worktree remove --force` on confirmed fail, needs-human, or completion (02). Abnormal termination can leave remnants.
 
-| 手順 | 操作 |
+| Step | Operation |
 |---|---|
-| 1 | `git worktree list` で登録済み worktree を確認 |
-| 2 | 対応する Issue が既にクローズ/needs-human なら残骸候補 |
-| 3 | `git worktree remove --force <path>` で削除。登録が壊れている場合は `git worktree prune` |
-| 4 | ディレクトリ実体が残れば手動除去（worktree は ext4 `/home` 配下・`/mnt/c/` 禁止、02 §2.5） |
-| 5 | 残骸が定常的に出るなら、ライフサイクルの remove 経路（失敗パス）にバグがないか調査（01 失敗パス表） |
+| 1 | List registered worktrees with `git worktree list` |
+| 2 | If the corresponding Issue is already closed/needs-human, it is a remnant candidate |
+| 3 | Delete with `git worktree remove --force <path>`. If the registration is broken, use `git worktree prune` |
+| 4 | If the directory itself remains, remove it manually (worktrees are under ext4 `/home`; `/mnt/c/` is prohibited, 02 §2.5) |
+| 5 | If remnants appear regularly, investigate whether there is a bug in the lifecycle's remove path (failure path) (01 failure-path table) |
 
-- インシデント起因の残骸は §1.4 の手順で先に「触れた場所」を監査してから除去する（サンドボックス境界＝worktree のため、残骸は監査対象、D4 §1）。
+- For remnants caused by an incident, first audit the "places touched" per the procedure in §1.4 before removal (the sandbox boundary is the worktree, so remnants are audit targets, D4 §1).
 
 ---
 
-## 章立て要約
+## Chapter Summary
 
-1. 自律度昇格・降格（L1 採点の手順と記録様式、昇格判定は実測後、重大インシデント時の即 L1 降格）
-2. needs-human 対応フロー（仕様修正 → ready 戻し、タスク分割の判断基準）
-3. failure-catalog の読み方と sign 昇格（signs-proposed.md → PROMPT 反映の人間判断）
-4. 予算監視（status の見方、超過時の対処）
-5. トラブルシュート（doctor、トリガー不発、flock 残留、worktree 残骸）
+1. Autonomy promotion/demotion (L1 scoring procedure and record template, promotion decided after measurement, immediate demotion to L1 on a serious incident)
+2. needs-human handling flow (specification fix → return to ready, criteria for splitting a task)
+3. Reading the failure-catalog and sign promotion (signs-proposed.md → human judgment for reflecting into PROMPT)
+4. Budget monitoring (how to read status, handling overruns)
+5. Troubleshooting (doctor, trigger misfire, flock remnants, worktree remnants)
 
-## 実測後に記入する項目一覧（骨子の未確定点）
+## List of Items to Fill In After Measurement (Undetermined Points of the Skeleton)
 
-| 項目 | セクション | 確定時期 |
+| Item | Section | Confirmation timing |
 |---|---|---|
-| L1 昇格閾値（妥当率 N% / M 晩連続）・必要採点晩数 | §1.3 | Phase 2 完了時（10 晩実測後） |
-| L2→L3 追加条件（レビュー承認率） | §1.3 | Phase 3 |
-| タスク分割の平均所要イテレーション基準 | §2.3 | Phase 2 |
-| sign 採用の再発頻度基準・反映効果 | §3.2 | Phase 2 |
-| 予算パラメータの調整値・月次見込み | §4.2 | Phase 2 |
-| トリガー発火成功率 | §5.2 | Phase 1 起動テスト |
+| L1 promotion threshold (validity rate N% / M consecutive nights), required scored nights | §1.3 | At Phase 2 completion (after 10 nights of measurement) |
+| L2→L3 additional condition (review approval rate) | §1.3 | Phase 3 |
+| Average-iterations criterion for task splitting | §2.3 | Phase 2 |
+| Recurrence-frequency criterion for sign adoption, reflection effect | §3.2 | Phase 2 |
+| Adjusted budget parameters, monthly projection | §4.2 | Phase 2 |
+| Trigger firing success rate | §5.2 | Phase 1 launch test |

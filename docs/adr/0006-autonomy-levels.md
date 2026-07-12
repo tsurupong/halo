@@ -1,37 +1,37 @@
-# ADR-0006: 自律度レベル（L1→L3）の sink フィルタ実装
+# ADR-0006: Sink-Filter Implementation of Autonomy Levels (L1→L3)
 
 **Date**: 2026-07-09
 **Status**: accepted
-**Deciders**: 本人（HALO要件定義書 v1.5 §3.2 原則6・§4.2⑤ より記録）
+**Deciders**: Owner (recorded from HALO Requirements Specification v1.5 §3.2 Principle 6 / §4.2⑤)
 
 ## Context
 
-自律ループの権限を一気に全開にすると、新規プラグイン導入時や新ループ立ち上げ時の判断品質を観察できないまま実害（不良 PR・コスト浪費）が出る。権限を段階的に引き上げる仕組みが必要で、かつ機能追加の Phase とは独立に上下できる必要がある。
+Opening the autonomous loop's permissions wide all at once causes real harm (bad PRs, wasted cost) before we can observe the judgment quality when introducing new plugins or launching a new loop. A mechanism to raise permissions gradually is needed, and it must be able to go up and down independently of the feature-addition Phases.
 
 ## Decision
 
-実行時パラメータ `AUTONOMY`（L1=報告のみ / L2=commit + draft PR / L3=PR 作成まで無人）を持ち、各 sink がメタデータ `# min-autonomy:` を宣言、コアが現在値未満の sink をスキップするフィルタとして実装する。新規ループ・新規プラグイン導入直後は必ず L1 から開始し、実測データ（10晩分の採点）に基づく閾値で昇格する。Phase（機能軸）と自律度（権限軸）は直交させる。
+Hold a runtime parameter `AUTONOMY` (L1 = report only / L2 = commit + draft PR / L3 = unattended through PR creation). Each sink declares the metadata `# min-autonomy:`, and the core implements a filter that skips sinks below the current value. A new loop and any newly introduced plugin always start at L1, and are promoted based on thresholds derived from measured data (scoring over 10 nights). Keep Phase (the feature axis) and autonomy (the permission axis) orthogonal.
 
 ## Alternatives Considered
 
-### 代替案1: コアループ内の条件分岐で権限制御
-- **Pros**: 実装が直感的
-- **Cons**: 自律度の追加・変更のたびにコア改変が必要。ポート＆アダプタ原則（ADR-0001）に反する
-- **Why not**: sink 側の宣言 + コアの汎用フィルタなら、新 sink 追加時も自律度対応が1行で済む
+### Alternative 1: Permission control via conditionals inside the core loop
+- **Pros**: Intuitive to implement.
+- **Cons**: Adding or changing an autonomy level requires modifying the core. Contradicts the ports & adapters principle (ADR-0001).
+- **Why not**: With sink-side declarations + a generic core filter, autonomy support for a newly added sink is a single line.
 
-### 代替案2: プロファイルごとに sink.d の中身を差し替え
-- **Pros**: 機構追加ゼロ
-- **Cons**: sink ファイル群の複製管理が発生し、L2/L3 で内容が乖離していく
-- **Why not**: 同一 sink 群 + フィルタの方が DRY
+### Alternative 2: Swapping the contents of sink.d per profile
+- **Pros**: Zero added mechanism.
+- **Cons**: Duplicate management of the sink file sets arises, and their contents diverge between L2/L3.
+- **Why not**: A single sink set + a filter is more DRY.
 
 ## Consequences
 
 ### Positive
-- 昇格・降格が環境変数1つの変更で完結（プロファイルで束ねられる）
-- 重大インシデント（自己改変検出・機密アクセス試行）1件で即 L1 降格が運用可能
+- Promotion and demotion are completed by changing a single environment variable (can be bundled via profiles).
+- A single critical incident (self-modification detection, an attempt to access secrets) can operationally trigger an immediate demotion to L1.
 
 ### Negative
-- 昇格閾値は Phase 2 の実測（10晩分）まで置けない（実測なしの閾値は偽の精度、と意図的に判断）
+- Promotion thresholds cannot be set until Phase 2 measurements (over 10 nights) exist (a threshold without measurement is false precision — an intentional judgment).
 
 ### Risks
-- L1 観察の採点が人間の負担になる → logs/ への構造化保存で採点コストを最小化
+- Scoring L1 observations burdens the human → minimized by structured storage under logs/.

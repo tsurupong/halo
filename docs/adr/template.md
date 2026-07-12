@@ -1,35 +1,35 @@
-# ADR-NNNN: [決定タイトル]
+# ADR-NNNN: [Decision Title]
 
 **Date**: YYYY-MM-DD
 **Status**: proposed | accepted | deprecated | superseded by ADR-NNNN
-**Deciders**: [関与者]
+**Deciders**: [participants]
 
 ## Context
 
-この決定・変更を動機づけている課題は何か？
+What problem is motivating this decision or change?
 
-[状況・制約・働いている力を2〜5文で]
+[The situation, constraints, and forces at play, in 2–5 sentences]
 
 ## Decision
 
-何を提案・実施するのか？
+What are we proposing or doing?
 
-[決定を1〜3文で明確に]
+[State the decision clearly in 1–3 sentences]
 
 ## Alternatives Considered
 
-### 代替案1: [名前]
-- **Pros**: [利点]
-- **Cons**: [欠点]
-- **Why not**: [却下した具体的理由]
+### Alternative 1: [name]
+- **Pros**: [advantages]
+- **Cons**: [disadvantages]
+- **Why not**: [the specific reason it was rejected]
 
 ## Consequences
 
 ### Positive
-- [利点]
+- [advantages]
 
 ### Negative
-- [トレードオフ]
+- [trade-offs]
 
 ### Risks
-- [リスクと緩和策]
+- [risks and mitigations]

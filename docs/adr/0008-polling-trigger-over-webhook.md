@@ -1,38 +1,38 @@
-# ADR-0008: トリガーはポーリング方式を採用（webhook 不採用）
+# ADR-0008: Adopt a Polling Trigger (no webhook)
 
 **Date**: 2026-07-09
 **Status**: accepted
-**Deciders**: 本人（HALO要件定義書 v1.5 §4.4 より記録）
+**Deciders**: Owner (recorded from HALO Requirements Specification v1.5 §4.4)
 
 ## Context
 
-コアループの起動方式が必要。実行環境は WSL2 単一マシンで、公開エンドポイントを持たない。GitHub Issue の投入からタスク実行までの遅延と、受け口常駐のコスト・セキュリティリスクのトレードオフがある。
+A startup method for the core loop is needed. The execution environment is a single WSL2 machine with no public endpoint. There is a trade-off between the delay from GitHub Issue submission to task execution and the cost/security risk of a resident receiver.
 
 ## Decision
 
-trigger は交換可能なアダプタ（install / uninstall / fire の3スクリプト）とし、初期実装は `schedule/`（Windows タスクスケジューラ、WSL2 VM 起動を兼ねる一次トリガー）と `polling/`（15分間隔の高頻度起動 + プリフライトの「ready タスク 0 件なら即終了」）とする。webhook は不採用。
+Make the trigger an interchangeable adapter (three scripts: install / uninstall / fire), with the initial implementations being `schedule/` (the Windows Task Scheduler, a primary trigger that also serves to boot the WSL2 VM) and `polling/` (high-frequency startup at 15-minute intervals + preflight's "exit immediately if zero ready tasks"). Webhook is not adopted.
 
 ## Alternatives Considered
 
-### 代替案1: webhook（GitHub Issue イベントの直接受信）
-- **Pros**: 遅延最小（イベント駆動）
-- **Cons**: 受け口の常駐プロセスとトンネル（公開導線）が必要。公開入力→ローカル実行の導線はプロンプトインジェクション面で危険
-- **Why not**: ポーリング + 0件即終了で実質的なタスク存在駆動が実現でき、15分の遅延は夜間無人稼働の用途で問題にならない。遅延要件が実測で問題化した場合のみ再検討（trigger 差し替えのみで対応可能な構造は確保済み）
+### Alternative 1: Webhook (directly receiving GitHub Issue events)
+- **Pros**: Minimal delay (event-driven).
+- **Cons**: Requires a resident receiver process and a tunnel (public inbound path). A path of public input → local execution is dangerous from a prompt-injection standpoint.
+- **Why not**: Polling + immediate exit on zero tasks achieves effectively task-existence-driven behavior, and a 15-minute delay is not a problem for nightly unattended operation. Reconsider only if the delay requirement becomes a measured problem (a structure addressable by swapping the trigger alone is already secured).
 
-### 代替案2: 常駐デーモン（systemd timer / cron 常時監視）
-- **Pros**: WSL2 内で完結
-- **Cons**: WSL2 VM は自動停止するため、VM 停止中はトリガー自体が発火しない
-- **Why not**: Windows タスクスケジューラを一次トリガーにすることで VM 起動を兼ねる必要がある
+### Alternative 2: A resident daemon (systemd timer / cron continuous monitoring)
+- **Pros**: Self-contained within WSL2.
+- **Cons**: Because the WSL2 VM auto-stops, the trigger itself does not fire while the VM is stopped.
+- **Why not**: Making the Windows Task Scheduler the primary trigger is needed so it also serves to boot the VM.
 
 ## Consequences
 
 ### Positive
-- 公開エンドポイントゼロでインジェクション導線を作らない
-- run.sh 以下はトリガーが何かを知らないため、将来 webhook / manual への差し替えがファイル操作のみで可能
+- Zero public endpoints, creating no injection path.
+- Everything under run.sh is unaware of what the trigger is, so a future swap to webhook / manual is possible by file operations alone.
 
 ### Negative
-- 最大15分（ポーリング間隔）のタスク着手遅延
-- 高頻度起動に伴い、日次予算・flock・軽量プリフライトによる総量制御が必須になる（run.sh 標準装備として対応）
+- Up to 15 minutes (the polling interval) of delay before starting a task.
+- High-frequency startup makes total-volume control via a daily budget, flock, and lightweight preflight mandatory (addressed as standard equipment in run.sh).
 
 ### Risks
-- スケジュール多重起動による worktree 破壊 → flock 排他 + プロファイル TIMEOUT で回避
+- Worktree destruction from concurrent schedule startups → avoided by flock exclusion + a profile TIMEOUT.

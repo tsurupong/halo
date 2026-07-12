@@ -1,39 +1,39 @@
-# ADR-0003: KuzuDB 採用とマージ駆動再インデックス（watch 不採用）
+# ADR-0003: Adopting KuzuDB and Merge-Driven Reindexing (no watch)
 
 **Date**: 2026-07-09
 **Status**: accepted
-**Deciders**: 本人（HALO要件定義書 v1.5 §5.1〜5.2 より記録）
+**Deciders**: Owner (recorded from HALO Requirements Specification v1.5 §5.1–5.2)
 
 ## Context
 
-コードグラフ（CodeGraphContext）とナレッジグラフのバックエンドが必要。個人検証環境（WSL2 単一マシン）でサーバー常駐を避けたい。また使い捨て worktree 方式（ADR-0002）の下でグラフの更新タイミングを決める必要がある。
+A backend is needed for the code graph (CodeGraphContext) and the knowledge graph. We want to avoid a resident server in a personal verification environment (a single WSL2 machine). We also need to decide when the graph is updated under the disposable worktree approach (ADR-0002).
 
 ## Decision
 
-バックエンドは KuzuDB（組み込み・ファイル1個・サーバー不要）とする。更新は「マージ駆動 + プリフライト」（案A）: ループ起動時に main が前回インデックスから進んでいれば再インデックスする。ループ実行中のグラフは main 基準の read-only スナップショットとして全 worktree で共有し、不変とする。
+The backend is KuzuDB (embedded, single file, no server). Updates are "merge-driven + preflight" (Option A): on loop startup, reindex if main has advanced from the previous index. During loop execution the graph is shared across all worktrees as a read-only snapshot based on main, and is immutable.
 
 ## Alternatives Considered
 
-### 代替案1: Neo4j
-- **Pros**: エコシステム成熟、複数プロセス書込対応
-- **Cons**: サーバー常駐・運用コスト。個人検証段階ではオーバースペック
-- **Why not**: 必要になってから移行する（保留判断として記録）
+### Alternative 1: Neo4j
+- **Pros**: Mature ecosystem, supports multi-process writes.
+- **Cons**: Resident server and operational cost. Overkill at the personal verification stage.
+- **Why not**: Migrate once the need arises (recorded as a deferred decision).
 
-### 代替案2: watch モードによるリアルタイム更新
-- **Pros**: グラフ鮮度が常に最新
-- **Cons**: 監視対象が main ではなく生滅する worktree になり、グラフが中間状態で汚染される
-- **Why not**: 使い捨て worktree 方式と構造的に両立しない
+### Alternative 2: Real-time updates via watch mode
+- **Pros**: Graph freshness is always current.
+- **Cons**: The watch target becomes the ephemeral worktrees rather than main, contaminating the graph with intermediate states.
+- **Why not**: Structurally incompatible with the disposable worktree approach.
 
 ## Consequences
 
 ### Positive
-- サーバー管理ゼロ、グラフDBはファイル1個（graphs/*.kuzu）
-- ループ実行中グラフ不変により、イテレーション間のコンテキスト再現性が担保される
-- KuzuDB の単一プロセス書込制約を「プリフライト時1回のみ書込」で構造的に回避
+- Zero server management; the graph DB is a single file (graphs/*.kuzu).
+- Immutability of the graph during loop execution guarantees context reproducibility across iterations.
+- KuzuDB's single-process write constraint is structurally avoided by "writing only once, at preflight."
 
 ### Negative
-- マージ〜次回プリフライトの間はグラフが陳腐化する（双方向自動反映で緩和: docs マージ → sink 35-reindex、code 変更 → 陳腐化検出 → kind:docs 自動起票）
+- The graph goes stale between a merge and the next preflight (mitigated by bidirectional auto-reflection: docs merge → sink 35-reindex, code change → staleness detection → auto-file a kind:docs Issue).
 
 ### Risks
-- 並列時のロック競合 → read-only スナップショット共有で回避（§10）
-- Neo4j 移行時の Cypher 方言差 → 初期ツールを 2 つ（search_docs / trace_spec_to_code）に絞り移行面を最小化
+- Lock contention during parallelism → avoided by sharing a read-only snapshot (§10).
+- Cypher dialect differences when migrating to Neo4j → the migration surface is minimized by limiting the initial tools to two (search_docs / trace_spec_to_code).

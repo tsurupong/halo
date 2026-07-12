@@ -1,151 +1,151 @@
-# D6. グラフ設計書（HALO Graph Design）
+# D6. Graph Design (HALO Graph Design)
 
-| 項目 | 内容 |
+| Item | Content |
 |---|---|
-| 文書バージョン | 1.0 |
-| 前提 | HALO要件定義書 v1.8 を最上位文書とし、[D1 コントラクト仕様書](./d1-contract-spec.md)（特に §4 kg:// URI）に整合する |
-| 位置づけ | **私有**。グラフ統合プラグイン群（`ports/mcp.d/`・`mcp-knowledge/`・context.d・docs-md runtime・sink 35）の実装仕様 |
-| 公開/私有 | **私有**（グラフは自プロジェクト固有の知識資産であり OSS 配布対象外。コアと契約は D1 が公開 API を規定する） |
-| 典拠 | 要件定義書 v1.8 §5（コンテキスト層）・§11.1、[ADR-0003](../adr/0003-kuzudb-merge-driven-reindex.md)・[ADR-0005](../adr/0005-knowledge-graph-schema-granularity.md)・[ADR-0011](../adr/0011-specs-abolition-graph-consolidation.md) |
-| 素材 | [詳細設計 05](./05-context-layer-graphs.md)（v1.5 素材。KuzuDB DDL 等を流用し、v1.8 のグラフ一元化＝specs/ 廃止に合わせて改訂） |
-| 作成タイミング | **Phase 4 着手前**（ナレッジグラフ導入・kg:// 参照と凍結性担保の有効化に先立つ） |
+| Document version | 1.0 |
+| Prerequisites | The HALO Requirements Specification v1.8 is the top-level document; consistent with [D1 Contract Specification](./d1-contract-spec.md) (especially §4 kg:// URI) |
+| Positioning | **Private**. The implementation specification for the graph integration plugin group (`ports/mcp.d/`, `mcp-knowledge/`, context.d, docs-md runtime, sink 35) |
+| Public/Private | **Private** (the graph is a knowledge asset specific to the project itself and is not a target of OSS distribution. The core and contracts have their public API defined by D1) |
+| Basis | Requirements Specification v1.8 §5 (context layer) / §11.1, [ADR-0003](../adr/0003-kuzudb-merge-driven-reindex.md) / [ADR-0005](../adr/0005-knowledge-graph-schema-granularity.md) / [ADR-0011](../adr/0011-specs-abolition-graph-consolidation.md) |
+| Source material | [Detailed Design 05](./05-context-layer-graphs.md) (v1.5 material. Reuses the KuzuDB DDL etc. and revised to match v1.8's graph consolidation = specs/ abolition) |
+| Authoring timing | **Before Phase 4 begins** (preceding the introduction of the knowledge graph and enabling kg:// references and freeze-guarantee) |
 
-> 本書は要件定義書 §5 を実装レベルまで詳細化したものであり、要件と矛盾する内容は導入しない。数値・細部で要件に未定義の箇所は「初期値（仮）」と明示する（§11.2 準拠）。
+> This document details Requirements Specification §5 down to the implementation level and does not introduce content that contradicts the requirements. For points where numbers or details are undefined in the requirements, it explicitly marks them as "initial value (tentative)" (per §11.2).
 
 ---
 
-## 0. スコープと全体像
+## 0. Scope and overview
 
-コンテキスト層は 2 種のグラフ（コードグラフ / ナレッジグラフ）を持ち、いずれも **KuzuDB**（組み込み・ファイル 1 個・サーバー不要、ADR-0003）をバックエンドとする。両グラフは 2 ファイルに分離して格納する。
+The context layer holds 2 kinds of graphs (code graph / knowledge graph), both backed by **KuzuDB** (embedded, a single file, no server required, ADR-0003). The two graphs are stored separately in 2 files.
 
-| グラフ | ファイル | 生成主体 | MCP サーバー | 書込 |
+| Graph | File | Producer | MCP server | Write |
 |---|---|---|---|---|
-| コードグラフ | `graphs/code.kuzu` | CodeGraphContext（tree-sitter・LLM 不使用） | `codegraph`（`ports/mcp.d/10-codegraph.json`） | プリフライト時のみ |
-| ナレッジグラフ | `graphs/knowledge.kuzu` | 人間設計 + sink 35 の機械抽出 | `knowledge`（`ports/mcp.d/20-knowledge.json`、実体 `mcp-knowledge/`） | 手作業 + sink 35 の 2 経路（ADR-0011） |
+| Code graph | `graphs/code.kuzu` | CodeGraphContext (tree-sitter, no LLM) | `codegraph` (`ports/mcp.d/10-codegraph.json`) | Only during preflight |
+| Knowledge graph | `graphs/knowledge.kuzu` | Human-designed + machine extraction by sink 35 | `knowledge` (`ports/mcp.d/20-knowledge.json`, actual body `mcp-knowledge/`) | 2 routes: manual + sink 35 (ADR-0011) |
 
-責務分離（ADR-0005）:
+Responsibility separation (ADR-0005):
 
-- **コードグラフ** = 自動生成領域。機械が事実として読み取れる構造情報（呼び出し関係・定義位置・デッドコード）。
-- **ナレッジグラフ** = 人間設計領域。設計意図・ユビキタス言語・決定という暗黙知。**要件・仕様・受け入れ条件の一元管理先**（ADR-0011: specs/ ディレクトリは持たない）。
-- 両者は `IMPLEMENTED_BY`（集約ノード → ディレクトリパス）でのみ論理接続し、フィールドレベルの二重管理を避ける。
+- **Code graph** = the auto-generated domain. Structural information a machine can read as fact (call relationships, definition locations, dead code).
+- **Knowledge graph** = the human-designed domain. Tacit knowledge such as design intent, ubiquitous language, and decisions. **The single management site for requirements, specifications, and acceptance criteria** (ADR-0011: it has no specs/ directory).
+- The two are logically connected only via `IMPLEMENTED_BY` (aggregate node → directory path), avoiding dual management at the field level.
 
-本書が規定する 7 項目:
+The 7 items this document defines:
 
-| # | 節 | 内容 |
+| # | Section | Content |
 |---|---|---|
-| 1 | §1 | KuzuDB スキーマ DDL（ノード 5 種・エッジ 5 種） |
-| 2 | §2 | kg:// URI の解決実装 |
-| 3 | §3 | コードグラフ（CGC）の取り込みとプリフライト再インデックス（案 A） |
-| 4 | §4 | 陳腐化検出 → `kind:docs` 自動起票のロジック |
-| 5 | §5 | 用語集整合チェック（deprecated / synonyms、禁止語のみ block） |
-| 6 | §6 | MCP ツール定義（`search_docs` / `trace_spec_to_code`、Agentic RAG） |
-| 7 | §7 | 要件の投入手順（原本 md → グラフノード化） |
+| 1 | §1 | KuzuDB schema DDL (5 node kinds, 5 edge kinds) |
+| 2 | §2 | Resolution implementation for kg:// URIs |
+| 3 | §3 | Code graph (CGC) ingestion and preflight re-indexing (Plan A) |
+| 4 | §4 | Staleness detection → `kind:docs` auto-issue logic |
+| 5 | §5 | Glossary consistency check (deprecated / synonyms, block on forbidden terms only) |
+| 6 | §6 | MCP tool definitions (`search_docs` / `trace_spec_to_code`, Agentic RAG) |
+| 7 | §7 | Procedure for loading requirements (source md → graph nodes) |
 
 ---
 
-## 1. KuzuDB スキーマ DDL
+## 1. KuzuDB schema DDL
 
-### 1.1 スキーマ粒度（確定 = ADR-0005 / §11.1）
+### 1.1 Schema granularity (finalized = ADR-0005 / §11.1)
 
-ノード **5 種**・エッジ **5 種**で開始し、エンティティ・フィールドレベルには下ろさない。橋渡しエッジ `IMPLEMENTED_BY` は集約 → ディレクトリパスで張る。
+Start with **5 node kinds** and **5 edge kinds**, and do not descend to the entity/field level. The bridging edge `IMPLEMENTED_BY` is drawn from aggregate → directory path.
 
-- **ノード 5 種**: 境界づけられたコンテキスト（BoundedContext）/ 集約（Aggregate）/ ドメイン用語（DomainTerm）/ 文書（Document）/ 決定（Decision）
-- **エッジ 5 種**: `BELONGS_TO` / `DEFINED_IN` / `IMPLEMENTED_BY` / `SUPERSEDES` / `AFFECTS`
+- **5 node kinds**: BoundedContext / Aggregate / DomainTerm / Document / Decision
+- **5 edge kinds**: `BELONGS_TO` / `DEFINED_IN` / `IMPLEMENTED_BY` / `SUPERSEDES` / `AFFECTS`
 
-kg:// URI のノード種別（D1 §4.1）と本スキーマの対応:
+Correspondence between kg:// URI node types (D1 §4.1) and this schema:
 
-| kg:// node-type | NODE TABLE | PRIMARY KEY の値域 |
+| kg:// node-type | NODE TABLE | PRIMARY KEY value domain |
 |---|---|---|
-| `context` | `BoundedContext` | ドメイン境界のスラグ（例 `billing`） |
-| `aggregate` | `Aggregate` | 集約のスラグ（例 `invoice`） |
-| `term` | `DomainTerm` | 用語のスラグ |
-| `document` | `Document` | 文書のスラグ（例 `auth-login`） |
-| `decision` | `Decision` | 決定 ID の小文字スラグ（例 `adr-0005`、原本の ADR 採番 0005 に対応） |
+| `context` | `BoundedContext` | Domain boundary slug (e.g. `billing`) |
+| `aggregate` | `Aggregate` | Aggregate slug (e.g. `invoice`) |
+| `term` | `DomainTerm` | Term slug |
+| `document` | `Document` | Document slug (e.g. `auth-login`) |
+| `decision` | `Decision` | Lowercase slug of the decision ID (e.g. `adr-0005`, corresponding to the original ADR number 0005) |
 
-> **kg:// URI の `id` = ノードの PRIMARY KEY**。この一致が §2 の解決実装の基礎である。ID はスラグ（kebab-case 推奨）で一意とする。
+> **The `id` of a kg:// URI = the node's PRIMARY KEY.** This match is the basis of the resolution implementation in §2. The ID is a slug (kebab-case recommended) and is unique.
 
-### 1.2 ナレッジグラフ DDL（`graphs/knowledge.kuzu`）
+### 1.2 Knowledge graph DDL (`graphs/knowledge.kuzu`)
 
-KuzuDB は構造化スキーマを要求するため、ノードは `NODE TABLE`、エッジは `REL TABLE` として定義する。以下が初期 DDL（手書き Cypher で投入）。
+Because KuzuDB requires a structured schema, nodes are defined as `NODE TABLE` and edges as `REL TABLE`. The following is the initial DDL (loaded via hand-written Cypher).
 
 ```cypher
--- ============ ノードテーブル（5種）============
+-- ============ Node tables (5 kinds) ============
 
--- ① 境界づけられたコンテキスト（Bounded Context）
+-- (1) Bounded Context
 CREATE NODE TABLE BoundedContext (
-    id        STRING,        -- kg://context/<id> の <id>（例: "billing"）
-    name      STRING,        -- 表示名（例: "課金コンテキスト"）
-    summary   STRING,        -- 概要
+    id        STRING,        -- the <id> of kg://context/<id> (e.g. "billing")
+    name      STRING,        -- display name (e.g. "Billing Context")
+    summary   STRING,        -- summary
     PRIMARY KEY (id)
 );
 
--- ② 集約（Aggregate）: 橋渡しの起点。dir_path が実装へのリンク
+-- (2) Aggregate: the origin of the bridge. dir_path is the link to the implementation
 CREATE NODE TABLE Aggregate (
-    id        STRING,        -- kg://aggregate/<id>（例: "invoice"）
-    name      STRING,        -- 集約名（例: "Invoice"）
-    dir_path  STRING,        -- 実装ディレクトリパス（IMPLEMENTED_BY の根拠）
+    id        STRING,        -- kg://aggregate/<id> (e.g. "invoice")
+    name      STRING,        -- aggregate name (e.g. "Invoice")
+    dir_path  STRING,        -- implementation directory path (basis for IMPLEMENTED_BY)
     summary   STRING,
     PRIMARY KEY (id)
 );
 
--- ③ ドメイン用語（ユビキタス言語）
+-- (3) Domain term (ubiquitous language)
 CREATE NODE TABLE DomainTerm (
     id          STRING,      -- kg://term/<id>
-    term        STRING,      -- 用語（正）
-    definition  STRING,      -- 定義
-    synonyms    STRING,      -- 許容同義語（カンマ区切り。整合チェックで警告のみ）
-    deprecated  STRING,      -- 禁止語（カンマ区切り。違反は block 対象）
+    term        STRING,      -- term (canonical)
+    definition  STRING,      -- definition
+    synonyms    STRING,      -- allowed synonyms (comma-separated; consistency check warns only)
+    deprecated  STRING,      -- forbidden terms (comma-separated; a violation is a block)
     PRIMARY KEY (id)
 );
 
--- ④ 文書（設計書 / ADR / 要件 / 用語集）
+-- (4) Document (design doc / ADR / requirement / glossary)
 CREATE NODE TABLE Document (
-    id        STRING,        -- kg://document/<id>（例: "auth-login"）
+    id        STRING,        -- kg://document/<id> (e.g. "auth-login")
     title     STRING,
-    path      STRING,        -- 原本の相対パス（管理は HALO 関知外。任意）
+    path      STRING,        -- source relative path (management is outside HALO's concern; optional)
     doc_type  STRING,        -- "design" | "adr" | "requirement" | "glossary"
-    body_hash STRING,        -- 投入時点の原本ハッシュ（陳腐化検出・凍結性照合用）
+    body_hash STRING,        -- source hash at ingestion time (for staleness detection / freeze verification)
     PRIMARY KEY (id)
 );
 
--- ⑤ 決定（Decision / ADR の意思決定単位）
+-- (5) Decision (Decision / the ADR decision unit)
 CREATE NODE TABLE Decision (
-    id        STRING,        -- kg://decision/<id>（例: "adr-0005"）
+    id        STRING,        -- kg://decision/<id> (e.g. "adr-0005")
     title     STRING,
     status    STRING,        -- "accepted" | "superseded" | "proposed"
     date      STRING,        -- ISO8601
     PRIMARY KEY (id)
 );
 
--- ============ エッジテーブル（5種）============
+-- ============ Edge tables (5 kinds) ============
 
--- BELONGS_TO: 集約 → 境界づけられたコンテキスト（帰属）
+-- BELONGS_TO: aggregate → bounded context (belonging)
 CREATE REL TABLE BELONGS_TO (
     FROM Aggregate TO BoundedContext
 );
 
--- DEFINED_IN: ドメイン用語/決定 → 文書（どの文書で定義されたか）
+-- DEFINED_IN: domain term/decision → document (which document defined it)
 CREATE REL TABLE DEFINED_IN (
     FROM DomainTerm TO Document,
     FROM Decision   TO Document
 );
 
--- IMPLEMENTED_BY: 集約 → 集約（確度メタを保持する自己起点保持）
---   対向コードは別DB(code.kuzu)にあり物理エッジを張れないため、
---   dir_path 文字列を鍵にした論理結合とする（§2.3・§6.2）。
+-- IMPLEMENTED_BY: aggregate → aggregate (held on its own origin to carry confidence meta)
+--   The counterpart code is in a separate DB (code.kuzu) and no physical edge can be
+--   drawn, so it is a logical join keyed on the dir_path string (§2.3 / §6.2).
 CREATE REL TABLE IMPLEMENTED_BY (
     FROM Aggregate TO Aggregate,
-    dir_path   STRING,             -- 実装ディレクトリ（冗長保持=検索高速化）
+    dir_path   STRING,             -- implementation directory (redundantly held = faster search)
     confidence STRING,             -- "explicit" | "inferred" | "reviewed"
-    source     STRING              -- 抽出根拠（"link" | "ai" | "human"）
+    source     STRING              -- extraction basis ("link" | "ai" | "human")
 );
 
--- SUPERSEDES: 決定 → 決定（新決定が旧決定を廃止）
+-- SUPERSEDES: decision → decision (a new decision supersedes an old one)
 CREATE REL TABLE SUPERSEDES (
     FROM Decision TO Decision
 );
 
--- AFFECTS: 決定 → 境界づけられたコンテキスト/集約/文書（影響範囲）
+-- AFFECTS: decision → bounded context/aggregate/document (impact scope)
 CREATE REL TABLE AFFECTS (
     FROM Decision TO BoundedContext,
     FROM Decision TO Aggregate,
@@ -153,226 +153,226 @@ CREATE REL TABLE AFFECTS (
 );
 ```
 
-> **補足（マルチペア関係）**: KuzuDB は 1 つの `REL TABLE` に複数の `FROM ... TO ...` を宣言できる。`DEFINED_IN` / `AFFECTS` はこれで複数の起点・終点型を 1 テーブルに収める。`IMPLEMENTED_BY` の対向は本来コード側ノードだが、コードグラフは別 DB（`code.kuzu`）にあり DB をまたぐ物理エッジは張れない。よって橋渡しは **`Aggregate.dir_path` 文字列を鍵にした論理結合**とし、エッジ自身は確度メタ（`confidence` / `source`）を保持するために集約起点で持つ。
+> **Note (multi-pair relationships)**: KuzuDB can declare multiple `FROM ... TO ...` in a single `REL TABLE`. `DEFINED_IN` / `AFFECTS` use this to hold multiple source/target types in one table. The counterpart of `IMPLEMENTED_BY` is originally a code-side node, but the code graph is in a separate DB (`code.kuzu`) and physical edges cannot span DBs. Therefore the bridge is a **logical join keyed on the `Aggregate.dir_path` string**, and the edge itself is held on the aggregate side in order to carry the confidence meta (`confidence` / `source`).
 
-### 1.3 コードグラフのスキーマ
+### 1.3 Code graph schema
 
-コードグラフは CodeGraphContext（tree-sitter）が自動生成する領域であり、スキーマ・DDL は CGC の実装に従う（本書では規定しない）。HALO 側が依存するのは CGC が公開する MCP ツール（`find_code` / `analyze_code_relationships` / `find_dead_code` / `execute_cypher_query`）と、再インデックス判定用メタ（§3.2）のみである。
+The code graph is a domain auto-generated by CodeGraphContext (tree-sitter), and its schema/DDL follow CGC's implementation (not defined in this document). What the HALO side depends on is only the MCP tools CGC exposes (`find_code` / `analyze_code_relationships` / `find_dead_code` / `execute_cypher_query`) and the meta for the re-index decision (§3.2).
 
-### 1.4 スキーマ拡張の方針（ADR-0005）
+### 1.4 Schema extension policy (ADR-0005)
 
-- エッジ追加は「開始セット」からの拡張として許容する。
-- **ノード種の追加は再検討事項**（安易に増やさない）。5 種で表現しきれない知識が出現した時点で ADR を起票する。
-- `Document.doc_type` の `spec` は **v1.8 で `requirement` に改称**（ADR-0011: specs/ 廃止に伴い「仕様ファイル」概念が消え、要件そのものが Document ノードになるため。§9 参照）。
+- Adding edges is permitted as an extension from the "starting set."
+- **Adding node kinds is a matter for reconsideration** (do not increase them lightly). At the point where knowledge appears that the 5 kinds cannot fully express, raise an ADR.
+- `Document.doc_type`'s `spec` is **renamed to `requirement` in v1.8** (ADR-0011: with the abolition of specs/, the "specification file" concept disappears, and the requirement itself becomes a Document node. See §9).
 
 ---
 
-## 2. kg:// URI の解決実装
+## 2. Resolution implementation for kg:// URIs
 
-### 2.1 URI 形式（D1 §4 に整合）
+### 2.1 URI form (consistent with D1 §4)
 
 ```
 kg://<node-type>/<node-id>
 ```
 
-| 要素 | 説明 | 例 |
+| Element | Description | Example |
 |---|---|---|
-| `<node-type>` | ナレッジグラフのノード種別（5 種） | `document` / `decision` / `term` / `context` / `aggregate` |
-| `<node-id>` | 種別内で一意のスラグ（= PRIMARY KEY） | `auth-login` / `rate-limit-policy` |
+| `<node-type>` | Knowledge graph node kind (5 kinds) | `document` / `decision` / `term` / `context` / `aggregate` |
+| `<node-id>` | Slug unique within the kind (= PRIMARY KEY) | `auth-login` / `rate-limit-policy` |
 
-D1 は「形式と『グラフノードを指す』という意味のみ」を規定し、**解決実装は本書（私有）の管轄**とする（D1 §4.2）。
+D1 defines only "the form and the meaning of 'pointing to a graph node'," and **the resolution implementation is under this document's (private) purview** (D1 §4.2).
 
-### 2.2 解決アルゴリズム
+### 2.2 Resolution algorithm
 
-`knowledge` MCP サーバー内に URI リゾルバを持つ。呼び出し元は loop-audit（gate `50-loop-audit`）と `trace_spec_to_code` の 2 つ。
+The URI resolver lives inside the `knowledge` MCP server. There are 2 callers: loop-audit (gate `50-loop-audit`) and `trace_spec_to_code`.
 
 ```
 resolve(uri):
-  1. パース:  "kg://" プレフィックス除去 → "<type>/<id>" を "/" で分割
-             型が 5 種のいずれでもなければ INVALID_TYPE を返す
-  2. 型 → テーブル対応（§1.1 の表）で NODE TABLE を決定
+  1. Parse:   strip the "kg://" prefix → split "<type>/<id>" on "/"
+             if the type is none of the 5 kinds, return INVALID_TYPE
+  2. Determine the NODE TABLE via the type → table mapping (table in §1.1)
   3. Cypher:  MATCH (n:<Table> {id:$id}) RETURN n LIMIT 1
-  4. 命中:    ノードプロパティを返す（存在 = true）
-     不命中:  NOT_FOUND を返す（存在 = false）
+  4. Hit:     return the node properties (exists = true)
+     Miss:    return NOT_FOUND (exists = false)
 ```
 
-型・パス長・スラグ形式（`^[a-z0-9][a-z0-9-]*$`）を入力境界で検証し、不正 URI は fail 理由に URI 原文を添えて返す（可観測性）。
+Validate the type, path length, and slug form (`^[a-z0-9][a-z0-9-]*$`) at the input boundary, and return an invalid URI with its original text attached to the fail reason (observability).
 
-### 2.3 loop-audit による実在検証（凍結要件の担保）
+### 2.3 Existence verification by loop-audit (guaranteeing the freeze requirement)
 
-`spec_refs`（task-source 出力の kg:// URI 配列、D1 §1.1）は loop-audit がループ開始時に検証する。
+`spec_refs` (the array of kg:// URIs in the task-source output, D1 §1.1) is verified by loop-audit at loop start.
 
-| 検査 | 内容 | 失敗時 |
+| Check | Content | On failure |
 |---|---|---|
-| 形式検証 | 各 URI が `kg://<type>/<id>` に合致するか | gate fail（exit 2） |
-| 実在検証 | `resolve(uri)` が存在 = true を返すか（グラフ read-only 照会） | gate fail（exit 2） |
-| ハッシュ照合 | `graphs/knowledge.kuzu` のハッシュがループ開始時記録と一致するか（実行中の直接改変検出、ADR-0011 (3)） | gate fail（exit 2） |
+| Form check | Whether each URI matches `kg://<type>/<id>` | gate fail (exit 2) |
+| Existence check | Whether `resolve(uri)` returns existence = true (read-only graph query) | gate fail (exit 2) |
+| Hash check | Whether the hash of `graphs/knowledge.kuzu` matches the one recorded at loop start (detecting direct modification during execution, ADR-0011 (3)) | gate fail (exit 2) |
 
-実在しない `spec_refs` を持つタスクは構造系チェック①で差し戻す（要件 §11.1）。これにより「AI がゴール（要件ノード）を発明・改変して自己正当化する」経路を塞ぐ。
+A task with non-existent `spec_refs` is bounced back by structural check ① (Requirements §11.1). This blocks the path where "the AI invents/alters the goal (requirement node) and self-justifies."
 
-> **Phase 経過措置**（ADR-0011 / D1 §4.2）: グラフ導入前（Phase 1〜3）は `spec_refs` を空とし要件を Issue 本文に直接記述する。本節の実在検証は Phase 4 のグラフ導入をもって有効化される。
+> **Phase transitional measure** (ADR-0011 / D1 §4.2): before the graph is introduced (Phases 1–3), `spec_refs` is empty and requirements are described directly in the Issue body. The existence verification in this section is enabled upon the Phase 4 graph introduction.
 
 ---
 
-## 3. コードグラフの取り込みとプリフライト再インデックス（案 A）
+## 3. Code graph ingestion and preflight re-indexing (Plan A)
 
-### 3.1 再インデックスの発火点（マージ駆動 + プリフライト）
+### 3.1 Trigger point of re-indexing (merge-driven + preflight)
 
-ADR-0003 に従い `watch` モードは採用しない（監視対象が生滅する worktree になり中間状態でグラフが汚染され、使い捨て worktree 方式と構造的に両立しないため）。再インデックスの発火点は **ループ起動時のプリフライト 1 箇所のみ**とする。
+Per ADR-0003, `watch` mode is not adopted (the watch target becomes a worktree that is created and destroyed, so the graph gets polluted with intermediate states, which is structurally incompatible with the disposable-worktree scheme). The re-index trigger point is **only the single preflight at loop launch**.
 
 ```
-run（プリフライト第1段: グラフ鮮度判定）
-  IF   main の現在 HEAD != code.kuzu に記録された last_indexed_sha
-  THEN 再インデックス実行（main 基準・単一プロセス・書込はここ1回のみ）
-       → last_indexed_sha を main HEAD に更新
-       → 陳腐化していた集約について kind:docs 起票判定へ（§4）
-  ELSE スキップ（陳腐化していない）
-  → ループ本体開始（以降グラフは不変）
+run (preflight stage 1: graph freshness decision)
+  IF   current HEAD of main != last_indexed_sha recorded in code.kuzu
+  THEN run reindex (based on main, single process, the only write happens here)
+       → update last_indexed_sha to main HEAD
+       → go to the kind:docs issue decision for stale aggregates (§4)
+  ELSE skip (not stale)
+  → start the loop body (graph is immutable thereafter)
 ```
 
-### 3.2 鮮度判定メタデータ
+### 3.2 Freshness-decision metadata
 
-| キー | 内容 | 保存先 |
+| Key | Content | Storage |
 |---|---|---|
-| `last_indexed_sha` | 前回インデックスした main の commit SHA | `code.kuzu` 内メタノード or `graphs/.code.meta` |
-| `indexed_at` | 前回インデックス時刻（ISO8601） | 同上 |
-| `schema_version` | コードグラフスキーマ版（tree-sitter 抽出ルール版） | 同上 |
+| `last_indexed_sha` | The main commit SHA indexed last time | Meta node inside `code.kuzu` or `graphs/.code.meta` |
+| `indexed_at` | Last index time (ISO8601) | Same as above |
+| `schema_version` | Code graph schema version (tree-sitter extraction rule version) | Same as above |
 
-再インデックスは差分ではなく **main 基準のフルインデックスを既定**とする（KuzuDB の単一プロセス書込制約下で状態の一貫性を最優先。差分インデックスは Phase 2 以降の最適化候補＝保留）。
+Re-indexing **defaults to a full index based on main**, not a diff (state consistency is the top priority under KuzuDB's single-process write constraint. Diff indexing is an optimization candidate for Phase 2 onward = deferred).
 
-### 3.3 排他方式（read-only スナップショット共有）
+### 3.3 Exclusion scheme (read-only snapshot sharing)
 
-KuzuDB は単一プロセスからの書込を前提とする。並列 worktree からの同時書込は構造的に禁止する。
+KuzuDB assumes writes from a single process. Simultaneous writes from parallel worktrees are structurally forbidden.
 
-| フェーズ | 主体 | アクセス | 排他手段 |
+| Phase | Actor | Access | Exclusion means |
 |---|---|---|---|
-| プリフライト | run（親プロセス単一） | 読み書き（再インデックス） | `flock`（多重起動防止のロックと共用。書込プロセスは高々 1 つ） |
-| ループ実行中 | 各 worktree のエージェント | **read-only** のみ | 書込経路を持たない（MCP は参照系ツールのみ公開） |
+| Preflight | run (single parent process) | Read-write (re-index) | `flock` (shared with the multiple-launch-prevention lock. The write process is at most 1) |
+| During loop execution | Each worktree's agent | **read-only** only | No write path (MCP exposes only reference-type tools) |
 
-要点:
+Key points:
 
-1. 書込はプリフライト時の 1 回のみ。`flock` により書込プロセスは同時に高々 1 つ。
-2. ループ実行中は全 worktree が同一の不変スナップショットを read-only で共有 → **イテレーション間のコンテキスト再現性**を担保（同じ入力 → 同じグラフ → 同じ context）。
-3. read-only 共有の実体は KuzuDB を read-only モードで開くこと。ファイルコピー不要。書込を試みる MCP ツールは `10-codegraph.json` / `20-knowledge.json` に含めない。
+1. Writes happen only once, during preflight. `flock` ensures there is at most 1 write process at a time.
+2. During loop execution, all worktrees share the same immutable snapshot read-only → guaranteeing **context reproducibility across iterations** (same input → same graph → same context).
+3. The substance of read-only sharing is opening KuzuDB in read-only mode. No file copy is required. Tools that attempt to write are not included in `10-codegraph.json` / `20-knowledge.json`.
 
 ---
 
-## 4. 陳腐化検出 → `kind:docs` 自動起票
+## 4. Staleness detection → `kind:docs` auto-issue
 
-### 4.1 陳腐化の 2 経路と反映
+### 4.1 The 2 staleness routes and their reflection
 
-マージ〜次回プリフライトの間はグラフが陳腐化する（ADR-0003 Negative）。双方向自動反映で緩和する。
+Between a merge and the next preflight, the graph goes stale (ADR-0003 Negative). It is mitigated with bidirectional auto-reflection.
 
-| 起点 | 反映経路 | 実装 |
+| Origin | Reflection route | Implementation |
 |---|---|---|
-| docs マージ | ナレッジグラフを更新 | sink `35-reindex-knowledge`（§7.3） |
-| code 変更 | 陳腐化検出 → `kind:docs` タスク自動起票（設計書と実装の乖離検知） | プリフライト第 1 段（本節） |
+| docs merge | Update the knowledge graph | sink `35-reindex-knowledge` (§7.3) |
+| code change | Staleness detection → auto-issue a `kind:docs` task (detecting divergence between design docs and implementation) | Preflight stage 1 (this section) |
 
-### 4.2 起票判定ロジック
+### 4.2 Issue-decision logic
 
-再インデックス（§3.1）で code グラフが更新された際、**`IMPLEMENTED_BY` で結ばれた集約の実装ディレクトリに変更が入ったが、対応する Document が追随していない**ケースを乖離として検出する。
+When the code graph is updated by re-indexing (§3.1), it detects as divergence the case where **the implementation directory of an aggregate linked by `IMPLEMENTED_BY` has changed, but the corresponding Document has not followed**.
 
 ```
 detect_staleness(old_sha, new_sha):
-  1. 差分ディレクトリ集合:
-       changed_dirs = git diff --name-only old_sha..new_sha → ディレクトリに正規化
-  2. 影響集約の特定:
-       FOR each IMPLEMENTED_BY エッジ e (confidence in {"explicit","reviewed"}):
-         IF e.dir_path が changed_dirs のいずれかと前方一致:
-           影響集約 a = e の起点 Aggregate
-  3. 追随判定:
-       FOR each 影響集約 a:
-         関連 Document d = a を AFFECTS 逆引き or BELONGS_TO 経由で紐づく設計文書
-         IF d.body_hash が原本の現ハッシュと不一致  → 既に人手更新済み扱い（スキップ）
-         IF d が存在し、かつ d.path が changed_dirs の diff に含まれない
-                                                → 乖離候補（コードだけ動き設計が未追随）
-  4. 起票:
-       乖離候補ごとに kind:docs Issue を自動起票（§4.3）
+  1. Changed directory set:
+       changed_dirs = git diff --name-only old_sha..new_sha → normalize to directories
+  2. Identify affected aggregates:
+       FOR each IMPLEMENTED_BY edge e (confidence in {"explicit","reviewed"}):
+         IF e.dir_path prefix-matches any of changed_dirs:
+           affected aggregate a = the origin Aggregate of e
+  3. Follow-up decision:
+       FOR each affected aggregate a:
+         related Document d = the design doc linked via AFFECTS reverse lookup or BELONGS_TO
+         IF d.body_hash != the source's current hash  → treat as already hand-updated (skip)
+         IF d exists and d.path is not included in the changed_dirs diff
+                                                → divergence candidate (only code moved, design not followed)
+  4. Issue:
+       auto-issue a kind:docs Issue per divergence candidate (§4.3)
 ```
 
-- 判定は `confidence in {explicit, reviewed}` のエッジのみを根拠にする（`inferred`= AI 推定の未レビュー分は誤検知源のため除外、ADR-0005）。
-- 判定は決定的（LLM 不使用）。差分・前方一致・ハッシュ比較のみ。
+- The decision relies only on edges with `confidence in {explicit, reviewed}` (`inferred` = unreviewed AI estimates are a source of false positives, so they are excluded, ADR-0005).
+- The decision is deterministic (no LLM). Diff, prefix match, and hash comparison only.
 
-### 4.3 起票の内容と重複抑止
+### 4.3 Issue content and duplicate suppression
 
-| 項目 | 値 |
+| Item | Value |
 |---|---|
-| ラベル | `kind:docs`, `ready`, `auto-generated` |
-| タイトル | `[docs] <集約名> の設計文書が実装に未追随` |
-| 本文 | 影響集約 ID / 変更ディレクトリ / 対象 Document の kg:// URI / 検出コミット範囲 |
-| `spec_refs` | 対象 Document・集約の kg:// URI（生成タスク自身の凍結参照） |
-| 重複抑止 | 同一 `(集約 id, 対象 Document id)` の未クローズ `auto-generated` Issue が既存なら起票しない（冪等） |
+| Labels | `kind:docs`, `ready`, `auto-generated` |
+| Title | `[docs] design doc for <aggregate name> has not followed the implementation` |
+| Body | Affected aggregate ID / changed directories / target Document's kg:// URI / detected commit range |
+| `spec_refs` | The kg:// URI of the target Document / aggregate (the generated task's own frozen reference) |
+| Duplicate suppression | If an unclosed `auto-generated` Issue with the same `(aggregate id, target Document id)` already exists, do not issue (idempotent) |
 
-起票は task-source アダプタ経由（GitHub Issues）。自律度に関わらず起票自体は行うが、docs タスクの実行是非は通常のループ・自律度フィルタに従う。
+Issuing is via the task-source adapter (GitHub Issues). Issuing itself is done regardless of autonomy, but whether the docs task is executed follows the normal loop and autonomy filter.
 
 ---
 
-## 5. 用語集整合チェック（docs-md runtime）
+## 5. Glossary consistency check (docs-md runtime)
 
-### 5.1 位置づけ
+### 5.1 Positioning
 
-`docs-md` runtime（D1 §1.7）の `test.sh` が担う動的検証。ナレッジグラフの `DomainTerm` ノードを参照し、変更文書がユビキタス言語に整合するかを検査する。グラフを品質ゲートの基盤に使う具体例（ADR-0005: 型があるから自動ゲートが書ける）。
+The dynamic verification borne by the `test.sh` of the `docs-md` runtime (D1 §1.7). It references the `DomainTerm` nodes of the knowledge graph and inspects whether the changed document is consistent with the ubiquitous language. A concrete example of using the graph as the foundation of a quality gate (ADR-0005: because there are types, you can write automatic gates).
 
-### 5.2 チェック種別と重大度
+### 5.2 Check kinds and severity
 
-| # | チェック | 根拠プロパティ | 違反時 | 重大度 |
+| # | Check | Basis property | On violation | Severity |
 |---|---|---|---|---|
-| 1 | **禁止語の使用** | `DomainTerm.deprecated`（カンマ区切り） | **block（exit 2）** | CRITICAL |
-| 2 | 同義語のゆらぎ | `DomainTerm.synonyms`（カンマ区切り） | warning（exit 0・stderr へ） | LOW |
-| 3 | 未定義用語の疑い | `term` 完全一致で命中しない専門語らしき表記 | note（exit 0・stderr へ） | NOTE |
+| 1 | **Use of a forbidden term** | `DomainTerm.deprecated` (comma-separated) | **block (exit 2)** | CRITICAL |
+| 2 | Synonym variance | `DomainTerm.synonyms` (comma-separated) | warning (exit 0, to stderr) | LOW |
+| 3 | Suspected undefined term | Technical-looking notation not hit by exact `term` match | note (exit 0, to stderr) | NOTE |
 
-**block するのは禁止語（deprecated）のみ**。synonyms のゆらぎ・未定義疑いは警告に留め、ループを止めない（過剰なゲートで自律実行が停滞するのを避ける。§11.2 の思想）。
+**Only forbidden terms (deprecated) block.** Synonym variance and suspected-undefined are kept to warnings and do not stop the loop (avoiding stalling autonomous execution with excessive gates. The philosophy of §11.2).
 
-### 5.3 判定アルゴリズム
+### 5.3 Decision algorithm
 
 ```
 glossary_check(changed_docs):
-  terms = knowledge MCP から全 DomainTerm を read-only 取得
-        （term / synonyms / deprecated を展開しインデックス化）
-  FOR each doc in changed_docs (追加・変更行のみ対象):
-    tokenize(doc 本文)
-    1. deprecated 集合と一致するトークン → violations に追加（block 対象）
-    2. synonyms 集合と一致（正 term でない）→ warnings に追加
-    3. 専門語らしき未知トークン → notes に追加
-  IF violations 非空:  禁止語一覧と代替 term を stderr に出し exit 2
-  ELSE:               warnings/notes を stderr に記録し exit 0
+  terms = read-only fetch of all DomainTerm from the knowledge MCP
+        (expand and index term / synonyms / deprecated)
+  FOR each doc in changed_docs (only added/changed lines):
+    tokenize(doc body)
+    1. token matching the deprecated set → add to violations (block target)
+    2. token matching the synonyms set (not the canonical term) → add to warnings
+    3. unknown token that looks like a technical term → add to notes
+  IF violations non-empty:  print the forbidden-term list and substitute terms to stderr, exit 2
+  ELSE:                     record warnings/notes to stderr, exit 0
 ```
 
-- 検査対象は変更差分の追加・変更行のみ（既存全文の再チェックはしない＝ノイズ抑制）。
-- 決定的（LLM 不使用）。トークン一致のみ。
-- 違反出力には必ず「代替すべき正 term」を添える（差し戻し後にエージェントが自力修正できるように）。
+- The inspection target is only the added/changed lines of the change diff (no re-check of the whole existing text = noise suppression).
+- Deterministic (no LLM). Token match only.
+- Violation output always attaches "the correct term to substitute" (so the agent can self-correct after being bounced back).
 
 ---
 
-## 6. MCP ツール定義（Agentic Graph RAG）
+## 6. MCP tool definitions (Agentic Graph RAG)
 
-### 6.1 方針
+### 6.1 Policy
 
-MCP 定義は `ports/mcp.d/20-knowledge.json`、サーバー実体は `mcp-knowledge/`。初期ツールは **2 つ**（`search_docs` / `trace_spec_to_code`）に絞る（ADR-0003: Neo4j 移行時の Cypher 方言差の移行面を最小化）。両ツールとも **read-only**（グラフ書込経路を一切持たない）。
+The MCP definition is `ports/mcp.d/20-knowledge.json`, and the server body is `mcp-knowledge/`. The initial tools are narrowed to **2** (`search_docs` / `trace_spec_to_code`) (ADR-0003: minimizing the migration surface of Cypher dialect differences at a Neo4j migration). Both tools are **read-only** (they have no graph write path whatsoever).
 
-グラフ構築は人間設計、**クエリ側のみエージェント化**。各ツールの返却値に「次に呼ぶべきツールの引数」（`next_tools`）を埋め込み、返却値そのものを runbook（次アクション付き手順書）にする。検索の各ステップは決定的、マルチホップのオーケストレーションのみ AI に委ねる（引数の値を AI に発明させない＝決定性の担保）。
+Graph construction is human-designed, and **only the query side is agentified**. Each tool's return value embeds "the arguments of the next tool to call" (`next_tools`), making the return value itself a runbook (a procedure with the next action attached). Each search step is deterministic, and only the multi-hop orchestration is delegated to the AI (do not let the AI invent the argument values = guaranteeing determinism).
 
 ### 6.2 `search_docs`
 
-用途: 自然言語 or 用語から関連文書・用語・決定ノードを検索する入口ツール。
+Purpose: an entry-point tool that searches for related documents, terms, and decision nodes from natural language or a term.
 
-**入力**:
+**Input**:
 
 ```json
 {
-  "query": "課金の締め処理の設計意図",
+  "query": "design intent of the billing closing process",
   "node_types": ["Document", "Decision", "DomainTerm"],
   "limit": 10
 }
 ```
 
-| フィールド | 必須 | 説明 |
+| Field | Required | Description |
 |---|---|---|
-| `query` | ✓ | 検索語（自然言語 or 用語） |
-| `node_types` | | 絞り込み。既定は全ノード種 |
-| `limit` | | 既定 10（初期値・仮） |
+| `query` | ✓ | Search term (natural language or a term) |
+| `node_types` | | Narrowing. Default is all node kinds |
+| `limit` | | Default 10 (initial value, tentative) |
 
-**出力**（`next_tools` に次の手を埋め込む）:
+**Output** (embeds the next moves in `next_tools`):
 
 ```json
 {
@@ -381,27 +381,27 @@ MCP 定義は `ports/mcp.d/20-knowledge.json`、サーバー実体は `mcp-knowl
       "node_type": "Aggregate",
       "id": "invoice",
       "name": "Invoice",
-      "summary": "請求書集約。締め処理の主体。",
+      "summary": "The invoice aggregate. The subject of the closing process.",
       "kg_uri": "kg://aggregate/invoice",
       "next_tools": [
         {
           "tool": "trace_spec_to_code",
           "args": { "aggregate_id": "invoice" },
-          "why": "この集約の実装ディレクトリと関連コードへ辿る"
+          "why": "trace to this aggregate's implementation directory and related code"
         }
       ]
     },
     {
       "node_type": "Decision",
       "id": "adr-0005",
-      "title": "ナレッジグラフのスキーマ粒度",
+      "title": "Knowledge graph schema granularity",
       "status": "accepted",
       "kg_uri": "kg://decision/adr-0005",
       "next_tools": [
         {
           "tool": "search_docs",
-          "args": { "query": "IMPLEMENTED_BY 橋渡し", "node_types": ["Aggregate"] },
-          "why": "この決定が AFFECTS する集約を辿る"
+          "args": { "query": "IMPLEMENTED_BY bridge", "node_types": ["Aggregate"] },
+          "why": "trace the aggregates this decision AFFECTS"
         }
       ]
     }
@@ -410,13 +410,13 @@ MCP 定義は `ports/mcp.d/20-knowledge.json`、サーバー実体は `mcp-knowl
 }
 ```
 
-検索は決定的。内部実装は **用語完全一致 → 部分一致 → 概要 substring** の順のフォールバック（LLM 埋め込み検索は初期採用しない＝ローカル完結優先）。各結果に `kg_uri` を含め、そのまま `spec_refs` に転記できるようにする。
+The search is deterministic. The internal implementation is a fallback in the order **term exact match → partial match → summary substring** (LLM embedding search is not adopted initially = prioritizing local self-containment). Each result includes `kg_uri` so it can be transcribed directly into `spec_refs`.
 
 ### 6.3 `trace_spec_to_code`
 
-用途: 集約ノード（または文書）を起点に、橋渡しエッジ `IMPLEMENTED_BY` を辿って実装ディレクトリ／コードシンボルへ到達する。ナレッジグラフ → コードグラフのホップを担う（2 グラフの論理結合点）。
+Purpose: starting from an aggregate node (or document), follow the bridging edge `IMPLEMENTED_BY` to reach the implementation directory / code symbols. It bears the hop from knowledge graph → code graph (the logical join point of the 2 graphs).
 
-**入力**:
+**Input**:
 
 ```json
 {
@@ -426,13 +426,13 @@ MCP 定義は `ports/mcp.d/20-knowledge.json`、サーバー実体は `mcp-knowl
 }
 ```
 
-| フィールド | 必須 | 説明 |
+| Field | Required | Description |
 |---|---|---|
-| `aggregate_id` | △ | 集約起点（`aggregate_id` / `document_id` のどちらか必須） |
-| `document_id` | △ | 文書起点（`DEFINED_IN` 逆引き → 集約） |
-| `resolve_symbols` | | true なら codegraph へ委譲しシンボルまで解決（既定 false） |
+| `aggregate_id` | △ | Aggregate origin (one of `aggregate_id` / `document_id` is required) |
+| `document_id` | △ | Document origin (`DEFINED_IN` reverse lookup → aggregate) |
+| `resolve_symbols` | | If true, delegate to codegraph and resolve down to symbols (default false) |
 
-**出力**:
+**Output**:
 
 ```json
 {
@@ -447,22 +447,22 @@ MCP 定義は `ports/mcp.d/20-knowledge.json`、サーバー実体は `mcp-knowl
     {
       "tool": "codegraph.analyze_code_relationships",
       "args": { "path": "src/billing/invoice/" },
-      "why": "実装ディレクトリの呼び出し関係を深掘りする（コードグラフ側へ）"
+      "why": "dig into the call relationships of the implementation directory (over to the code graph side)"
     }
   ]
 }
 ```
 
-`resolve_symbols=true` のとき、本ツールは `dir_path` を引数に codegraph MCP（別グラフ）へ委譲する。`confidence`（`explicit`/`inferred`/`reviewed`）を必ず返し、呼び出し側が確度を判断できるようにする。
+When `resolve_symbols=true`, this tool delegates to the codegraph MCP (a separate graph) with `dir_path` as an argument. It always returns `confidence` (`explicit`/`inferred`/`reviewed`) so the caller can judge the certainty.
 
-### 6.4 マルチホップ探索の具体例
+### 6.4 Concrete example of multi-hop exploration
 
-タスク例:「請求書の締め処理を修正する Issue に着手。関連する設計意図と実装箇所を把握したい。」
+Example task: "Starting on an Issue to fix the invoice closing process. I want to grasp the related design intent and implementation locations."
 
 ```
-[Hop 1] search_docs({query:"請求書 締め処理"})
+[Hop 1] search_docs({query:"invoice closing process"})
   → results[0] = Aggregate "invoice"
-     next_tools = [ trace_spec_to_code({aggregate_id:"invoice"}) ]   ← 引数が埋め込み済み
+     next_tools = [ trace_spec_to_code({aggregate_id:"invoice"}) ]   ← args already embedded
   → results[1] = Decision "adr-0005"
      next_tools = [ search_docs({query:"...", node_types:["Aggregate"]}) ]
 
@@ -471,124 +471,124 @@ MCP 定義は `ports/mcp.d/20-knowledge.json`、サーバー実体は `mcp-knowl
      next_tools = [ codegraph.analyze_code_relationships({path:"src/billing/invoice/"}) ]
 
 [Hop 3] codegraph.analyze_code_relationships({path:"src/billing/invoice/"})
-  → 呼び出し関係・依存を取得（コードグラフ側・read-only スナップショット）
+  → obtain call relationships and dependencies (code graph side, read-only snapshot)
 
-→ AI は「設計意図(ADR) + 実装ディレクトリ + 呼び出し関係」を自律的に組み立てて把握
+→ the AI autonomously assembles and grasps "design intent (ADR) + implementation directory + call relationships"
 ```
 
-各ホップの入力引数は前段の `next_tools[].args` として**サーバー側が構築済み**であり、AI は「どの next_tool を選ぶか」だけを判断する。
+The input arguments of each hop are **already built on the server side** as the previous stage's `next_tools[].args`, and the AI only judges "which next_tool to choose."
 
-### 6.5 context.d との関係（ハイブリッド方式）
+### 6.5 Relationship with context.d (hybrid scheme)
 
-要件 §4.2 ②のハイブリッド方式に従い、context プラグイン（`20-knowledge`）は**軽い要約のみ事前注入**し、上記マルチホップの深掘りは**実行中に AI 自身が MCP ツールで取得**する。事前注入で全グラフを展開しない（トークン浪費と再現性低下を避ける）。
+Per the hybrid scheme of Requirements §4.2 ②, the context plugin (`20-knowledge`) **pre-injects only light summaries**, and the deep dives of the above multi-hop are **fetched by the AI itself via MCP tools during execution**. It does not expand the whole graph in pre-injection (avoiding token waste and reduced reproducibility).
 
 ---
 
-## 7. 要件の投入手順（原本 md → グラフノード化）
+## 7. Procedure for loading requirements (source md → graph nodes)
 
-ADR-0011 により要件・仕様・受け入れ条件はナレッジグラフに一元管理し、specs/ ディレクトリは持たない。原本 md を人間がどこで管理するかは HALO の関知外（グラフに投入されていればよい）。投入は書込 2 経路（手作業 / sink 35）のいずれか。
+Per ADR-0011, requirements, specifications, and acceptance criteria are managed centrally in the knowledge graph, with no specs/ directory. Where a human manages the source md is outside HALO's concern (it just needs to be loaded into the graph). Loading is via one of the 2 write routes (manual / sink 35).
 
-### 7.1 投入単位のマッピング
+### 7.1 Mapping of loading units
 
-| 原本の記述 | グラフノード | 主なプロパティ |
+| Source description | Graph node | Main properties |
 |---|---|---|
-| ドメインの境界（サブシステム） | `BoundedContext` | id / name / summary |
-| 集約（実装の単位） | `Aggregate` | id / name / **dir_path** / summary |
-| 用語定義（ユビキタス言語） | `DomainTerm` | term / definition / synonyms / deprecated |
-| 設計書・ADR・要件文書 | `Document` | id / title / path / doc_type / **body_hash** |
-| 意思決定（ADR 本体） | `Decision` | id / title / status / date |
+| Domain boundary (subsystem) | `BoundedContext` | id / name / summary |
+| Aggregate (unit of implementation) | `Aggregate` | id / name / **dir_path** / summary |
+| Term definition (ubiquitous language) | `DomainTerm` | term / definition / synonyms / deprecated |
+| Design doc / ADR / requirement doc | `Document` | id / title / path / doc_type / **body_hash** |
+| Decision (the ADR body) | `Decision` | id / title / status / date |
 
-エッジは記述内の関係から張る（帰属 = `BELONGS_TO`、定義元 = `DEFINED_IN`、決定の影響 = `AFFECTS`、決定の廃止 = `SUPERSEDES`、設計⇔実装 = `IMPLEMENTED_BY`）。
+Edges are drawn from the relationships within the description (belonging = `BELONGS_TO`, definition source = `DEFINED_IN`, decision impact = `AFFECTS`, decision supersession = `SUPERSEDES`, design ⇔ implementation = `IMPLEMENTED_BY`).
 
-### 7.2 投入フロー（手作業経路）
-
-```
-1. 原本 md を人間が読み、上表に沿ってノード・エッジの Cypher を書く（人間設計）
-2. body_hash を計算し Document ノードへ格納（陳腐化検出・凍結性照合の基準）
-3. knowledge.kuzu へ手作業投入（ループ停止中・書込経路 a）
-4. IMPLEMENTED_BY 第1段（明示リンク機械抽出）を実行 → explicit エッジを張る（§7.4）
-5. 埋まらない集約は第2段（AI 推定 → 人間レビュー）で reviewed へ昇格（§7.4）
-```
-
-凍結性: 投入後、ループ実行中は knowledge MCP が read-only で開き、loop-audit がハッシュ照合する（§2.3 / ADR-0011）。
-
-### 7.3 sink 35（docs マージ後の自動再投入・書込経路 b）
-
-`ports/sink.d/35-reindex-knowledge`（`minAutonomy: L3`）。**PR レビューを通過した docs マージ後にのみ**ナレッジグラフを更新する（ADR-0011: レビュー未通過の実行中書込を通す事故を防ぐため経路を限定）。
+### 7.2 Loading flow (manual route)
 
 ```
-35-reindex-knowledge（docs マージ後）:
-  1. 変更された Document 原本の body_hash を再計算し更新
-  2. DomainTerm / Decision の追加・変更差分をグラフへ反映
-  3. IMPLEMENTED_BY 第1段（明示リンク機械抽出）を再実行し explicit エッジを追随
+1. A human reads the source md and writes the node/edge Cypher per the table above (human-designed)
+2. Compute body_hash and store it in the Document node (the basis for staleness detection / freeze verification)
+3. Manually ingest into knowledge.kuzu (while the loop is stopped, write route a)
+4. Run IMPLEMENTED_BY stage 1 (machine extraction of explicit links) → draw explicit edges (§7.4)
+5. Aggregates not filled in are promoted to reviewed via stage 2 (AI estimation → human review) (§7.4)
 ```
 
-### 7.4 IMPLEMENTED_BY 橋渡しエッジの抽出（2 段階）
+Freeze property: after loading, during loop execution the knowledge MCP opens read-only, and loop-audit performs hash checking (§2.3 / ADR-0011).
 
-橋渡しエッジ（設計ノード ⇔ 実装コンポーネント）の対応付けが最大の価値源泉（要件 §5.4）。
+### 7.3 sink 35 (auto re-load after docs merge, write route b)
 
-**第 1 段: 明示リンクの機械抽出**（`confidence="explicit"` / `source="link"`、LLM 不使用・決定的）
-
-```
-1. Document.path が指す md を走査
-2. 実装パス表記を正規表現で抽出（コードスパン内のパス / 「実装: src/...」形式 /
-   Aggregate.dir_path と前方一致するパス）
-3. 抽出パスと Aggregate.dir_path を突合 → 一致で IMPLEMENTED_BY(explicit, link) を張る
-```
-
-**第 2 段: 不足分の AI 推定 + 人間レビュー**（`inferred`→`reviewed` / `ai`→`human`）
+`ports/sink.d/35-reindex-knowledge` (`minAutonomy: L3`). It updates the knowledge graph **only after a docs merge that has passed PR review** (ADR-0011: the route is limited to prevent accidents that let unreviewed writes through during execution).
 
 ```
-1. IMPLEMENTED_BY を持たない Aggregate を列挙
-2. AI が集約名・summary と codegraph のディレクトリ/シンボル名の類似から候補 dir_path を提案
-   → IMPLEMENTED_BY(inferred, ai) として仮登録
-3. 人間レビュー(needs-human): 妥当なら reviewed/human へ更新、誤りならエッジ削除
+35-reindex-knowledge (after a docs merge):
+  1. Recompute and update the body_hash of changed Document sources
+  2. Reflect DomainTerm / Decision additions and changes into the graph
+  3. Re-run IMPLEMENTED_BY stage 1 (machine extraction of explicit links) to keep explicit edges in sync
 ```
 
-要点:
+### 7.4 Extraction of the IMPLEMENTED_BY bridging edge (2 stages)
 
-- AI 推定エッジ（`inferred`）は品質ゲート（§4 陳腐化検出）の根拠として**そのままは使わない**。`reviewed` へ昇格したものだけを機械ゲートの正とする（ADR-0005）。
-- ディレクトリ構成のリファクタ時は張り替えが必要。明示リンク（explicit 分）は第 1 段の再抽出で自動追随するため、**実装パスを設計書に明示する運用を推奨**。
+Mapping the bridging edge (design node ⇔ implementation component) is the greatest source of value (Requirements §5.4).
+
+**Stage 1: machine extraction of explicit links** (`confidence="explicit"` / `source="link"`, no LLM, deterministic)
+
+```
+1. Scan the md pointed to by Document.path
+2. Extract implementation-path notations by regex (a path inside a code span / "implementation: src/..." style /
+   a path that prefix-matches Aggregate.dir_path)
+3. Match extracted paths against Aggregate.dir_path → on a match, draw IMPLEMENTED_BY(explicit, link)
+```
+
+**Stage 2: AI estimation of the shortfall + human review** (`inferred`→`reviewed` / `ai`→`human`)
+
+```
+1. Enumerate Aggregates that have no IMPLEMENTED_BY
+2. The AI proposes candidate dir_paths from the similarity between the aggregate name/summary and codegraph's directory/symbol names
+   → tentatively register as IMPLEMENTED_BY(inferred, ai)
+3. Human review (needs-human): if valid, update to reviewed/human; if wrong, delete the edge
+```
+
+Key points:
+
+- AI-estimated edges (`inferred`) are **not used as-is** as the basis of the quality gate (§4 staleness detection). Only those promoted to `reviewed` are treated as valid for the machine gate (ADR-0005).
+- Re-wiring is required when the directory structure is refactored. Explicit links (the explicit portion) automatically follow via the re-extraction of Stage 1, so **it is recommended to make it a practice to state the implementation path explicitly in the design doc**.
 
 ---
 
-## 8. 受入基準の充足マッピング
+## 8. Acceptance-criteria fulfillment mapping
 
-| 受入基準 | 充足箇所 |
+| Acceptance criterion | Fulfillment location |
 |---|---|
-| KuzuDB スキーマ DDL（ノード 5 種・エッジ 5 種） | §1.2 |
-| kg:// URI の解決実装 | §2.2（リゾルバ）/ §2.3（loop-audit 実在検証） |
-| CGC 取り込みとプリフライト再インデックス（案 A） | §3.1〜3.3 |
-| 陳腐化検出 → kind:docs 自動起票 | §4.2〜4.3 |
-| 用語集整合チェック（禁止語のみ block） | §5.2〜5.3 |
-| MCP 2 ツール（Agentic RAG） | §6.2〜6.4 |
-| 要件の投入手順（原本 md → ノード化） | §7.1〜7.4 |
+| KuzuDB schema DDL (5 node kinds, 5 edge kinds) | §1.2 |
+| Resolution implementation for kg:// URIs | §2.2 (resolver) / §2.3 (loop-audit existence verification) |
+| CGC ingestion and preflight re-indexing (Plan A) | §3.1–3.3 |
+| Staleness detection → kind:docs auto-issue | §4.2–4.3 |
+| Glossary consistency check (block on forbidden terms only) | §5.2–5.3 |
+| MCP 2 tools (Agentic RAG) | §6.2–6.4 |
+| Procedure for loading requirements (source md → nodes) | §7.1–7.4 |
 
 ---
 
-## 9. v1.5 → v1.8 の改訂点（素材 doc 05 に対して）
+## 9. Revision points from v1.5 → v1.8 (against source doc 05)
 
-| # | 改訂 | 理由 |
+| # | Revision | Reason |
 |---|---|---|
-| 1 | **specs/ 前提を削除**し、要件はナレッジグラフに一元化（§0・§7） | ADR-0011。凍結性はディレクトリ凍結ではなく read-only オープン + ハッシュ照合で担保 |
-| 2 | `Document.doc_type` の `"spec"` を **`"requirement"`** に改称（§1.2・§1.4） | specs/ 廃止で「仕様ファイル」概念が消え、要件そのものが Document ノードになるため |
-| 3 | `Document` に **`body_hash`** プロパティ追加（§1.2） | 陳腐化検出（§4.2）と凍結性ハッシュ照合（§2.3）の基準に必要 |
-| 4 | **kg:// URI 解決を D1 §4 に整合**（node-type と PRIMARY KEY の対応表、スラグ形式検証）（§1.1・§2） | v1.8 で kg:// が D1 の公開契約になったため、id = PRIMARY KEY の一致を明示 |
-| 5 | **陳腐化 → kind:docs 自動起票のロジックを新規詳細化**（§4.2 判定アルゴリズム・§4.3 冪等な重複抑止） | doc 05 は「自動起票」の一文のみ。D6 で決定的アルゴリズムまで落とした |
-| 6 | **要件投入手順（§7）を新規追加**（原本 md → ノード化、書込 2 経路、sink 35 のレビュー通過限定） | ADR-0011 の一元管理・書込経路限定を実装手順に具体化。doc 05 に該当節なし |
-| 7 | 用語集整合チェックの **block を deprecated のみに限定**、synonyms/未定義は警告に格下げ（§5.2） | 過剰ゲートで自律実行が停滞するのを避ける（§11.2 の思想を明文化） |
+| 1 | **Removed the specs/ premise** and consolidated requirements into the knowledge graph (§0 / §7) | ADR-0011. The freeze property is guaranteed not by directory freezing but by read-only opening + hash checking |
+| 2 | Renamed `Document.doc_type`'s `"spec"` to **`"requirement"`** (§1.2 / §1.4) | With specs/ abolished, the "specification file" concept disappears and the requirement itself becomes a Document node |
+| 3 | Added a **`body_hash`** property to `Document` (§1.2) | Needed as the basis for staleness detection (§4.2) and freeze-property hash checking (§2.3) |
+| 4 | **Aligned kg:// URI resolution with D1 §4** (node-type to PRIMARY KEY correspondence table, slug form validation) (§1.1 / §2) | Since kg:// became D1's public contract in v1.8, the match of id = PRIMARY KEY is made explicit |
+| 5 | **Newly detailed the staleness → kind:docs auto-issue logic** (§4.2 decision algorithm / §4.3 idempotent duplicate suppression) | Doc 05 had only a single sentence on "auto-issue." D6 brought it down to a deterministic algorithm |
+| 6 | **Newly added the requirement loading procedure (§7)** (source md → nodes, 2 write routes, sink 35's review-passed limitation) | Concretizes ADR-0011's centralized management and write-route limitation into an implementation procedure. Doc 05 has no corresponding section |
+| 7 | **Limited the glossary consistency check's block to deprecated only**, downgrading synonyms/undefined to warnings (§5.2) | Avoiding stalling autonomous execution with excessive gates (making explicit the philosophy of §11.2) |
 
-> なお、素材 doc 05 の context.d fragments の priority 連結（doc 05 §6）は D6 の 7 項目外のため本書では扱わない。ただし D1 §1.2 は「priority 大きいほど優先・降順連結」と規定しており、doc 05 §6.3 の「小さいほど優先」とは逆である。これは D1（v1.8 権威）が正であり、context.d 実装は D1 に合わせること（D2 コア詳細設計の管轄）。
+> Note that the priority concatenation of context.d fragments in source doc 05 (doc 05 §6) is outside D6's 7 items and is not treated in this document. However, D1 §1.2 stipulates "the larger the priority, the higher the precedence, concatenated in descending order," which is the reverse of doc 05 §6.3's "the smaller, the higher the precedence." Here D1 (the v1.8 authority) is correct, and the context.d implementation should be aligned with D1 (under the purview of D2 Core Detailed Design).
 
 ---
 
-## 10. 未決事項（保留・初期値）
+## 10. Open items (deferred / initial values)
 
-| 項目 | 状態 | 典拠 |
+| Item | State | Basis |
 |---|---|---|
-| `search_docs.limit` の既定 10 | 初期値（仮） | §6.2 |
-| 差分インデックス（フル → 差分の最適化） | 保留。Phase 2 以降 | §3.2 |
-| Neo4j への移行 | 保留。必要になってから | ADR-0003 |
-| ノード種の追加 | 再検討事項（安易に増やさない） | ADR-0005 |
-| MCP ツールの追加（2 → 3 以降） | 拡張余地。移行面最小化のため初期は 2 つ固定 | §6.1 / ADR-0003 |
-| 用語集チェックのトークナイズ（日本語形態素解析の要否） | 初期値（仮）。単純トークン一致から開始 | §5.3 |
+| The default of 10 for `search_docs.limit` | Initial value (tentative) | §6.2 |
+| Diff indexing (optimization from full → diff) | Deferred. Phase 2 onward | §3.2 |
+| Migration to Neo4j | Deferred. When it becomes necessary | ADR-0003 |
+| Adding node kinds | Matter for reconsideration (do not increase lightly) | ADR-0005 |
+| Adding MCP tools (2 → 3 onward) | Room for extension. Fixed at 2 initially to minimize the migration surface | §6.1 / ADR-0003 |
+| Tokenization for the glossary check (whether Japanese morphological analysis is needed) | Initial value (tentative). Start from simple token matching | §5.3 |

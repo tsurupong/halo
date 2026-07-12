@@ -1,38 +1,38 @@
-# ADR-0001: ポート＆アダプタ構造と統一コントラクトの採用
+# ADR-0001: Adoption of Ports & Adapters Structure and a Unified Contract
 
 **Date**: 2026-07-09
 **Status**: accepted
-**Deciders**: 本人（HALO要件定義書 v1.5 §3.2 より記録）
+**Deciders**: Owner (recorded from HALO Requirements Specification v1.5 §3.2)
 
 ## Context
 
-自律開発ハーネス HALO は、タスク源・コンテキスト源・品質ゲート・実行器・出力先といった構成要素を、運用しながら頻繁に追加・削除・差し替えする。コア変更なしにファイル操作のみで構成変更を完結させたい。また、プラグインを bash / Python / Node のいずれでも書けるようにしたい。
+The autonomous development harness HALO frequently adds, removes, and swaps constituent elements — task sources, context sources, quality gates, executors, and sinks — during operation. We want configuration changes to be completed by file operations alone, without touching the core. We also want plugins to be writable in any of bash / Python / Node.
 
 ## Decision
 
-コアループをドメインとして固定し、外部接点をすべてポートとして抽象化する（ヘキサゴナル）。全プラグインは「stdin/stdout の JSON + 終了コード」で通信し、`ports/<port名>.d/` へのファイル配置で有効化・数字プレフィックスで実行順制御する（conf.d 方式）。
+Fix the core loop as the domain and abstract every external contact point as a port (hexagonal). All plugins communicate via "JSON over stdin/stdout + exit code," and are enabled by placing files under `ports/<port name>.d/`, with a numeric prefix controlling execution order (the conf.d approach).
 
 ## Alternatives Considered
 
-### 代替案1: モノリシックなループスクリプト
-- **Pros**: 初期実装が最速。ファイル数が少ない
-- **Cons**: 構成要素の差し替えごとにコア改変が必要。効果測定のための ON/OFF ができない
-- **Why not**: 「変更を安く安全にする構造を事前に作る」というハーネスの中心思想に反する
+### Alternative 1: A monolithic loop script
+- **Pros**: Fastest to implement initially. Fewer files.
+- **Cons**: Every swap of a constituent element requires modifying the core. ON/OFF toggling for effect measurement is not possible.
+- **Why not**: It contradicts the harness's central philosophy of "building a structure in advance that makes change cheap and safe."
 
-### 代替案2: 言語内プラグイン機構（Python エントリポイント等）
-- **Pros**: 型付きインターフェース、テスト容易
-- **Cons**: プラグイン実装言語が固定される。プロセス分離がなくプラグインの暴走がコアを巻き込む
-- **Why not**: 言語非依存とプロセス境界による隔離を優先
+### Alternative 2: In-language plugin mechanism (Python entry points, etc.)
+- **Pros**: Typed interfaces, easy to test.
+- **Cons**: The plugin implementation language is fixed. Without process isolation, a runaway plugin drags the core down with it.
+- **Why not**: We prioritize language independence and isolation via process boundaries.
 
 ## Consequences
 
 ### Positive
-- プラグイン追加・削除がファイル操作のみで完結し、1変数ずつの効果測定（原則2）が可能になる
-- 終了コード規約が Claude Code hooks（exit 2 = fail）と揃い、認知負荷が低い
+- Adding and removing plugins is completed by file operations alone, enabling one-variable-at-a-time effect measurement (Principle 2).
+- The exit code convention aligns with Claude Code hooks (exit 2 = fail), keeping cognitive load low.
 
 ### Negative
-- JSON のシリアライズ/パースが各プラグインに散在する（contracts/ の JSON スキーマで緩和）
-- プロセス起動オーバーヘッドがイテレーションごとに乗る（AI 実行時間に比べ無視可能）
+- JSON serialization/parsing is scattered across each plugin (mitigated by JSON schemas under contracts/).
+- Process startup overhead is incurred per iteration (negligible compared to AI execution time).
 
 ### Risks
-- コントラクト逸脱プラグインの混入 → contracts/ スキーマと gate での検証で緩和
+- Introduction of contract-violating plugins → mitigated by validation via contracts/ schemas and gates.
