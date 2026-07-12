@@ -10,7 +10,7 @@
 // seam — no singletons, no module-level state.
 
 import { join, dirname } from 'node:path';
-import type { Port, PluginManifest, MinAutonomy } from '@halo/contracts';
+import type { Port, PluginManifest, MinAutonomy } from '@tsurupong/halo-contracts';
 
 /** Thrown when a candidate `plugin.json` violates the manifest contract (D1 §2). */
 export class DiscoveryError extends Error {

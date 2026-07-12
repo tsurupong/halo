@@ -8,7 +8,7 @@ import {
   ConfigError,
   CORE_DEFAULTS,
 } from './config.js';
-import type { HarnessYml } from '@halo/contracts';
+import type { HarnessYml } from '@tsurupong/halo-contracts';
 
 describe('parseEnvFile', () => {
   it('parses KEY=VALUE, ignoring comments and blank lines', () => {

@@ -1,7 +1,7 @@
 // loop unit tests (D2 §2, D8 §1.2 module 4): the pure decision pieces plus the
 // driver exercised with fake runners (no process, no billing).
 import { describe, expect, it } from 'vitest';
-import type { ContextOut } from '@halo/contracts';
+import type { ContextOut } from '@tsurupong/halo-contracts';
 import type { DiscoveredPlugin } from './discovery.js';
 import { RunPortError, type RunPortResult } from './runPort.js';
 import type { IterationInput, Logger } from './logger.js';

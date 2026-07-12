@@ -15,7 +15,7 @@ import {
   type LightDecision,
   type HeavyDecision,
   type LoopResult,
-} from '@halo/core';
+} from '@tsurupong/halo-core';
 
 export const RUN_VALUE_FLAGS = [
   'max-iter',

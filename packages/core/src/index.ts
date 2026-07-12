@@ -1,4 +1,4 @@
-// @halo/core — loop / runPort / preflight / budget (TS).
+// @tsurupong/halo-core — loop / runPort / preflight / budget (TS).
 // Wave 1 (M3 T11-T13): config / logger / lock. Remaining modules land in T14+.
 export const HALO_CORE_VERSION = '0.0.0';
 

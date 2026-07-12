@@ -3,7 +3,7 @@
 // CLI はロジックを持たず core / core-ext へ委譲する (D3 §0)。
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { HALO_CORE_VERSION } from '@halo/core';
+import { HALO_CORE_VERSION } from '@tsurupong/halo-core';
 import { parseArgs, boolFlag } from './args.js';
 import { EXIT, CliError, type ExitCode } from './exit-codes.js';
 import { createIo, nodeStreams, resolveGlobalFlags, type Streams } from './io.js';

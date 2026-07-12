@@ -1,5 +1,5 @@
 // CLI wrapper: regenerate the distributed JSON Schemas from the TS types and
-// write them to schemas/ (D1 §6.1). Run via `pnpm --filter @halo/contracts gen`.
+// write them to schemas/ (D1 §6.1). Run via `pnpm --filter @tsurupong/halo-contracts gen`.
 // The generation logic lives in src/schema-gen.ts so the schema-drift test
 // reuses the exact same code path.
 

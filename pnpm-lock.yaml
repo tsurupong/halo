@@ -11,6 +11,9 @@ importers:
       '@eslint/js':
         specifier: ^9.17.0
         version: 9.39.5
+      '@tsurupong/halo':
+        specifier: workspace:*
+        version: link:packages/cli
       '@types/node':
         specifier: ^22.10.0
         version: 22.20.1
@@ -20,9 +23,6 @@ importers:
       eslint:
         specifier: ^9.17.0
         version: 9.39.5
-      halo:
-        specifier: workspace:*
-        version: link:packages/cli
       prettier:
         specifier: ^3.4.0
         version: 3.9.5
@@ -38,10 +38,10 @@ importers:
 
   packages/cli:
     dependencies:
-      '@halo/contracts':
+      '@tsurupong/halo-contracts':
         specifier: workspace:*
         version: link:../contracts
-      '@halo/core':
+      '@tsurupong/halo-core':
         specifier: workspace:*
         version: link:../core
     devDependencies:
@@ -63,7 +63,7 @@ importers:
 
   packages/core:
     dependencies:
-      '@halo/contracts':
+      '@tsurupong/halo-contracts':
         specifier: workspace:*
         version: link:../contracts
     devDependencies:

@@ -6,7 +6,7 @@
 // is `createLogger`, whose fs + clock dependencies are injected — no singletons,
 // no module-level mutable state.
 
-import type { MinAutonomy } from '@halo/contracts';
+import type { MinAutonomy } from '@tsurupong/halo-contracts';
 
 /** Result of a single gate execution (subset of obs schema 06 §6.2 `gates[]`). */
 export interface GateResult {

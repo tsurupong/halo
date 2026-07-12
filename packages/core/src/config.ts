@@ -8,7 +8,7 @@
 // text parsing live in `discovery` (D2 §1.1 module 2, §7); this module owns the
 // pure validation + kind-resolution helpers discovery calls.
 
-import type { MinAutonomy, HarnessYml, HarnessKind } from '@halo/contracts';
+import type { MinAutonomy, HarnessYml, HarnessKind } from '@tsurupong/halo-contracts';
 
 /** Thrown on any configuration / usage error → CLI maps to exit 3 (D3 §5). */
 export class ConfigError extends Error {

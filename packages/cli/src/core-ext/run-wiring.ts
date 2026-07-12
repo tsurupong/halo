@@ -16,7 +16,7 @@ import type {
   LightDecision,
   HeavyDecision,
   LoopResult,
-} from '@halo/core';
+} from '@tsurupong/halo-core';
 import {
   discoverPort,
   createNodeDiscoveryFs,
@@ -35,7 +35,7 @@ import {
   parseLockFile,
   isStaleLock,
   type GitRunner,
-} from '@halo/core';
+} from '@tsurupong/halo-core';
 import type { RunHooks, RunContext } from '../commands/run.js';
 
 /** ports/*.d 走査対象 (D2 §2.1 の loop が使う 6 ポート)。trigger/mcp は run では未使用。 */

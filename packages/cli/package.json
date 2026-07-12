@@ -1,6 +1,6 @@
 {
-  "name": "halo",
-  "version": "0.0.0",
+  "name": "@tsurupong/halo",
+  "version": "0.1.0",
   "type": "module",
   "license": "MIT",
   "bin": {
@@ -20,10 +20,29 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@halo/contracts": "workspace:*",
-    "@halo/core": "workspace:*"
+    "@tsurupong/halo-contracts": "workspace:*",
+    "@tsurupong/halo-core": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.20.1"
+  },
+  "description": "HALO CLI - autonomous development harness (implement/verify/output loop for AI agents)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tsurupong/halo.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://github.com/tsurupong/halo#readme",
+  "bugs": "https://github.com/tsurupong/halo/issues",
+  "keywords": [
+    "halo",
+    "autonomous",
+    "agent",
+    "harness",
+    "claude",
+    "ai"
+  ],
+  "publishConfig": {
+    "access": "public"
   }
 }

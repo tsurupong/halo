@@ -1,6 +1,6 @@
 {
-  "name": "@halo/contracts",
-  "version": "1.0.0",
+  "name": "@tsurupong/halo-contracts",
+  "version": "0.1.0",
   "type": "module",
   "license": "MIT",
   "exports": {
@@ -23,5 +23,24 @@
     "@types/node": "^22.20.1",
     "ajv": "^8.20.0",
     "ts-json-schema-generator": "^2.9.0"
+  },
+  "description": "HALO contracts - TypeScript types and JSON Schemas for port contracts",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tsurupong/halo.git",
+    "directory": "packages/contracts"
+  },
+  "homepage": "https://github.com/tsurupong/halo#readme",
+  "bugs": "https://github.com/tsurupong/halo/issues",
+  "keywords": [
+    "halo",
+    "autonomous",
+    "agent",
+    "harness",
+    "claude",
+    "ai"
+  ],
+  "publishConfig": {
+    "access": "public"
   }
 }
