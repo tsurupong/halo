@@ -9,7 +9,7 @@
 // This module is pure (no fs, no clock, no global state — D2 §1 table row 7,
 // §1.2). The loop calls it in the Sink state to filter before running effects.
 
-import type { MinAutonomy } from '@halo/contracts';
+import type { MinAutonomy } from '@tsurupong/halo-contracts';
 
 /** Ordered levels, low → high. Index encodes cumulative rank (L1 < L2 < L3). */
 export const AUTONOMY_ORDER: readonly MinAutonomy[] = ['L1', 'L2', 'L3'];

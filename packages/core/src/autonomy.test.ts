@@ -8,7 +8,7 @@ import {
   filterSinksByAutonomy,
   UNDECLARED_AUTONOMY,
 } from './autonomy.js';
-import type { MinAutonomy } from '@halo/contracts';
+import type { MinAutonomy } from '@tsurupong/halo-contracts';
 
 describe('autonomyRank / AUTONOMY_ORDER', () => {
   it('ranks levels cumulatively L1 < L2 < L3', () => {

@@ -1,6 +1,6 @@
 {
-  "name": "@halo/core",
-  "version": "0.0.0",
+  "name": "@tsurupong/halo-core",
+  "version": "0.1.0",
   "type": "module",
   "license": "MIT",
   "exports": {
@@ -17,9 +17,28 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@halo/contracts": "workspace:*"
+    "@tsurupong/halo-contracts": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.20.1"
+  },
+  "description": "HALO core - loop state machine, port resolution, preflight, autonomy checks",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tsurupong/halo.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://github.com/tsurupong/halo#readme",
+  "bugs": "https://github.com/tsurupong/halo/issues",
+  "keywords": [
+    "halo",
+    "autonomous",
+    "agent",
+    "harness",
+    "claude",
+    "ai"
+  ],
+  "publishConfig": {
+    "access": "public"
   }
 }

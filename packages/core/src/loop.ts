@@ -22,7 +22,7 @@ import type {
   SinkIn,
   OnFailIn,
   MinAutonomy,
-} from '@halo/contracts';
+} from '@tsurupong/halo-contracts';
 import type { DiscoveredPlugin } from './discovery.js';
 import type { HeavyDecision } from './preflight.js';
 import { shouldRunSink } from './autonomy.js';

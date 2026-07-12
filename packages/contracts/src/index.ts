@@ -1,12 +1,12 @@
-// @halo/contracts — public API (D1). The TypeScript port/manifest types are the
+// @tsurupong/halo-contracts — public API (D1). The TypeScript port/manifest types are the
 // single source of truth; the Draft 2020-12 JSON Schemas in schemas/ are
 // generated from them (see scripts/gen-schema.ts) and distributed alongside for
 // non-TS plugins to validate against.
 //
 // TS consumers import types from the package root:
-//     import type { GateOut, PluginManifest } from '@halo/contracts';
+//     import type { GateOut, PluginManifest } from '@tsurupong/halo-contracts';
 // and the generated schemas via the JSON subpath export:
-//     import gateOut from '@halo/contracts/gate.out.json' with { type: 'json' };
+//     import gateOut from '@tsurupong/halo-contracts/gate.out.json' with { type: 'json' };
 
 export type {
   TaskSourceNext,

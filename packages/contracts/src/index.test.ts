@@ -1,7 +1,7 @@
 // Type-level conformance (T06/T07) + export wiring (T10). The `@ts-expect-error`
 // assertions are validated by `tsc -b` (which type-checks test files); a missing
 // required field must be a compile error. The JSON subpath imports prove the
-// generated schemas are reachable via the `@halo/contracts/<port>.<io>.json`
+// generated schemas are reachable via the `@tsurupong/halo-contracts/<port>.<io>.json`
 // export (D1 §6.2).
 
 import { expect, test } from 'vitest';
@@ -17,9 +17,9 @@ import type {
 } from './index.js';
 
 // Generated schemas, imported through the public JSON subpath export.
-import gateOutSchema from '@halo/contracts/gate.out.json' with { type: 'json' };
-import pluginSchema from '@halo/contracts/plugin.json' with { type: 'json' };
-import taskSourceInSchema from '@halo/contracts/task-source.in.json' with { type: 'json' };
+import gateOutSchema from '@tsurupong/halo-contracts/gate.out.json' with { type: 'json' };
+import pluginSchema from '@tsurupong/halo-contracts/plugin.json' with { type: 'json' };
+import taskSourceInSchema from '@tsurupong/halo-contracts/task-source.in.json' with { type: 'json' };
 
 test('valid port I/O values type-check', () => {
   const nextTask: TaskSourceOut = { task_id: 'T-012', title: 'x', kind: 'code' };

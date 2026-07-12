@@ -17,7 +17,15 @@ The goal is to continuously produce PRs that pass quality gates during unattende
 - Node.js >= 22
 - pnpm 10.14.0 (pinned via `packageManager`)
 
-## Setup
+## Install
+
+```sh
+npm i -D @tsurupong/halo   # provides the `halo` CLI (run via npx halo <command>)
+```
+
+Published packages: [`@tsurupong/halo`](https://www.npmjs.com/package/@tsurupong/halo) (CLI), [`@tsurupong/halo-core`](https://www.npmjs.com/package/@tsurupong/halo-core), [`@tsurupong/halo-contracts`](https://www.npmjs.com/package/@tsurupong/halo-contracts).
+
+## Development setup
 
 ```sh
 pnpm install

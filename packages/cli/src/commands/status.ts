@@ -12,7 +12,7 @@ import {
   type BudgetStatus,
   type IterationLog,
   type BudgetLimits,
-} from '@halo/core';
+} from '@tsurupong/halo-core';
 
 export interface StatusDeps {
   fs: CliFs;

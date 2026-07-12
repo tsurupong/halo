@@ -19,7 +19,7 @@ import {
   type DiscoveredPlugin,
   type PortDiscovery,
 } from './discovery.js';
-import type { PluginManifest, Port } from '@halo/contracts';
+import type { PluginManifest, Port } from '@tsurupong/halo-contracts';
 
 const validManifest = (over: Partial<PluginManifest> = {}): PluginManifest => ({
   name: '@halo/plugin-x',
