@@ -11,6 +11,9 @@
 set -uo pipefail
 
 STUCK_MARKER="${HALO_STUCK_MARKER:-[HALO:STUCK]}"
+# 無人実行の編集権限。既定 acceptEdits がないと headless claude はファイルを
+# 変更できず、無変更のまま status:done を返して偽グリーンになる。
+PERMISSION_MODE="${HALO_CLAUDE_PERMISSION_MODE:-acceptEdits}"
 
 emit() { jq -cn --arg s "$1" --arg m "$2" '{status:$s, summary:$m}'; exit 0; }
 
@@ -31,6 +34,7 @@ fi
 out="$(cd "$workdir" && timeout "${timeout_sec}s" \
   claude -p "$prompt" \
     --strict-mcp-config \
+    --permission-mode "$PERMISSION_MODE" \
     --max-turns "$max_turns" \
     2>/dev/null)"
 code=$?

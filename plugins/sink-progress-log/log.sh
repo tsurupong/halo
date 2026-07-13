@@ -16,8 +16,9 @@ if [[ -z "$task_id" || -z "$workdir" ]]; then
   exit 0
 fi
 
-# ログ先は安定領域を優先（worktree は使い捨てのため HALO_LOGS_DIR で上書き可能）。
-logs_dir="${HALO_LOGS_DIR:-$workdir/logs}"
+# ログ先は安定領域（cwd = 対象リポジトリ root、コアの runner が保証）。
+# workdir は使い捨て worktree で削除と同時に記録が消えるため既定にしない。
+logs_dir="${HALO_LOGS_DIR:-.halo/logs}"
 if ! mkdir -p "$logs_dir" 2>/dev/null; then
   echo "sink-progress-log: logs ディレクトリ作成失敗: $logs_dir" >&2
   exit 0

@@ -83,6 +83,14 @@ const GATE_PASS = `#!/usr/bin/env bash
 cat >/dev/null; exit 0
 `;
 
+// worktree の HEAD を記録する executor (使い捨て worktree が常に最新 HEAD 起点である回帰用)。
+const EXEC_RECORD_HEAD = `#!/usr/bin/env bash
+in="$(cat)"
+wd="$(printf '%s' "$in" | jq -r '.workdir')"
+git -C "$wd" rev-parse HEAD > "$STATE_DIR/wt-head"
+jq -cn '{status:"done",summary:"ok"}'; exit 0
+`;
+
 const GATE_FAIL = `#!/usr/bin/env bash
 cat >/dev/null; jq -cn '{reason:"boom",gate:"g"}'; exit 2
 `;
@@ -150,6 +158,27 @@ describe('run integration (real hooks, zero billing)', () => {
     const log = JSON.parse(readFileSync(join(logsDir(), 'iter_1.json'), 'utf8'));
     expect(log.outcome).toBe('passed');
     expect(log.task.task_id).toBe('7');
+  });
+
+  it('stale feature branch: 既存 feature/issue-<id> があっても worktree は最新 HEAD 起点', async () => {
+    const state = join(repo, '.halo', 'state');
+    plugin('task-source', 'ts', 'index.sh', TASK_SOURCE, { STATE_DIR: state });
+    plugin('executor', 'ex', 'run.sh', EXEC_RECORD_HEAD, { STATE_DIR: state });
+    plugin('gate', '10-g', 'run.sh', GATE_PASS);
+    git('add', '-A');
+    git('commit', '-q', '-m', 'fixtures');
+    // 古い時点を指す残骸ブランチを作ってから main を進める。
+    git('branch', 'feature/issue-7');
+    writeFileSync(join(repo, 'new-file.txt'), 'later\n', 'utf8');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'advance HEAD');
+    const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo }).toString().trim();
+
+    const cap = captureStreams();
+    const code = await runCommand(parseArgs(['p'], RUN_FLAGS), io(cap), deps());
+
+    expect(code).toBe(EXIT.OK);
+    expect(readFileSync(join(state, 'wt-head'), 'utf8').trim()).toBe(head);
   });
 
   it('preflight STOP: .halo/STOP present → exit 0, loop never runs (no logs)', async () => {
