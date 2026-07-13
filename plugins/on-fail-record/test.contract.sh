@@ -52,4 +52,16 @@ else
   echo "FAIL  missing task_id: code=$code out=[$out]"; fail=1
 fi
 
+# --- 既定出力先: HALO_CATALOG 未指定なら cwd (対象リポジトリ root) の .halo/failure-catalog.md ---
+# workdir (使い捨て worktree) に書くと worktree 削除と同時に記録が消えるため。
+unset HALO_CATALOG
+mkdir -p "$TMP/repo"
+out="$(cd "$TMP/repo" && bash "$DIR/record.sh" <<<"$IN" 2>/dev/null)"; code=$?
+if [[ $code -eq 0 && -z "$out" && -f "$TMP/repo/.halo/failure-catalog.md" ]] \
+   && grep -q 'タスク: T-12' "$TMP/repo/.halo/failure-catalog.md"; then
+  echo "PASS  default catalog is cwd/.halo/failure-catalog.md (stable area, not worktree)"
+else
+  echo "FAIL  default catalog: code=$code"; fail=1
+fi
+
 exit "$fail"

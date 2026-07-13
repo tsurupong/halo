@@ -53,4 +53,16 @@ else
   echo "FAIL  missing fields: code=$code out=[$out]"; fail=1
 fi
 
+# --- 既定出力先: HALO_LOGS_DIR 未指定なら cwd (対象リポジトリ root) の .halo/logs ---
+# workdir (使い捨て worktree) に書くと worktree 削除と同時に記録が消えるため。
+unset HALO_LOGS_DIR
+mkdir -p "$TMP/repo"
+out="$(cd "$TMP/repo" && bash "$DIR/log.sh" <<<"$IN" 2>/dev/null)"; code=$?
+deflog="$(ls "$TMP/repo/.halo/logs"/progress-*.jsonl 2>/dev/null | head -1)"
+if [[ $code -eq 0 && -z "$out" && -n "$deflog" ]]; then
+  echo "PASS  default logs dir is cwd/.halo/logs (stable area, not worktree)"
+else
+  echo "FAIL  default logs dir: code=$code file=[$deflog]"; fail=1
+fi
+
 exit "$fail"

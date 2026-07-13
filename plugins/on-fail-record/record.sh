@@ -18,8 +18,9 @@ if [[ -z "$task_id" ]]; then
   exit 0
 fi
 
-# カタログ先は安定領域を優先（HALO_CATALOG で上書き可能）。
-catalog="${HALO_CATALOG:-${workdir:-.}/.halo/failure-catalog.md}"
+# カタログ先は安定領域（cwd = 対象リポジトリ root、コアの runner が保証。HALO_CATALOG で上書き可能）。
+# workdir は使い捨て worktree で削除と同時に記録が消えるため既定にしない。
+catalog="${HALO_CATALOG:-.halo/failure-catalog.md}"
 if ! mkdir -p "$(dirname "$catalog")" 2>/dev/null; then
   echo "on-fail-record: カタログディレクトリ作成失敗: $catalog" >&2
   exit 0
