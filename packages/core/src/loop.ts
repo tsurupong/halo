@@ -377,7 +377,7 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
     // iteration as `aborted_env` and end the loop (M3), like a light-stage stop.
     const heavy = deps.preflightHeavy ? await deps.preflightHeavy(task) : ({ proceed: true } as HeavyDecision);
     if (!heavy.proceed) {
-      await record(deps, { iter, startedAt, profile, task, outcome: 'aborted_env' });
+      await record(deps, { iter, startedAt, profile, task, outcome: 'aborted_env', retryCount: state.retryCount });
       iterations.push({ iter, taskId, outcome: 'aborted_env', retryCount: state.retryCount });
       return finish('ABORTED_ENV', `preflight: ${heavy.reason}`);
     }
@@ -422,6 +422,7 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
           task,
           outcome,
           executor: toExecutorRecord(exec),
+          retryCount: state.retryCount,
         });
         iterations.push({ iter, taskId, outcome, prompt, executorStatus: exec.outcome, retryCount: state.retryCount });
         continue;
@@ -443,7 +444,7 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
         const prUrl = deps.resolvePrUrl ? deps.resolvePrUrl(task, workdir) : '';
         if (prUrl !== '') await runTaskSourceComplete(deps, taskId, prUrl);
         taskStates.delete(taskId);
-        await record(deps, { iter, startedAt, profile, task, outcome: 'passed', executor: toExecutorRecord(exec), gates: verdict.results });
+        await record(deps, { iter, startedAt, profile, task, outcome: 'passed', executor: toExecutorRecord(exec), gates: verdict.results, retryCount: state.retryCount });
         iterations.push({ iter, taskId, outcome: 'passed', prompt, executorStatus: 'done', retryCount: state.retryCount });
       } else {
         // Gate fail → OnFail (best-effort) + retain reason for re-injection (D2 §2.4).
@@ -457,7 +458,7 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
           onFailInput(taskId, failure.reason, state.retryCount, { gate: failure.gate, workdir }),
         );
         const outcome = outcomeForFailure(state.retryCount, retryThreshold);
-        await record(deps, { iter, startedAt, profile, task, outcome, executor: toExecutorRecord(exec), gates: verdict.results });
+        await record(deps, { iter, startedAt, profile, task, outcome, executor: toExecutorRecord(exec), gates: verdict.results, retryCount: state.retryCount });
         iterations.push({ iter, taskId, outcome, prompt, executorStatus: 'done', gateFailure: failure, retryCount: state.retryCount });
       }
     } finally {
@@ -611,6 +612,7 @@ interface RecordArgs {
   outcome: Outcome;
   executor?: ExecutorRecord;
   gates?: GateResult[];
+  retryCount?: number;
 }
 
 async function record(deps: LoopDeps, args: RecordArgs): Promise<void> {
@@ -624,6 +626,7 @@ async function record(deps: LoopDeps, args: RecordArgs): Promise<void> {
       taskId: args.task.task_id,
       ...(args.task.kind != null ? { kind: args.task.kind } : {}),
       ...(args.task.title != null ? { title: args.task.title } : {}),
+      ...(args.retryCount != null ? { retryCount: args.retryCount } : {}),
     },
     ...(args.executor ? { executor: args.executor } : {}),
     ...(args.gates ? { gates: args.gates } : {}),

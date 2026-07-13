@@ -291,6 +291,9 @@ describe('runLoop', () => {
     expect(result.iterations[1]?.outcome).toBe('passed');
     expect(result.iterations[1]?.prompt).toContain('coverage 87% < 90%');
     expect(h.calls.some((c) => c.name === 'rec')).toBe(true);
+    // retry_count が iter_N.json に残る (夜間運用の事後分析用, 06 §6.2)。
+    expect(h.logs[0]?.task?.retryCount).toBe(1);
+    expect(h.logs[1]?.task?.retryCount).toBe(1);
   });
 
   it('routes a stuck executor to the failure path (D2 §2.3)', async () => {
