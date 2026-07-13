@@ -140,7 +140,10 @@ export function nodeRunWiringSeams(): RunWiringSeams {
     };
   const worktree: WorktreeSeam = {
     async create(cwd, taskId) {
-      const path = join(seamTmpdir(), `halo-wt-issue-${taskId}`);
+      // 置き場は HALO_WORKTREE_DIR で上書き可能 (既定は $TMPDIR — WSL2 では ext4 側が
+      // 高速。観察したいデバッグ時などに見える場所を指定する用途)。
+      const base = process.env['HALO_WORKTREE_DIR']?.replace(/\/$/, '') || seamTmpdir();
+      const path = join(base, `halo-wt-issue-${taskId}`);
       const branch = `feature/issue-${taskId}`;
       // 既存の残骸を掃除してから add (冪等)。ブランチ二重チェックアウトは git が禁止する。
       await spawnCapture('git', ['worktree', 'remove', '--force', path], cwd);
