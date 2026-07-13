@@ -17,6 +17,7 @@ fail=0
 mkdir -p "$TMP/bin"
 cat >"$TMP/bin/claude" <<'STUB'
 #!/usr/bin/env bash
+if [[ -n "${CLAUDE_ARGS_FILE:-}" ]]; then printf '%s\n' "$@" > "$CLAUDE_ARGS_FILE"; fi
 printf '%s\n' "${CLAUDE_STUB_OUT:-ok}"
 exit "${CLAUDE_STUB_EXIT:-0}"
 STUB
@@ -56,6 +57,22 @@ assert_out "timeout" "$out" "exit 124 -> timeout"
 # --- 不正入力（prompt 欠落）-> stuck、ただし契約 out 形は維持 ---
 out="$(bash "$DIR/run.sh" <<<'{"workdir":"/tmp","budget":{"max_turns":1,"timeout_sec":1}}' 2>/dev/null)"
 assert_out "stuck" "$out" "missing prompt -> stuck (valid out shape)"
+
+# --- 無人実行の編集権限: 既定で --permission-mode acceptEdits を付与 ---
+out="$(CLAUDE_ARGS_FILE="$TMP/args" bash "$DIR/run.sh" <<<"$IN" 2>/dev/null)"
+if grep -qx -- "--permission-mode" "$TMP/args" && grep -qx "acceptEdits" "$TMP/args"; then
+  echo "PASS  default --permission-mode acceptEdits passed to claude"
+else
+  echo "FAIL  permission-mode default: args=[$(tr '\n' ' ' <"$TMP/args")]"; fail=1
+fi
+
+# --- HALO_CLAUDE_PERMISSION_MODE で上書き可能 ---
+out="$(CLAUDE_ARGS_FILE="$TMP/args2" HALO_CLAUDE_PERMISSION_MODE=plan bash "$DIR/run.sh" <<<"$IN" 2>/dev/null)"
+if grep -qx "plan" "$TMP/args2" && ! grep -qx "acceptEdits" "$TMP/args2"; then
+  echo "PASS  HALO_CLAUDE_PERMISSION_MODE overrides permission mode"
+else
+  echo "FAIL  permission-mode override: args=[$(tr '\n' ' ' <"$TMP/args2")]"; fail=1
+fi
 
 # --- stdout は 1 個の JSON のみ（余計な行がない）---
 line_count="$(CLAUDE_STUB_OUT="ok" bash "$DIR/run.sh" <<<"$IN" 2>/dev/null | grep -c .)"
