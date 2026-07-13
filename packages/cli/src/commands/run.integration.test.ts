@@ -181,6 +181,38 @@ describe('run integration (real hooks, zero billing)', () => {
     expect(readFileSync(join(state, 'wt-head'), 'utf8').trim()).toBe(head);
   });
 
+  it('HALO_WORKTREE_DIR: worktree の置き場を環境変数で上書きできる', async () => {
+    const state = join(repo, '.halo', 'state');
+    const wtBase = mkdtempSync(join(tmpdir(), 'halo-wt-base-'));
+    plugin('task-source', 'ts', 'index.sh', TASK_SOURCE, { STATE_DIR: state });
+    // workdir の実パスを記録する executor (置き場の検証用)。
+    plugin(
+      'executor',
+      'ex',
+      'run.sh',
+      `#!/usr/bin/env bash
+in="$(cat)"
+printf '%s' "$in" | jq -r '.workdir' > "$STATE_DIR/wt-path"
+jq -cn '{status:"done",summary:"ok"}'; exit 0
+`,
+      { STATE_DIR: state },
+    );
+    plugin('gate', '10-g', 'run.sh', GATE_PASS);
+    git('add', '-A');
+    git('commit', '-q', '-m', 'fixtures');
+
+    process.env['HALO_WORKTREE_DIR'] = wtBase;
+    try {
+      const cap = captureStreams();
+      const code = await runCommand(parseArgs(['p'], RUN_FLAGS), io(cap), deps());
+      expect(code).toBe(EXIT.OK);
+      expect(readFileSync(join(state, 'wt-path'), 'utf8').trim()).toBe(join(wtBase, 'halo-wt-issue-7'));
+    } finally {
+      delete process.env['HALO_WORKTREE_DIR'];
+      rmSync(wtBase, { recursive: true, force: true });
+    }
+  });
+
   it('preflight STOP: .halo/STOP present → exit 0, loop never runs (no logs)', async () => {
     const state = join(repo, '.halo', 'state');
     plugin('task-source', 'ts', 'index.sh', TASK_SOURCE, { STATE_DIR: state });
