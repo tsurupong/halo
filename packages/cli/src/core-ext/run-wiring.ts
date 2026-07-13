@@ -144,13 +144,10 @@ export function nodeRunWiringSeams(): RunWiringSeams {
       const branch = `feature/issue-${taskId}`;
       // 既存の残骸を掃除してから add (冪等)。ブランチ二重チェックアウトは git が禁止する。
       await spawnCapture('git', ['worktree', 'remove', '--force', path], cwd);
-      const r = await spawnCapture('git', ['worktree', 'add', path, '-b', branch], cwd);
-      if (r.code !== 0) {
-        // ブランチ既存など: 新規ブランチ無しで再試行。
-        const r2 = await spawnCapture('git', ['worktree', 'add', '--force', path, branch], cwd);
-        if (r2.code !== 0)
-          throw new Error(`git worktree add failed: ${r.stderr || r2.stderr}`.trim());
-      }
+      // -B: 過去 run の残骸ブランチが古いコミットを指していても常に現 HEAD へ
+      // リセットする (worktree は使い捨てで、起点は常に最新 HEAD)。
+      const r = await spawnCapture('git', ['worktree', 'add', '--force', '-B', branch, path], cwd);
+      if (r.code !== 0) throw new Error(`git worktree add failed: ${r.stderr}`.trim());
       return path;
     },
     async remove(cwd, workdir) {
