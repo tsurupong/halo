@@ -28,6 +28,7 @@ import type { HeavyDecision } from './preflight.js';
 import { shouldRunSink } from './autonomy.js';
 import { classifyExit, parseJsonStdout, type ExitClass, type RunPortResult } from './runPort.js';
 import type { ExecutorRecord, GateResult, IterationInput, Logger, Outcome } from './logger.js';
+import type { LoopPhase, PhaseTracker } from './phase.js';
 
 /** Adjustable initial values (要件 §11.2). The loop hardcodes none of these. */
 export const LOOP_DEFAULTS = {
@@ -138,7 +139,11 @@ export interface LastFailure {
  * failure (D2 §2.4 直近 reason の即時再注入). The "前回の失敗" section is what makes
  * the learning loop work — the next attempt sees exactly why the last one failed. Pure.
  */
-export function buildPrompt(task: TaskSourceOut, fragments: readonly Fragment[], lastFailure?: LastFailure): string {
+export function buildPrompt(
+  task: TaskSourceOut,
+  fragments: readonly Fragment[],
+  lastFailure?: LastFailure,
+): string {
   const parts: string[] = [`# Task ${task.task_id ?? ''}`.trim()];
   if (task.title) parts.push(`## Title\n${task.title}`);
   if (task.body) parts.push(`## Requirement\n${task.body}`);
@@ -176,7 +181,8 @@ export function classifyExecutor(result: RunPortResult): ExecClassification {
   const parsed = parseJsonStdout<ExecutorOut>(result.stdout);
   if (!parsed.ok) return { outcome: 'error' };
   const status = parsed.value.status;
-  if (status === 'done' || status === 'stuck' || status === 'timeout') return { outcome: status, out: parsed.value };
+  if (status === 'done' || status === 'stuck' || status === 'timeout')
+    return { outcome: status, out: parsed.value };
   return { outcome: 'error' };
 }
 
@@ -215,9 +221,21 @@ export function evaluateGates(runs: readonly GateRun[]): GateVerdict {
     const out = parsed.ok && typeof parsed.value.reason === 'string' ? parsed.value : undefined;
     const reason =
       out?.reason ??
-      (cls === 'error' ? `gate '${run.name}' errored (exit ${run.result.exitCode ?? 'signal'})` : `gate '${run.name}' failed`);
-    results.push({ name: run.name, result: 'fail', reason, ...(out?.hint != null ? { hint: out.hint } : {}) });
-    if (!failure) failure = { reason, ...(out?.hint != null ? { hint: out.hint } : {}), gate: out?.gate ?? run.name };
+      (cls === 'error'
+        ? `gate '${run.name}' errored (exit ${run.result.exitCode ?? 'signal'})`
+        : `gate '${run.name}' failed`);
+    results.push({
+      name: run.name,
+      result: 'fail',
+      reason,
+      ...(out?.hint != null ? { hint: out.hint } : {}),
+    });
+    if (!failure)
+      failure = {
+        reason,
+        ...(out?.hint != null ? { hint: out.hint } : {}),
+        gate: out?.gate ?? run.name,
+      };
   }
   return failure ? { passed: false, failure, results } : { passed: true, results };
 }
@@ -290,6 +308,8 @@ export interface LoopDeps {
   /** PR url passed to task-source `op=complete`; defaults to '' (Phase 1). */
   resolvePrUrl?: (task: TaskSourceOut, workdir: string) => string;
   estimateTokens?: (text: string) => number;
+  /** Hang-detection phase file (`current.json`); omitted → no phase writes. */
+  phaseTracker?: PhaseTracker;
 }
 
 /** Per-iteration summary returned to the caller (and mirrored into `iter_N.json`). */
@@ -331,8 +351,10 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
   const estimate = deps.estimateTokens ?? estimateTokensDefault;
   const profile = cfg.profileName ?? 'default';
 
-  if (deps.ports.taskSource.length === 0) throw new LoopError("no enabled plugin for single port 'task-source'");
-  if (deps.ports.executor.length === 0) throw new LoopError("no enabled plugin for single port 'executor'");
+  if (deps.ports.taskSource.length === 0)
+    throw new LoopError("no enabled plugin for single port 'task-source'");
+  if (deps.ports.executor.length === 0)
+    throw new LoopError("no enabled plugin for single port 'executor'");
 
   const executor = deps.ports.executor[0]!;
   // The executor's process-level wall (D2 §3.3, M2): the budget `timeout_sec` is
@@ -346,8 +368,20 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
   const taskStates = new Map<string, TaskState>();
   let iter = 0;
 
-  const finish = (endReason: LoopEndReason, endDetail?: string): LoopResult =>
-    endDetail != null ? { endReason, iterations, endDetail } : { endReason, iterations };
+  // Phase boundary marker for hang detection (`current.json`). Guarded so an
+  // injected tracker that throws still cannot abort the loop (best-effort like sinks).
+  const markPhase = async (taskId: string | null, phase: LoopPhase): Promise<void> => {
+    try {
+      await deps.phaseTracker?.set(iter, taskId, phase);
+    } catch {
+      /* best-effort */
+    }
+  };
+
+  const finish = async (endReason: LoopEndReason, endDetail?: string): Promise<LoopResult> => {
+    await markPhase(null, 'idle');
+    return endDetail != null ? { endReason, iterations, endDetail } : { endReason, iterations };
+  };
 
   for (;;) {
     // Terminal checks at the iteration boundary (D2 §2.7 #4, #5).
@@ -362,6 +396,7 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
     // Next (single strategy, D2 §3.6): the ready check of §4.1 #4. A broken
     // task-source (non-pass exit / garbage stdout / spawn failure) is a distinct
     // terminal condition from a healthy idle `NO_TASK` (M4) — end loudly, not clean.
+    await markPhase(null, 'next');
     const next = await runTaskSourceNext(deps);
     if (next.kind === 'error') return finish('TASK_SOURCE_ERROR', next.reason);
     if (next.kind === 'none') return finish('NO_TASK');
@@ -375,9 +410,19 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
     // graph) is a *global* environment fault, not a fault of this task — running on
     // through every ready task would mislabel them all as `escalated`. Record this
     // iteration as `aborted_env` and end the loop (M3), like a light-stage stop.
-    const heavy = deps.preflightHeavy ? await deps.preflightHeavy(task) : ({ proceed: true } as HeavyDecision);
+    await markPhase(taskId, 'preflight_heavy');
+    const heavy = deps.preflightHeavy
+      ? await deps.preflightHeavy(task)
+      : ({ proceed: true } as HeavyDecision);
     if (!heavy.proceed) {
-      await record(deps, { iter, startedAt, profile, task, outcome: 'aborted_env', retryCount: state.retryCount });
+      await record(deps, {
+        iter,
+        startedAt,
+        profile,
+        task,
+        outcome: 'aborted_env',
+        retryCount: state.retryCount,
+      });
       iterations.push({ iter, taskId, outcome: 'aborted_env', retryCount: state.retryCount });
       return finish('ABORTED_ENV', `preflight: ${heavy.reason}`);
     }
@@ -385,6 +430,7 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
     const workdir = await deps.createWorktree(task);
     try {
       // Context (merge strategy, D2 §2.6 / §3.6).
+      await markPhase(taskId, 'context');
       const ctxOuts = await runContext(deps, task);
       const fragments = mergeFragments(ctxOuts, tokenLimit, estimate);
 
@@ -394,7 +440,12 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
       // Execute (single strategy). Classify by stdout status (D2 §2.3). A spawn
       // failure (RunPortError: ENOENT etc.) must not escape and crash the loop —
       // fold it to the safe side (`error` → failure path), D1 §3.1 (H1).
-      const execIn: ExecutorIn = { prompt, workdir, budget: { max_turns: maxTurns, timeout_sec: execTimeout } };
+      const execIn: ExecutorIn = {
+        prompt,
+        workdir,
+        budget: { max_turns: maxTurns, timeout_sec: execTimeout },
+      };
+      await markPhase(taskId, 'execute');
       let exec: ExecClassification;
       try {
         const execResult = await deps.runner(executor, execIn, { timeoutSec: execProcessTimeout });
@@ -409,6 +460,7 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
         state.retryCount += 1;
         state.lastFailure = { reason: executorFailureReason(exec) };
         taskStates.set(taskId, state);
+        await markPhase(taskId, 'on_fail');
         await runBestEffort(
           deps.ports.onFail,
           deps.runner,
@@ -424,11 +476,19 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
           executor: toExecutorRecord(exec),
           retryCount: state.retryCount,
         });
-        iterations.push({ iter, taskId, outcome, prompt, executorStatus: exec.outcome, retryCount: state.retryCount });
+        iterations.push({
+          iter,
+          taskId,
+          outcome,
+          prompt,
+          executorStatus: exec.outcome,
+          retryCount: state.retryCount,
+        });
         continue;
       }
 
       // Gate (logical-AND strategy, D2 §3.6).
+      await markPhase(taskId, 'gate');
       const changed = deps.changedFiles ? await deps.changedFiles(workdir) : [];
       const gateIn: GateIn = { task_id: taskId, workdir, changed_files: changed };
       const gateRuns = await runGates(deps, gateIn);
@@ -436,6 +496,7 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
 
       if (verdict.passed) {
         // Sink (best-effort, autonomy-filtered, D2 §2.5 / §3.6) then Complete.
+        await markPhase(taskId, 'sink');
         await runSinks(deps, { task_id: taskId, workdir, summary: exec.out?.summary ?? '' });
         // Only report completion when a PR URL was actually produced (D1 §1.5, L1).
         // At L1 (report-only, no PR-producing sink) `resolvePrUrl` yields '' → the
@@ -444,22 +505,56 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
         const prUrl = deps.resolvePrUrl ? deps.resolvePrUrl(task, workdir) : '';
         if (prUrl !== '') await runTaskSourceComplete(deps, taskId, prUrl);
         taskStates.delete(taskId);
-        await record(deps, { iter, startedAt, profile, task, outcome: 'passed', executor: toExecutorRecord(exec), gates: verdict.results, retryCount: state.retryCount });
-        iterations.push({ iter, taskId, outcome: 'passed', prompt, executorStatus: 'done', retryCount: state.retryCount });
+        await record(deps, {
+          iter,
+          startedAt,
+          profile,
+          task,
+          outcome: 'passed',
+          executor: toExecutorRecord(exec),
+          gates: verdict.results,
+          retryCount: state.retryCount,
+        });
+        iterations.push({
+          iter,
+          taskId,
+          outcome: 'passed',
+          prompt,
+          executorStatus: 'done',
+          retryCount: state.retryCount,
+        });
       } else {
         // Gate fail → OnFail (best-effort) + retain reason for re-injection (D2 §2.4).
         const failure = verdict.failure!;
         state.retryCount += 1;
         state.lastFailure = failure;
         taskStates.set(taskId, state);
+        await markPhase(taskId, 'on_fail');
         await runBestEffort(
           deps.ports.onFail,
           deps.runner,
           onFailInput(taskId, failure.reason, state.retryCount, { gate: failure.gate, workdir }),
         );
         const outcome = outcomeForFailure(state.retryCount, retryThreshold);
-        await record(deps, { iter, startedAt, profile, task, outcome, executor: toExecutorRecord(exec), gates: verdict.results, retryCount: state.retryCount });
-        iterations.push({ iter, taskId, outcome, prompt, executorStatus: 'done', gateFailure: failure, retryCount: state.retryCount });
+        await record(deps, {
+          iter,
+          startedAt,
+          profile,
+          task,
+          outcome,
+          executor: toExecutorRecord(exec),
+          gates: verdict.results,
+          retryCount: state.retryCount,
+        });
+        iterations.push({
+          iter,
+          taskId,
+          outcome,
+          prompt,
+          executorStatus: 'done',
+          gateFailure: failure,
+          retryCount: state.retryCount,
+        });
       }
     } finally {
       await deps.removeWorktree(workdir);
@@ -471,9 +566,7 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
 
 /** Outcome of one task-source `op=next` (M4): a task, a healthy idle, or a fault. */
 type NextResult =
-  | { kind: 'task'; task: TaskSourceOut }
-  | { kind: 'none' }
-  | { kind: 'error'; reason: string };
+  { kind: 'task'; task: TaskSourceOut } | { kind: 'none' } | { kind: 'error'; reason: string };
 
 async function runTaskSourceNext(deps: LoopDeps): Promise<NextResult> {
   const ts = deps.ports.taskSource[0]!;
@@ -486,7 +579,11 @@ async function runTaskSourceNext(deps: LoopDeps): Promise<NextResult> {
   }
   // A non-pass exit or unparseable stdout is a fault, distinct from a valid
   // `{task_id:null}` idle — end with TASK_SOURCE_ERROR rather than silent NO_TASK.
-  if (classifyExit(res) !== 'pass') return { kind: 'error', reason: `task-source exited non-pass (exit ${res.exitCode ?? 'signal'})` };
+  if (classifyExit(res) !== 'pass')
+    return {
+      kind: 'error',
+      reason: `task-source exited non-pass (exit ${res.exitCode ?? 'signal'})`,
+    };
   const parsed = parseJsonStdout<TaskSourceOut>(res.stdout);
   if (!parsed.ok) return { kind: 'error', reason: `task-source stdout invalid: ${parsed.error}` };
   if (parsed.value.task_id == null) return { kind: 'none' };
@@ -524,18 +621,27 @@ async function runGates(deps: LoopDeps, gateIn: GateIn): Promise<GateRun[]> {
     try {
       runs.push({ name: plugin.name, result: await deps.runner(plugin, gateIn, portOpts(plugin)) });
     } catch (err) {
-      runs.push({ name: plugin.name, result: spawnFailureResult(`gate '${plugin.name}' failed to run: ${errText(err)}`) });
+      runs.push({
+        name: plugin.name,
+        result: spawnFailureResult(`gate '${plugin.name}' failed to run: ${errText(err)}`),
+      });
     }
   }
   return runs;
 }
 
 async function runSinks(deps: LoopDeps, sinkIn: SinkIn): Promise<void> {
-  const enabled = deps.ports.sink.filter((s) => shouldRunSink(s.manifest.minAutonomy, deps.config.autonomy));
+  const enabled = deps.ports.sink.filter((s) =>
+    shouldRunSink(s.manifest.minAutonomy, deps.config.autonomy),
+  );
   await runBestEffort(enabled, deps.runner, sinkIn);
 }
 
-async function runBestEffort(plugins: readonly DiscoveredPlugin[], runner: PortRunner, stdin: unknown): Promise<void> {
+async function runBestEffort(
+  plugins: readonly DiscoveredPlugin[],
+  runner: PortRunner,
+  stdin: unknown,
+): Promise<void> {
   for (const plugin of plugins) {
     try {
       await runner(plugin, stdin, portOpts(plugin));
@@ -560,7 +666,14 @@ function portOpts(plugin: DiscoveredPlugin): { timeoutSec?: number } {
  * `error` and {@link evaluateGates} surfaces the reason (H1). Pure.
  */
 function spawnFailureResult(reason: string): RunPortResult {
-  return { exitCode: null, signal: null, stdout: JSON.stringify({ reason }), stderr: '', timedOut: false, durationMs: 0 };
+  return {
+    exitCode: null,
+    signal: null,
+    stdout: JSON.stringify({ reason }),
+    stderr: '',
+    timedOut: false,
+    durationMs: 0,
+  };
 }
 
 // --- log + shape helpers ----------------------------------------------------
@@ -595,7 +708,8 @@ function toExecutorRecord(exec: ExecClassification): ExecutorRecord {
   const cost = exec.out?.cost;
   let usd: number | undefined;
   if (cost && typeof cost === 'object') {
-    const raw = (cost as Record<string, unknown>).usd_estimate ?? (cost as Record<string, unknown>).usd;
+    const raw =
+      (cost as Record<string, unknown>).usd_estimate ?? (cost as Record<string, unknown>).usd;
     if (typeof raw === 'number' && Number.isFinite(raw)) usd = raw;
   }
   return {

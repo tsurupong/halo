@@ -3,6 +3,7 @@
 export const HALO_CORE_VERSION = '0.0.0';
 
 export * from './logger.js';
+export * from './phase.js';
 export * from './config.js';
 export * from './lock.js';
 export * from './discovery.js';

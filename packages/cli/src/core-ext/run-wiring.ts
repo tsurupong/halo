@@ -28,6 +28,7 @@ import {
   isWorktreeClean,
   checkBudget,
   createLogger,
+  createPhaseTracker,
   runLoop as coreRunLoop,
   acquireLock,
   releaseLock,
@@ -279,6 +280,12 @@ export function createRunHooks(seams: RunWiringSeams = nodeRunWiringSeams()): Ru
       try {
         const ports = await discoverLoopPorts(ctx.haloDir, seams.discoveryFs);
         const logger = createLogger({ logDir: logsDir(ctx.haloDir), fs: seams.logsFs });
+        // ハング検知: 各工程境界で logs/current.json を上書き (task md: phase-boundary-log)。
+        const phaseTracker = createPhaseTracker({
+          logDir: logsDir(ctx.haloDir),
+          fs: seams.logsFs,
+          now: seams.now,
+        });
         const deps: LoopDeps = {
           config: {
             autonomy: ctx.config.autonomy,
@@ -289,6 +296,7 @@ export function createRunHooks(seams: RunWiringSeams = nodeRunWiringSeams()): Ru
           ports,
           runner: makeRunner(ctx),
           logger,
+          phaseTracker,
           now: seams.now,
           isStopPresent: () => isStopFilePresent(ctx.haloDir, seams.logsFs),
           isBudgetOk: async () => !(await isBudgetExhaustedFor(ctx, seams)),
