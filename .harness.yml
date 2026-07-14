@@ -1,0 +1,5 @@
+# .harness.yml — HALO 管理宣言 (コミット対象)。kind ごとに runtime とプロンプトを割り当てる
+kinds:
+  code:
+    runtimes: [node-pnpm]
+    prompt: .halo/prompts/code.md
