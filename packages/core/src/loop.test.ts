@@ -5,6 +5,7 @@ import type { ContextOut } from '@tsurupong/halo-contracts';
 import type { DiscoveredPlugin } from './discovery.js';
 import { RunPortError, type RunPortResult } from './runPort.js';
 import type { IterationInput, Logger } from './logger.js';
+import type { LoopPhase, PhaseTracker } from './phase.js';
 import {
   buildPrompt,
   classifyExecutor,
@@ -22,14 +23,26 @@ import {
 // --- fixtures ----------------------------------------------------------------
 
 function res(over: Partial<RunPortResult> = {}): RunPortResult {
-  return { exitCode: 0, signal: null, stdout: '', stderr: '', timedOut: false, durationMs: 1, ...over };
+  return {
+    exitCode: 0,
+    signal: null,
+    stdout: '',
+    stderr: '',
+    timedOut: false,
+    durationMs: 1,
+    ...over,
+  };
 }
 
 function jsonRes(value: unknown, over: Partial<RunPortResult> = {}): RunPortResult {
   return res({ stdout: JSON.stringify(value), ...over });
 }
 
-function plug(port: DiscoveredPlugin['port'], name: string, minAutonomy?: DiscoveredPlugin['manifest']['minAutonomy']): DiscoveredPlugin {
+function plug(
+  port: DiscoveredPlugin['port'],
+  name: string,
+  minAutonomy?: DiscoveredPlugin['manifest']['minAutonomy'],
+): DiscoveredPlugin {
   return {
     port,
     name,
@@ -37,7 +50,13 @@ function plug(port: DiscoveredPlugin['port'], name: string, minAutonomy?: Discov
     dir: `/x/${name}`,
     execPath: `/x/${name}/run`,
     order: 0,
-    manifest: { name, version: '1.0.0', port, exec: 'run', ...(minAutonomy ? { minAutonomy } : {}) },
+    manifest: {
+      name,
+      version: '1.0.0',
+      port,
+      exec: 'run',
+      ...(minAutonomy ? { minAutonomy } : {}),
+    },
   };
 }
 
@@ -61,6 +80,7 @@ function harness(opts: {
   isBudgetOk?: LoopDeps['isBudgetOk'];
   preflightHeavy?: LoopDeps['preflightHeavy'];
   resolvePrUrl?: LoopDeps['resolvePrUrl'];
+  phaseTracker?: LoopDeps['phaseTracker'];
 }): Harness {
   const logs: IterationInput[] = [];
   const calls: Array<{ name: string; stdin: unknown }> = [];
@@ -96,6 +116,7 @@ function harness(opts: {
     },
     ...(opts.preflightHeavy ? { preflightHeavy: opts.preflightHeavy } : {}),
     ...(opts.resolvePrUrl ? { resolvePrUrl: opts.resolvePrUrl } : {}),
+    ...(opts.phaseTracker ? { phaseTracker: opts.phaseTracker } : {}),
   };
   return { deps, logs, calls, removed };
 }
@@ -105,20 +126,37 @@ function harness(opts: {
 describe('mergeFragments', () => {
   it('concatenates all plugins descending by priority, stable on ties (D2 §2.6)', () => {
     const lists: ContextOut[] = [
-      { fragments: [{ source: 'a', content: 'A', priority: 10 }, { source: 'b', content: 'B', priority: 30 }] },
-      { fragments: [{ source: 'c', content: 'C', priority: 10 }, { source: 'd', content: 'D', priority: 20 }] },
+      {
+        fragments: [
+          { source: 'a', content: 'A', priority: 10 },
+          { source: 'b', content: 'B', priority: 30 },
+        ],
+      },
+      {
+        fragments: [
+          { source: 'c', content: 'C', priority: 10 },
+          { source: 'd', content: 'D', priority: 20 },
+        ],
+      },
     ];
     expect(mergeFragments(lists).map((f) => f.source)).toEqual(['b', 'd', 'a', 'c']);
   });
 
   it('drops malformed fragments without throwing', () => {
-    const lists = [{ fragments: [{ source: 'ok', content: 'x', priority: 1 }, { bad: true }] }] as unknown as ContextOut[];
+    const lists = [
+      { fragments: [{ source: 'ok', content: 'x', priority: 1 }, { bad: true }] },
+    ] as unknown as ContextOut[];
     expect(mergeFragments(lists).map((f) => f.source)).toEqual(['ok']);
   });
 
   it('truncates at the token limit, slicing the crossing fragment', () => {
     const lists: ContextOut[] = [
-      { fragments: [{ source: 'big', content: 'x'.repeat(40), priority: 5 }, { source: 'next', content: 'y'.repeat(40), priority: 1 }] },
+      {
+        fragments: [
+          { source: 'big', content: 'x'.repeat(40), priority: 5 },
+          { source: 'next', content: 'y'.repeat(40), priority: 1 },
+        ],
+      },
     ];
     // limit 10 tokens ≈ 40 chars: first fragment fills it, second is dropped.
     const merged = mergeFragments(lists, 10);
@@ -130,14 +168,20 @@ describe('mergeFragments', () => {
 
 describe('buildPrompt', () => {
   it('includes task, context, and no failure section on the first attempt', () => {
-    const prompt = buildPrompt({ task_id: '7', title: 'Add X', body: 'do X' }, [{ source: 'kg', content: 'ctx', priority: 1 }]);
+    const prompt = buildPrompt({ task_id: '7', title: 'Add X', body: 'do X' }, [
+      { source: 'kg', content: 'ctx', priority: 1 },
+    ]);
     expect(prompt).toContain('Add X');
     expect(prompt).toContain('ctx');
     expect(prompt).not.toContain('前回の失敗');
   });
 
   it('re-injects the previous failure reason and hint (D2 §2.4)', () => {
-    const prompt = buildPrompt({ task_id: '7' }, [], { reason: 'coverage 87% < 90%', hint: 'add tests', gate: '30-test' });
+    const prompt = buildPrompt({ task_id: '7' }, [], {
+      reason: 'coverage 87% < 90%',
+      hint: 'add tests',
+      gate: '30-test',
+    });
     expect(prompt).toContain('前回の失敗');
     expect(prompt).toContain('coverage 87% < 90%');
     expect(prompt).toContain('add tests');
@@ -155,7 +199,9 @@ describe('classifyExecutor', () => {
 
   it('folds a process timeout, non-zero exit, or bad JSON to error', () => {
     expect(classifyExecutor(res({ timedOut: true })).outcome).toBe('error');
-    expect(classifyExecutor(res({ exitCode: 1, stdout: '{"status":"done","summary":"x"}' })).outcome).toBe('error');
+    expect(
+      classifyExecutor(res({ exitCode: 1, stdout: '{"status":"done","summary":"x"}' })).outcome,
+    ).toBe('error');
     expect(classifyExecutor(res({ stdout: 'not json' })).outcome).toBe('error');
     expect(classifyExecutor(jsonRes({ status: 'bogus', summary: '' })).outcome).toBe('error');
   });
@@ -176,7 +222,13 @@ describe('evaluateGates', () => {
   it('fails on the first exit-2 gate and keeps its reason (D2 §2.2)', () => {
     const verdict = evaluateGates([
       { name: '10-a', result: res({ exitCode: 0 }) },
-      { name: '30-test', result: jsonRes({ reason: 'coverage low', hint: 'tests', gate: '30-test' }, { exitCode: 2 }) },
+      {
+        name: '30-test',
+        result: jsonRes(
+          { reason: 'coverage low', hint: 'tests', gate: '30-test' },
+          { exitCode: 2 },
+        ),
+      },
       { name: '40-c', result: jsonRes({ reason: 'other', gate: '40-c' }, { exitCode: 2 }) },
     ]);
     expect(verdict.passed).toBe(false);
@@ -207,12 +259,18 @@ describe('termination predicates', () => {
 
 describe('runLoop', () => {
   it('throws LoopError when a single port has no plugin', async () => {
-    const h = harness({ ports: emptyPorts({ taskSource: [plug('task-source', 'ts')] }), respond: () => res() });
+    const h = harness({
+      ports: emptyPorts({ taskSource: [plug('task-source', 'ts')] }),
+      respond: () => res(),
+    });
     await expect(runLoop(h.deps)).rejects.toBeInstanceOf(LoopError);
   });
 
   it('ends NO_TASK immediately when task-source returns null', async () => {
-    const ports = emptyPorts({ taskSource: [plug('task-source', 'ts')], executor: [plug('executor', 'ex')] });
+    const ports = emptyPorts({
+      taskSource: [plug('task-source', 'ts')],
+      executor: [plug('executor', 'ex')],
+    });
     const h = harness({ ports, respond: () => jsonRes({ task_id: null }) });
     const result = await runLoop(h.deps);
     expect(result.endReason).toBe('NO_TASK');
@@ -242,10 +300,14 @@ describe('runLoop', () => {
     });
     const result = await runLoop(h.deps);
     expect(result.endReason).toBe('NO_TASK');
-    expect(result.iterations).toEqual([expect.objectContaining({ taskId: '1', outcome: 'passed' })]);
+    expect(result.iterations).toEqual([
+      expect.objectContaining({ taskId: '1', outcome: 'passed' }),
+    ]);
     // sink + complete both fired; worktree removed.
     expect(h.calls.filter((c) => c.name === 'log')).toHaveLength(1);
-    expect(h.calls.some((c) => c.name === 'ts' && (c.stdin as { op: string }).op === 'complete')).toBe(true);
+    expect(
+      h.calls.some((c) => c.name === 'ts' && (c.stdin as { op: string }).op === 'complete'),
+    ).toBe(true);
     expect(h.removed).toEqual(['/wt/1']);
   });
 
@@ -260,7 +322,12 @@ describe('runLoop', () => {
       ports,
       config: { autonomy: 'L1' },
       respond: (name, stdin, i) => {
-        if (name === 'ts') return (stdin as { op?: string }).op === 'complete' ? res() : i === 0 ? jsonRes({ task_id: '1' }) : jsonRes({ task_id: null });
+        if (name === 'ts')
+          return (stdin as { op?: string }).op === 'complete'
+            ? res()
+            : i === 0
+              ? jsonRes({ task_id: '1' })
+              : jsonRes({ task_id: null });
         if (name === 'ex') return jsonRes({ status: 'done', summary: 'ok' });
         return res();
       },
@@ -280,9 +347,17 @@ describe('runLoop', () => {
     const h = harness({
       ports,
       respond: (name, stdin, i) => {
-        if (name === 'ts') return (stdin as { op?: string }).op === 'complete' ? res() : i < 2 ? jsonRes({ task_id: '1' }) : jsonRes({ task_id: null });
+        if (name === 'ts')
+          return (stdin as { op?: string }).op === 'complete'
+            ? res()
+            : i < 2
+              ? jsonRes({ task_id: '1' })
+              : jsonRes({ task_id: null });
         if (name === 'ex') return jsonRes({ status: 'done', summary: 'ok' });
-        if (name === 'g') return i === 0 ? jsonRes({ reason: 'coverage 87% < 90%', gate: '30-test' }, { exitCode: 2 }) : res({ exitCode: 0 });
+        if (name === 'g')
+          return i === 0
+            ? jsonRes({ reason: 'coverage 87% < 90%', gate: '30-test' }, { exitCode: 2 })
+            : res({ exitCode: 0 });
         return res();
       },
     });
@@ -312,7 +387,9 @@ describe('runLoop', () => {
       },
     });
     const result = await runLoop(h.deps);
-    expect(result.iterations[0]).toEqual(expect.objectContaining({ executorStatus: 'stuck', outcome: 'failed' }));
+    expect(result.iterations[0]).toEqual(
+      expect.objectContaining({ executorStatus: 'stuck', outcome: 'failed' }),
+    );
     // Gate never runs when the executor did not finish.
     expect(h.calls.some((c) => c.name === 'g')).toBe(false);
     expect(h.calls.some((c) => c.name === 'rec')).toBe(true);
@@ -320,7 +397,11 @@ describe('runLoop', () => {
 
   it('stops with BUDGET_EXCEEDED mid-run', async () => {
     let iters = 0;
-    const ports = emptyPorts({ taskSource: [plug('task-source', 'ts')], executor: [plug('executor', 'ex')], gate: [] });
+    const ports = emptyPorts({
+      taskSource: [plug('task-source', 'ts')],
+      executor: [plug('executor', 'ex')],
+      gate: [],
+    });
     const h = harness({
       ports,
       isBudgetOk: () => iters < 2,
@@ -335,11 +416,16 @@ describe('runLoop', () => {
 
   it('stops with STOP when the kill-switch appears mid-run', async () => {
     let seen = 0;
-    const ports = emptyPorts({ taskSource: [plug('task-source', 'ts')], executor: [plug('executor', 'ex')], gate: [] });
+    const ports = emptyPorts({
+      taskSource: [plug('task-source', 'ts')],
+      executor: [plug('executor', 'ex')],
+      gate: [],
+    });
     const h = harness({
       ports,
       isStopPresent: () => seen++ >= 1,
-      respond: (name) => (name === 'ts' ? jsonRes({ task_id: '1' }) : jsonRes({ status: 'done', summary: 'ok' })),
+      respond: (name) =>
+        name === 'ts' ? jsonRes({ task_id: '1' }) : jsonRes({ status: 'done', summary: 'ok' }),
     });
     const result = await runLoop(h.deps);
     expect(result.endReason).toBe('STOP');
@@ -347,11 +433,16 @@ describe('runLoop', () => {
   });
 
   it('stops with MAX_ITER after the configured number of iterations', async () => {
-    const ports = emptyPorts({ taskSource: [plug('task-source', 'ts')], executor: [plug('executor', 'ex')], gate: [] });
+    const ports = emptyPorts({
+      taskSource: [plug('task-source', 'ts')],
+      executor: [plug('executor', 'ex')],
+      gate: [],
+    });
     const h = harness({
       ports,
       config: { maxIter: 3 },
-      respond: (name, _stdin, i) => (name === 'ts' ? jsonRes({ task_id: `${i}` }) : jsonRes({ status: 'done', summary: 'ok' })),
+      respond: (name, _stdin, i) =>
+        name === 'ts' ? jsonRes({ task_id: `${i}` }) : jsonRes({ status: 'done', summary: 'ok' }),
     });
     const result = await runLoop(h.deps);
     expect(result.endReason).toBe('MAX_ITER');
@@ -359,11 +450,16 @@ describe('runLoop', () => {
   });
 
   it('stops with TIMEOUT at an iteration boundary', async () => {
-    const ports = emptyPorts({ taskSource: [plug('task-source', 'ts')], executor: [plug('executor', 'ex')], gate: [] });
+    const ports = emptyPorts({
+      taskSource: [plug('task-source', 'ts')],
+      executor: [plug('executor', 'ex')],
+      gate: [],
+    });
     const h = harness({
       ports,
       config: { timeoutSec: 0 },
-      respond: (name) => (name === 'ts' ? jsonRes({ task_id: '1' }) : jsonRes({ status: 'done', summary: 'ok' })),
+      respond: (name) =>
+        name === 'ts' ? jsonRes({ task_id: '1' }) : jsonRes({ status: 'done', summary: 'ok' }),
     });
     const result = await runLoop(h.deps);
     expect(result.endReason).toBe('TIMEOUT');
@@ -387,7 +483,9 @@ describe('runLoop', () => {
     });
     const result = await runLoop(h.deps);
     expect(result.endReason).toBe('NO_TASK');
-    expect(result.iterations[0]).toEqual(expect.objectContaining({ executorStatus: 'error', outcome: 'failed' }));
+    expect(result.iterations[0]).toEqual(
+      expect.objectContaining({ executorStatus: 'error', outcome: 'failed' }),
+    );
     expect(h.calls.some((c) => c.name === 'rec')).toBe(true); // on-fail still recorded
     expect(h.removed).toEqual(['/wt/1']); // worktree cleaned up
   });
@@ -421,7 +519,11 @@ describe('runLoop', () => {
     ts.manifest.timeoutSec = 12;
     const gate = plug('gate', 'g');
     gate.manifest.timeoutSec = 34;
-    const ports = emptyPorts({ taskSource: [ts], executor: [plug('executor', 'ex')], gate: [gate] });
+    const ports = emptyPorts({
+      taskSource: [ts],
+      executor: [plug('executor', 'ex')],
+      gate: [gate],
+    });
     const seen = new Map<string, number | undefined>();
     const h = harness({
       ports,
@@ -443,7 +545,11 @@ describe('runLoop', () => {
 
   // M2: the executor process wall sits a grace margin past the budget timeout.
   it('gives the executor process timeout a grace margin over the budget (M2)', async () => {
-    const ports = emptyPorts({ taskSource: [plug('task-source', 'ts')], executor: [plug('executor', 'ex')], gate: [] });
+    const ports = emptyPorts({
+      taskSource: [plug('task-source', 'ts')],
+      executor: [plug('executor', 'ex')],
+      gate: [],
+    });
     let execTimeoutSec: number | undefined;
     const h = harness({
       ports,
@@ -485,7 +591,10 @@ describe('runLoop', () => {
 
   // M4: a broken task-source ends TASK_SOURCE_ERROR, distinct from a healthy NO_TASK.
   it('ends TASK_SOURCE_ERROR on a non-pass task-source exit (M4)', async () => {
-    const ports = emptyPorts({ taskSource: [plug('task-source', 'ts')], executor: [plug('executor', 'ex')] });
+    const ports = emptyPorts({
+      taskSource: [plug('task-source', 'ts')],
+      executor: [plug('executor', 'ex')],
+    });
     const h = harness({ ports, respond: () => res({ exitCode: 1, stdout: 'garbage' }) });
     const result = await runLoop(h.deps);
     expect(result.endReason).toBe('TASK_SOURCE_ERROR');
@@ -493,7 +602,10 @@ describe('runLoop', () => {
   });
 
   it('ends TASK_SOURCE_ERROR when the task-source spawn throws (M4)', async () => {
-    const ports = emptyPorts({ taskSource: [plug('task-source', 'ts')], executor: [plug('executor', 'ex')] });
+    const ports = emptyPorts({
+      taskSource: [plug('task-source', 'ts')],
+      executor: [plug('executor', 'ex')],
+    });
     const h = harness({
       ports,
       respond: (name) => {
@@ -524,7 +636,9 @@ describe('runLoop', () => {
     });
     const result = await runLoop(h.deps);
     expect(result.iterations[0]?.outcome).toBe('passed');
-    expect(h.calls.some((c) => c.name === 'ts' && (c.stdin as { op?: string }).op === 'complete')).toBe(false);
+    expect(
+      h.calls.some((c) => c.name === 'ts' && (c.stdin as { op?: string }).op === 'complete'),
+    ).toBe(false);
     expect(h.calls.some((c) => c.name === 'log')).toBe(true); // sink still fired
   });
 
@@ -539,7 +653,10 @@ describe('runLoop', () => {
       ports,
       respond: (name, _stdin, i) => {
         if (name === 'ts') return i < 2 ? jsonRes({ task_id: '1' }) : jsonRes({ task_id: null });
-        if (name === 'ex') return i === 0 ? jsonRes({ status: 'stuck', summary: 'blocked on X' }) : jsonRes({ status: 'done', summary: 'ok' });
+        if (name === 'ex')
+          return i === 0
+            ? jsonRes({ status: 'stuck', summary: 'blocked on X' })
+            : jsonRes({ status: 'done', summary: 'ok' });
         return res({ exitCode: 0 });
       },
     });
@@ -550,13 +667,137 @@ describe('runLoop', () => {
   });
 
   it('writes one iteration log per executed iteration', async () => {
-    const ports = emptyPorts({ taskSource: [plug('task-source', 'ts')], executor: [plug('executor', 'ex')], gate: [] });
+    const ports = emptyPorts({
+      taskSource: [plug('task-source', 'ts')],
+      executor: [plug('executor', 'ex')],
+      gate: [],
+    });
     const h = harness({
       ports,
-      respond: (name, _stdin, i) => (name === 'ts' ? (i === 0 ? jsonRes({ task_id: '1' }) : jsonRes({ task_id: null })) : jsonRes({ status: 'done', summary: 'ok' })),
+      respond: (name, _stdin, i) =>
+        name === 'ts'
+          ? i === 0
+            ? jsonRes({ task_id: '1' })
+            : jsonRes({ task_id: null })
+          : jsonRes({ status: 'done', summary: 'ok' }),
     });
     await runLoop(h.deps);
     expect(h.logs).toHaveLength(1);
     expect(h.logs[0]).toEqual(expect.objectContaining({ iter: 1, outcome: 'passed' }));
+  });
+});
+
+// --- driver: phase-boundary tracking (hang detection, D6 §6.1) ----------------
+
+describe('runLoop phase tracking', () => {
+  function trackingSpy() {
+    const seen: Array<{ iter: number; taskId: string | null; phase: LoopPhase }> = [];
+    const phaseTracker: PhaseTracker = {
+      set: async (iter, taskId, phase) => {
+        seen.push({ iter, taskId, phase });
+      },
+    };
+    return { seen, phaseTracker };
+  }
+
+  it('records each phase boundary in order on the happy path, ending idle', async () => {
+    const { seen, phaseTracker } = trackingSpy();
+    const ports = emptyPorts({
+      taskSource: [plug('task-source', 'ts')],
+      executor: [plug('executor', 'ex')],
+      gate: [plug('gate', 'g')],
+      sink: [plug('sink', 'log', 'L1')],
+    });
+    const h = harness({
+      ports,
+      phaseTracker,
+      respond: (name, stdin, i) => {
+        if (name === 'ts') {
+          if ((stdin as { op: string }).op === 'complete') return res();
+          return i === 0 ? jsonRes({ task_id: '1', title: 'T' }) : jsonRes({ task_id: null });
+        }
+        if (name === 'ex') return jsonRes({ status: 'done', summary: 'ok' });
+        return res({ exitCode: 0 });
+      },
+    });
+    await runLoop(h.deps);
+    expect(seen.map((s) => s.phase)).toEqual([
+      'next',
+      'preflight_heavy',
+      'context',
+      'execute',
+      'gate',
+      'sink', // iter 1
+      'next', // iter 2 → NO_TASK
+      'idle',
+    ]);
+    // task_id is attached from the point it is known.
+    expect(seen[2]).toEqual({ iter: 1, taskId: '1', phase: 'context' });
+    expect(seen.at(-1)).toEqual({ iter: 2, taskId: null, phase: 'idle' });
+  });
+
+  it('records on_fail when a gate rejects the work', async () => {
+    const { seen, phaseTracker } = trackingSpy();
+    const ports = emptyPorts({
+      taskSource: [plug('task-source', 'ts')],
+      executor: [plug('executor', 'ex')],
+      gate: [plug('gate', 'g')],
+      onFail: [plug('on-fail', 'rec')],
+    });
+    const h = harness({
+      ports,
+      phaseTracker,
+      config: { maxIter: 1 },
+      respond: (name, stdin) => {
+        if (name === 'ts')
+          return (stdin as { op?: string }).op === 'complete' ? res() : jsonRes({ task_id: '1' });
+        if (name === 'ex') return jsonRes({ status: 'done', summary: 'ok' });
+        if (name === 'g') return jsonRes({ reason: 'no', gate: 'g' }, { exitCode: 2 });
+        return res();
+      },
+    });
+    await runLoop(h.deps);
+    expect(seen.map((s) => s.phase)).toContain('on_fail');
+    expect(seen.at(-1)?.phase).toBe('idle');
+  });
+
+  it('records on_fail for an executor failure too', async () => {
+    const { seen, phaseTracker } = trackingSpy();
+    const ports = emptyPorts({
+      taskSource: [plug('task-source', 'ts')],
+      executor: [plug('executor', 'ex')],
+      onFail: [plug('on-fail', 'rec')],
+    });
+    const h = harness({
+      ports,
+      phaseTracker,
+      config: { maxIter: 1 },
+      respond: (name, stdin) => {
+        if (name === 'ts')
+          return (stdin as { op?: string }).op === 'complete' ? res() : jsonRes({ task_id: '1' });
+        if (name === 'ex') return jsonRes({ status: 'stuck' });
+        return res();
+      },
+    });
+    await runLoop(h.deps);
+    expect(seen.map((s) => s.phase)).toContain('on_fail');
+    expect(seen.map((s) => s.phase)).not.toContain('gate');
+  });
+
+  it('still ends idle when the tracker is present and the loop stops on STOP', async () => {
+    const { seen, phaseTracker } = trackingSpy();
+    const ports = emptyPorts({
+      taskSource: [plug('task-source', 'ts')],
+      executor: [plug('executor', 'ex')],
+    });
+    const h = harness({
+      ports,
+      phaseTracker,
+      isStopPresent: () => true,
+      respond: () => jsonRes({ task_id: null }),
+    });
+    const result = await runLoop(h.deps);
+    expect(result.endReason).toBe('STOP');
+    expect(seen.map((s) => s.phase)).toEqual(['idle']);
   });
 });
