@@ -6,6 +6,7 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { chmod as nodeChmod } from 'node:fs/promises';
 import { BUNDLED_PLUGINS, type BundledPlugin } from '@tsurupong/halo-plugins/registry';
+import type { PluginManifest } from '@tsurupong/halo-contracts';
 import type { ParsedArgs } from '../args.js';
 import type { ExitCode } from '../exit-codes.js';
 import { EXIT } from '../exit-codes.js';
@@ -38,6 +39,19 @@ HALO_LAUNCHER_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 export HALO_LAUNCHER_DIR
 exec node "${distPath}" "$@"
 `;
+}
+
+/**
+ * manifest の entry/aux (dist ルート相対) からランチャー生成対象を列挙する。`entry` は role
+ * `main`、`aux` は各キー名を role として扱う (D11 §3 追記)。ファイル名の細かな整形は
+ * Task 6 の enable 全面改修で扱う — ここでは型を成立させる最小限の実装。
+ */
+function launcherTargets(manifest: PluginManifest): Array<{ script: string; dist: string }> {
+  const targets: Array<{ script: string; dist: string }> = [{ script: 'main.sh', dist: manifest.entry }];
+  for (const [role, dist] of Object.entries(manifest.aux ?? {})) {
+    targets.push({ script: `${role}.sh`, dist });
+  }
+  return targets;
 }
 
 /** `plugin.env` のテンプレート値中の `{PORTS_DIR}` を実際の絶対パスへ展開する。 */
@@ -86,7 +100,7 @@ export async function enableCommand(
     resolvedEnv !== undefined ? { ...plugin.manifest, env: resolvedEnv } : plugin.manifest;
   await deps.fs.writeFile(`${targetDir}/plugin.json`, `${JSON.stringify(manifest, null, 2)}\n`);
 
-  for (const entry of plugin.entries) {
+  for (const entry of launcherTargets(plugin.manifest)) {
     const scriptPath = `${targetDir}/${entry.script}`;
     const distPath = join(distRoot, entry.dist);
     await deps.fs.writeFile(scriptPath, launcherScript(distPath));
