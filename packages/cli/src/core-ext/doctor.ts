@@ -16,6 +16,7 @@ export {
   checkLockStop,
   checkPlacement,
   checkDisk,
+  checkLegacyLauncherConfig,
   aggregate,
   runAll,
 } from '@tsurupong/halo-core';

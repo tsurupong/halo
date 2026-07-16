@@ -229,6 +229,18 @@ export function checkRequiredCommands(missing: string[]): CheckResult {
   };
 }
 
+/** 旧 `.sh` ランチャー構成の残存検出 (entry契約化 Task 6 Step D)。 */
+export function checkLegacyLauncherConfig(offenders: string[]): CheckResult {
+  if (offenders.length === 0)
+    return { id: 12, title: '旧ランチャー設定', status: 'OK', detail: '.sh 参照なし' };
+  return {
+    id: 12,
+    title: '旧ランチャー設定',
+    status: 'WARN',
+    detail: `旧形式の .sh ランチャー設定が残存: ${offenders.join(', ')} — 'halo enable <name>' で再生成してください`,
+  };
+}
+
 export function checkSchedulerBackend(backend: SchedulerBackend): CheckResult {
   if (backend === 'none')
     return {
@@ -303,7 +315,43 @@ export async function runAll(probes: DoctorProbes): Promise<DoctorReport> {
   );
   const c9 = checkDisk(await probes.diskOk());
 
-  const checks = [c1, c2, c3, c4, c5, c6, c7, c8, c9];
+  const legacyOffenders: string[] = [];
+  for (const port of PORT_DIRS) {
+    const portDir = join(haloDir, 'ports', port);
+    let names: string[];
+    try {
+      names = await fs.readdir(portDir);
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      if (name.startsWith('.')) continue;
+      const pluginDir = join(portDir, name);
+      if (!(await fs.isDirectory(pluginDir))) continue;
+      let entries: string[];
+      try {
+        entries = await fs.readdir(pluginDir);
+      } catch {
+        continue;
+      }
+      if (entries.some((e) => e.endsWith('.sh'))) {
+        legacyOffenders.push(`${port}/${name} (.sh ファイル残存)`);
+        continue;
+      }
+      if (!entries.includes('plugin.json')) continue;
+      try {
+        const content = await fs.readFile(join(pluginDir, 'plugin.json'));
+        if (content.includes('.sh')) {
+          legacyOffenders.push(`${port}/${name} (plugin.json が .sh を参照)`);
+        }
+      } catch {
+        // plugin.json 読み取り失敗はここでは無視 (他検査の管轄外)。
+      }
+    }
+  }
+  const c12 = checkLegacyLauncherConfig(legacyOffenders);
+
+  const checks = [c1, c2, c3, c4, c5, c6, c7, c8, c9, c12];
 
   if (probes.commandExists) {
     const absent: string[] = [];
