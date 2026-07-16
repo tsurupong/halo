@@ -279,6 +279,10 @@ export function createRunHooks(seams: RunWiringSeams = nodeRunWiringSeams()): Ru
 
       try {
         const ports = await discoverLoopPorts(ctx.haloDir, seams.discoveryFs);
+        // ADR-0016 の完了判定基準: worktree「作成時点」の HEAD を控える。完了時の
+        // repo HEAD と比較すると、run 中にオペレータがコミットしただけで差分が出て
+        // 成果ゼロの偽 complete が発火する (2026-07-16 に実際に発生)。
+        const worktreeBase = new Map<string, string>();
         const logger = createLogger({ logDir: logsDir(ctx.haloDir), fs: seams.logsFs });
         // ハング検知: 各工程境界で logs/current.json を上書き (task md: phase-boundary-log)。
         const phaseTracker = createPhaseTracker({
@@ -302,8 +306,22 @@ export function createRunHooks(seams: RunWiringSeams = nodeRunWiringSeams()): Ru
           now: seams.now,
           isStopPresent: () => isStopFilePresent(ctx.haloDir, seams.logsFs),
           isBudgetOk: async () => !(await isBudgetExhaustedFor(ctx, seams)),
-          createWorktree: (task) => seams.worktree.create(ctx.cwd, String(task.task_id)),
-          removeWorktree: (workdir) => seams.worktree.remove(ctx.cwd, workdir),
+          createWorktree: async (task) => {
+            const workdir = await seams.worktree.create(ctx.cwd, String(task.task_id));
+            try {
+              worktreeBase.set(
+                workdir,
+                (await seams.git(workdir)(['rev-parse', 'HEAD'])).stdout.trim(),
+              );
+            } catch {
+              /* base 不明は resolvePrUrl 側で未完了扱いに倒れる */
+            }
+            return workdir;
+          },
+          removeWorktree: (workdir) => {
+            worktreeBase.delete(workdir);
+            return seams.worktree.remove(ctx.cwd, workdir);
+          },
           changedFiles: async (workdir) => {
             const { stdout } = await seams.git(workdir)(['status', '--porcelain']);
             return stdout
@@ -315,10 +333,11 @@ export function createRunHooks(seams: RunWiringSeams = nodeRunWiringSeams()): Ru
           // `commit:<sha>` を完了参照として返し op=complete を発火させる。コミットが
           // 無ければ '' → タスクは queue に残る (成果の無い passed を完了扱いしない)。
           resolvePrUrl: async (_task, workdir) => {
+            const base = worktreeBase.get(workdir);
+            if (base === undefined || base === '') return ''; // 基準不明 → 未完了扱い。
             try {
               const head = (await seams.git(workdir)(['rev-parse', 'HEAD'])).stdout.trim();
-              const base = (await seams.git(ctx.cwd)(['rev-parse', 'HEAD'])).stdout.trim();
-              return head !== '' && base !== '' && head !== base ? `commit:${head}` : '';
+              return head !== '' && head !== base ? `commit:${head}` : '';
             } catch {
               return ''; // 判定不能は安全側 (未完了扱い)。
             }
