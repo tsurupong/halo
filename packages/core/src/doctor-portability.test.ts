@@ -7,6 +7,7 @@ import {
   checkPlacement,
   runAll,
   REQUIRED_COMMANDS,
+  type CheckResult,
   type DoctorProbes,
   type SchedulerBackend,
 } from './doctor.js';
@@ -53,7 +54,7 @@ function baseProbes(overrides: Partial<DoctorProbes> = {}): DoctorProbes {
   };
 }
 
-function findCheck(checks: { id: number }[], id: number) {
+function findCheck(checks: readonly CheckResult[], id: number): CheckResult | undefined {
   return checks.find((c) => c.id === id);
 }
 
