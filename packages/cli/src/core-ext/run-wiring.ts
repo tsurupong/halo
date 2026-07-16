@@ -311,8 +311,18 @@ export function createRunHooks(seams: RunWiringSeams = nodeRunWiringSeams()): Ru
               .map((l) => l.slice(3).trim())
               .filter((l) => l !== '');
           },
-          // Phase 1 / L1: PR を生成する sink が無いため op=complete は発火させない (D1 §1.5)。
-          resolvePrUrl: () => '',
+          // ADR-0016: sink (sink-git-commit) が worktree に新規コミットを作った場合のみ
+          // `commit:<sha>` を完了参照として返し op=complete を発火させる。コミットが
+          // 無ければ '' → タスクは queue に残る (成果の無い passed を完了扱いしない)。
+          resolvePrUrl: async (_task, workdir) => {
+            try {
+              const head = (await seams.git(workdir)(['rev-parse', 'HEAD'])).stdout.trim();
+              const base = (await seams.git(ctx.cwd)(['rev-parse', 'HEAD'])).stdout.trim();
+              return head !== '' && base !== '' && head !== base ? `commit:${head}` : '';
+            } catch {
+              return ''; // 判定不能は安全側 (未完了扱い)。
+            }
+          },
         };
         return await coreRunLoop(deps);
       } finally {

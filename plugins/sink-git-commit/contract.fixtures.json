@@ -1,0 +1,24 @@
+{
+  "description": "sink-git-commit documented input (ADR-0016). Side effects only, no output.",
+  "cases": [
+    {
+      "schema": "sink.in.json",
+      "expect": "valid",
+      "data": {
+        "task_id": "42",
+        "workdir": "/tmp/halo-wt-issue-42",
+        "summary": "implemented and gates passed"
+      }
+    },
+    {
+      "schema": "sink.in.json",
+      "expect": "invalid",
+      "data": { "task_id": "42", "workdir": "/tmp/wt" }
+    },
+    {
+      "schema": "sink.in.json",
+      "expect": "invalid",
+      "data": { "task_id": "42", "workdir": "/tmp/wt", "summary": "x", "extra": true }
+    }
+  ]
+}
