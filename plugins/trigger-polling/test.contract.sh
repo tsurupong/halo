@@ -22,8 +22,8 @@ chmod +x "$HALO_HOME/node_modules/.bin/halo"
 
 # --- fire: 絶対パスの halo を run <profile> で起動するか ---
 HALO_HOME="$HALO_HOME" bash "$DIR/fire" continuous >/dev/null 2>&1
-if [[ $? -eq 0 && "$(cat "$TMP/halo.args" 2>/dev/null)" == "run continuous" ]]; then
-  echo "PASS  fire invokes .bin/halo run continuous"
+if [[ $? -eq 0 && "$(cat "$TMP/halo.args" 2>/dev/null)" == "run continuous --cwd $HALO_HOME" ]]; then
+  echo "PASS  fire invokes .bin/halo run continuous --cwd \$HALO_HOME"
 else
   echo "FAIL  fire args=[$(cat "$TMP/halo.args" 2>/dev/null)]"; fail=1
 fi
