@@ -31,11 +31,29 @@ function die(msg: string, code = 2): never {
   process.exit(code);
 }
 
+// bash `date -u +%FT%TZ` と一致させるため秒精度に揃える
+function timestamp(): string {
+  return new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
+// bash 移植元(grep -m1 '^# ' → 空なら id フォールバック)とのパリティ:
+// 「内容のある最初の '# ' 行」ではなく「'# ' で始まる最初の行」を採用してから空判定する。
+function extractTitle(body: string, fallback: string): string {
+  for (const line of body.split(/\r?\n/)) {
+    if (line.startsWith('# ')) {
+      const title = line.slice(2);
+      return title === '' ? fallback : title;
+    }
+  }
+  return fallback;
+}
+
 const input = await readStdinJson().catch(() => undefined);
 const op = str(input, 'op');
 
 switch (op) {
   case 'next': {
+    // queue のファイル名は ASCII 前提(bash sort とのパリティは ASCII 範囲で保証)
     const file = readdirSync(queueDir)
       .filter((f) => f.endsWith('.md'))
       .sort()[0];
@@ -46,8 +64,7 @@ switch (op) {
     const filePath = join(queueDir, file);
     const id = basename(file, '.md');
     const body = readFileSync(filePath, 'utf8');
-    const titleMatch = /^# (.+)$/m.exec(body);
-    const title = titleMatch !== null ? titleMatch[1] : id;
+    const title = extractTitle(body, id);
     writeStdoutJson({ task_id: id, title, body, kind: 'code' });
     break;
   }
@@ -60,7 +77,7 @@ switch (op) {
     renameSync(src, join(doneDir, `${taskId}.md`));
     writeFileSync(
       join(doneDir, `${taskId}.result`),
-      `completed_at=${new Date().toISOString()}\npr_url=${prUrl}\n`,
+      `completed_at=${timestamp()}\npr_url=${prUrl}\n`,
     );
     break;
   }
@@ -75,7 +92,7 @@ switch (op) {
     if (taskId === undefined) die('fail requires task_id');
     appendFileSync(
       join(tasksDir, 'failures.log'),
-      `${new Date().toISOString()} fail #${rc}: ${reason}\n`,
+      `${timestamp()} fail #${rc}: ${reason}\n`,
     );
     if (rc >= failThreshold) {
       const src = join(queueDir, `${taskId}.md`);

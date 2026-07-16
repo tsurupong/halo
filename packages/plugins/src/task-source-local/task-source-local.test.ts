@@ -78,6 +78,15 @@ describe('task-source-local contract', () => {
     expect(out.title).toBe('no-title');
   });
 
+  it('next: first "# " line is empty -> falls back to id even if a later line has a real title', () => {
+    const { tasksDir, queueDir } = setupTasksDir();
+    writeFileSync(join(queueDir, 'empty-first.md'), '# \n# Real Title\nbody');
+    const { stdout } = runLauncher(JSON.stringify({ op: 'next' }), baseEnv(tasksDir));
+    const out = JSON.parse(stdout) as { task_id: string; title: string };
+    expect(out.task_id).toBe('empty-first');
+    expect(out.title).toBe('empty-first');
+  });
+
   it('complete: moves queue -> done and writes result file', () => {
     const { tasksDir, queueDir } = setupTasksDir();
     writeFileSync(join(queueDir, 'task-1.md'), '# T1\nbody');
