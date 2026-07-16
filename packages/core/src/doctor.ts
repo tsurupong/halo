@@ -11,7 +11,7 @@ export type CheckStatus = 'OK' | 'WARN' | 'FAIL';
 export type SchedulerBackend = 'schtasks' | 'systemd' | 'cron' | 'launchd' | 'none';
 
 /** c10 で存在を要求するコマンド (D10 §4)。 */
-export const REQUIRED_COMMANDS = ['jq', 'timeout', 'git', 'claude'] as const;
+export const REQUIRED_COMMANDS = ['node', 'git', 'claude'] as const;
 
 export interface CheckResult {
   id: number;
@@ -225,7 +225,7 @@ export function checkRequiredCommands(missing: string[]): CheckResult {
     id: 10,
     title: '必須コマンド',
     status: 'FAIL',
-    detail: `欠損: ${missing.join(', ')} — 例: \`pacman -S jq\` / \`brew install coreutils jq\``,
+    detail: `欠損: ${missing.join(', ')} — 例: \`pacman -S nodejs git\` / \`brew install node git\``,
   };
 }
 

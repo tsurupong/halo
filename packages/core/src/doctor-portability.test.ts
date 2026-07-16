@@ -66,22 +66,22 @@ describe('c10 必須コマンド', () => {
   });
   test('一部欠落 → FAIL + 欠落名を detail に列挙', async () => {
     const report = await runAll(
-      baseProbes({ commandExists: async (name) => name !== 'jq' && name !== 'timeout' }),
+      baseProbes({ commandExists: async (name) => name !== 'node' && name !== 'claude' }),
     );
     const c10 = findCheck(report.checks, 10);
     expect(c10?.status).toBe('FAIL');
-    expect(c10?.detail).toContain('jq');
-    expect(c10?.detail).toContain('timeout');
+    expect(c10?.detail).toContain('node');
+    expect(c10?.detail).toContain('claude');
     expect(c10?.detail).not.toContain('git,');
   });
   test('純関数: 欠落なし → OK / hint にインストール例', () => {
     expect(checkRequiredCommands([]).status).toBe('OK');
-    const fail = checkRequiredCommands(['jq']);
+    const fail = checkRequiredCommands(['node']);
     expect(fail.status).toBe('FAIL');
-    expect(fail.detail).toMatch(/pacman -S jq|brew install/);
+    expect(fail.detail).toMatch(/pacman -S nodejs|brew install/);
   });
-  test('検査対象は jq / timeout / git / claude', () => {
-    expect([...REQUIRED_COMMANDS]).toEqual(['jq', 'timeout', 'git', 'claude']);
+  test('検査対象は node / git / claude (ADR-0017: jq/timeout は不要)', () => {
+    expect([...REQUIRED_COMMANDS]).toEqual(['node', 'git', 'claude']);
   });
 });
 

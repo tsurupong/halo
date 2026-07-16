@@ -7,11 +7,11 @@ import type { CommandProbe, DoctorProbes } from './core-ext/doctor.js';
 import type { RunHooks } from './commands/run.js';
 import { createRunHooks } from './core-ext/run-wiring.js';
 
-/** bash アダプタ script を実行する SpawnAdapter (D1 §1.9)。 */
+/** アダプタ script (POSIX sh ランチャー, ADR-0017) を実行する SpawnAdapter (D1 §1.9)。 */
 export function nodeSpawnAdapter(): SpawnAdapter {
   return (script, args, env) =>
     new Promise<SpawnResult>((resolve, reject) => {
-      const child = nodeSpawn('bash', [script, ...args], {
+      const child = nodeSpawn('sh', [script, ...args], {
         env: { ...process.env, ...env },
         stdio: ['ignore', 'pipe', 'pipe'],
       });

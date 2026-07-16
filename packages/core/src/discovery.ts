@@ -67,7 +67,7 @@ export interface DiscoveredPlugin {
   /**
    * When set, launch as `execArgv[0] execArgv.slice(1)...` instead of spawning
    * `execPath` directly — the exec-bit fallback for shell scripts that lost
-   * their executable bit on NTFS checkouts (D10 §5), e.g. `['bash', execPath]`.
+   * their executable bit on NTFS checkouts (D10 §5), e.g. `['sh', execPath]`.
    * Absent for executables, which keep the direct-spawn path unchanged.
    */
   execArgv?: readonly string[];
@@ -324,7 +324,7 @@ export function isShellShebang(firstLine: string): boolean {
  * Exec-bit fallback (D10 §5): when the resolved exec exists but is not
  * executable (NTFS checkouts drop the bit; spawning would fail with EACCES)
  * and it is a shell script (`.sh` extension or a bash/sh shebang), return the
- * argv to launch it through bash instead. Returns `undefined` — keep the
+ * argv to launch it through sh instead (plugins' launchers are POSIX sh, ADR-0017). Returns `undefined` — keep the
  * direct-spawn path — for executables, non-scripts, and seams without an
  * `isExecutable` probe.
  */
@@ -332,14 +332,14 @@ async function resolveExecArgv(execPath: string, fs: DiscoveryFs): Promise<reado
   if (fs.isExecutable === undefined) return undefined;
   if (!(await fs.exists(execPath))) return undefined;
   if (await fs.isExecutable(execPath)) return undefined;
-  if (execPath.endsWith('.sh')) return ['bash', execPath];
+  if (execPath.endsWith('.sh')) return ['sh', execPath];
   let firstLine: string;
   try {
     firstLine = (await fs.readFile(execPath)).split('\n', 1)[0] ?? '';
   } catch {
     return undefined; // unreadable (e.g. binary read error) — keep existing behaviour
   }
-  return isShellShebang(firstLine) ? ['bash', execPath] : undefined;
+  return isShellShebang(firstLine) ? ['sh', execPath] : undefined;
 }
 
 function parseJson(text: string, path: string): unknown {
