@@ -2,6 +2,7 @@
 // halo CLI エントリ (T22, D3 §1): 引数パース → コマンドディスパッチ → 終了コード写像。
 // CLI はロジックを持たず core / core-ext へ委譲する (D3 §0)。
 import { realpathSync } from 'node:fs';
+import { hostname } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { HALO_CORE_VERSION } from '@tsurupong/halo-core';
 import { parseArgs, boolFlag } from './args.js';
@@ -12,6 +13,7 @@ import { initCommand } from './commands/init.js';
 import { triggerCommand } from './commands/trigger.js';
 import { stopCommand, resumeCommand } from './commands/stop.js';
 import { statusCommand } from './commands/status.js';
+import { watchdogCommand } from './commands/watchdog.js';
 import { doctorCommand } from './commands/doctor.js';
 import { createNodeCliFs } from './core-ext/fs.js';
 import { nodeSpawnAdapter, nodeDoctorProbes, defaultRunHooks } from './deps.js';
@@ -29,6 +31,8 @@ const VALUE_FLAGS = [
   'timeout',
   'daily-budget',
   'profiles-dir',
+  'days',
+  'action',
 ];
 const REPEAT_FLAGS = ['kind'];
 
@@ -44,7 +48,8 @@ commands:
   trigger list                        登録トリガー一覧
   stop [--reason <text>]              キルスイッチ配置 (.halo/STOP)
   resume                              キルスイッチ除去
-  status                              稼働状態・予算残・直近実績
+  status [--days <n>]                 稼働状態・予算残・直近実績 (既定 7 日のサマリ集計付き)
+  watchdog [--action <mode>]          停滞ループの検知/回収 (report|kill|skip, 既定 report)
   doctor [--fix]                      環境自己診断 (9 検査)
 
 global flags:
@@ -100,6 +105,24 @@ export async function run(argv: readonly string[], deps: Deps): Promise<ExitCode
         return await resumeCommand(rest, io, { fs, now: deps.now });
       case 'status':
         return await statusCommand(rest, io, { fs, now: deps.now, spawn });
+      case 'watchdog':
+        return await watchdogCommand(rest, io, {
+          fs,
+          now: deps.now,
+          env: process.env,
+          tmpdir: process.env.TMPDIR?.replace(/\/$/, '') ?? '/tmp',
+          host: hostname(),
+          isProcessAlive: (pid) => {
+            try {
+              process.kill(pid, 0);
+              return true;
+            } catch (err) {
+              return (err as NodeJS.ErrnoException).code === 'EPERM';
+            }
+          },
+          kill: (pid, signal) => process.kill(pid, signal),
+          sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+        });
       case 'doctor':
         return await doctorCommand(rest, io, {
           fs,

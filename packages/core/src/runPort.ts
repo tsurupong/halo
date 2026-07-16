@@ -180,8 +180,35 @@ function serializeStdin(value: unknown): string {
   return JSON.stringify(value ?? {});
 }
 
-function defaultSpawn(command: string, args: readonly string[], options: { cwd?: string; env?: Record<string, string>; detached?: boolean }): SpawnedChild {
+function defaultSpawn(
+  command: string,
+  args: readonly string[],
+  options: { cwd?: string; env?: Record<string, string>; detached?: boolean },
+): SpawnedChild {
   return nodeSpawn(command, args as string[], { ...options, shell: false });
+}
+
+/** Injectable `process.kill` seam for {@link killProcessTree} (tests / watchdog). */
+export type KillFn = (pid: number, signal: NodeJS.Signals) => void;
+
+/**
+ * Kill a whole process group by its leader pid (`kill(-pid)`), so grandchildren
+ * die with the leader. Returns true when the group signal was delivered; false
+ * when the group is already gone (or the pid is not a leader), leaving any
+ * fallback to the caller. Shared by runPort's timeout enforcement and the
+ * external watchdog (D9 §2.4) so tree-kill semantics live in one place.
+ */
+export function killProcessTree(
+  pid: number,
+  signal: NodeJS.Signals,
+  kill: KillFn = (p, s) => process.kill(p, s),
+): boolean {
+  try {
+    kill(-pid, signal);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -192,14 +219,7 @@ function defaultSpawn(command: string, args: readonly string[], options: { cwd?:
  */
 function killTree(child: SpawnedChild, signal: NodeJS.Signals): void {
   const pid = child.pid;
-  if (pid !== undefined) {
-    try {
-      process.kill(-pid, signal);
-      return;
-    } catch {
-      /* group may be gone or not a leader — fall through */
-    }
-  }
+  if (pid !== undefined && killProcessTree(pid, signal)) return;
   child.kill(signal);
 }
 
@@ -235,7 +255,10 @@ export function parseJsonStdout<T = unknown>(stdout: string): JsonParseResult<T>
   try {
     parsed = JSON.parse(trimmed);
   } catch (err) {
-    return { ok: false, error: `stdout is not valid JSON: ${err instanceof Error ? err.message : String(err)}` };
+    return {
+      ok: false,
+      error: `stdout is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
+    };
   }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
     return { ok: false, error: 'stdout JSON must be an object' };

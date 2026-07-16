@@ -12,6 +12,7 @@ import {
   type BudgetStatus,
   type IterationLog,
   type BudgetLimits,
+  type Outcome,
 } from '@tsurupong/halo-core';
 
 export interface StatusDeps {
@@ -60,7 +61,9 @@ async function resolveProfileLimits(
   try {
     body = await fs.readFile(join(profilesDir, `${profile}.env`));
   } catch {
-    io.warn(`warning: profile '${profile}' not found in ${profilesDir}/; showing unlimited budget.`);
+    io.warn(
+      `warning: profile '${profile}' not found in ${profilesDir}/; showing unlimited budget.`,
+    );
     return {};
   }
   return parseBudgetLimits(parseEnvFile(body));
@@ -88,6 +91,91 @@ export async function loadLastRun(logDir: string, fs: CliFs): Promise<IterationL
   }
 }
 
+// --- 実行結果サマリ集計 (D9 §3) -----------------------------------------------
+
+/** サマリの既定期間 (日)。`--days` で上書き可能。 */
+export const DEFAULT_SUMMARY_WINDOW_DAYS = 7;
+
+/** transient 失敗の理由分類 (D9 §3/§4 と同一の正規表現ファミリ)。判定順に評価する。 */
+const FAILURE_REASON_CATEGORIES: ReadonlyArray<{ category: string; pattern: RegExp }> = [
+  { category: 'rate_limit', pattern: /rate.?limit|429/i },
+  { category: 'flaky_test', pattern: /flaky/i },
+  { category: 'network', pattern: /ECONNRESET|ETIMEDOUT|ENETUNREACH|temporar/i },
+  { category: 'timeout', pattern: /timed?.?out/i },
+];
+
+export interface RunSummary {
+  /** 期間内の iter 件数。 */
+  total: number;
+  /** outcome 別件数 (期間内に存在した outcome のみキーを持つ)。 */
+  byOutcome: Partial<Record<Outcome, number>>;
+  /** 失敗 (failed / escalated) の理由分類別件数。 */
+  failureCategories: Record<string, number>;
+  /** 集計対象期間 (日)。 */
+  windowDays: number;
+}
+
+/** 1 件の失敗 iter を理由分類へ写像する (D9 §3.2 判定順)。純粋。 */
+function classifyFailure(entry: IterationLog): string {
+  const status = entry.executor?.status;
+  if (status === 'timeout' || status === 'stuck') return status;
+  const failedGates = (entry.gates ?? []).filter((g) => g.result === 'fail');
+  for (const gate of failedGates) {
+    if (gate.reason == null) continue;
+    for (const { category, pattern } of FAILURE_REASON_CATEGORIES) {
+      if (pattern.test(gate.reason)) return category;
+    }
+  }
+  if (failedGates.length > 0) return `gate:${failedGates[0]!.name}`;
+  return 'other';
+}
+
+/**
+ * iter_N.json 群から期間内の実行結果サマリを組む (D9 §3)。純粋 (now は引数)。
+ * started_at が期間外・解釈不能な iter は集計から除外する。
+ */
+export function aggregateRuns(
+  entries: readonly IterationLog[],
+  options: { windowDays: number; now: number },
+): RunSummary {
+  const cutoff = options.now - options.windowDays * 24 * 60 * 60 * 1000;
+  const byOutcome: Partial<Record<Outcome, number>> = {};
+  const failureCategories: Record<string, number> = {};
+  let total = 0;
+  for (const entry of entries) {
+    const startedMs = Date.parse(entry.started_at);
+    if (Number.isNaN(startedMs) || startedMs < cutoff || startedMs > options.now) continue;
+    total += 1;
+    byOutcome[entry.outcome] = (byOutcome[entry.outcome] ?? 0) + 1;
+    if (entry.outcome === 'failed' || entry.outcome === 'escalated') {
+      const category = classifyFailure(entry);
+      failureCategories[category] = (failureCategories[category] ?? 0) + 1;
+    }
+  }
+  return { total, byOutcome, failureCategories, windowDays: options.windowDays };
+}
+
+/** logs/ の全 iter_N.json を読む (壊れた/非オブジェクトのログは黙って除外)。 */
+export async function loadRuns(logDir: string, fs: CliFs): Promise<IterationLog[]> {
+  let names: string[];
+  try {
+    names = await fs.readdir(logDir);
+  } catch {
+    return [];
+  }
+  const out: IterationLog[] = [];
+  for (const name of names.filter(isIterationLogName)) {
+    try {
+      const parsed = JSON.parse(await fs.readFile(join(logDir, name))) as unknown;
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) continue;
+      out.push(parsed as IterationLog);
+    } catch {
+      // 読めないログは集計対象外 (status は非致命)。
+    }
+  }
+  return out;
+}
+
 export async function statusCommand(
   parsed: ParsedArgs,
   io: Io,
@@ -108,6 +196,14 @@ export async function statusCommand(
     ...limits,
   });
   const lastRun = await loadLastRun(logDir, deps.fs);
+  // --days: 不正値・未指定は既定 7 日 (status は非致命、graceful degrade)。
+  const daysRaw = Number(stringFlag(parsed, 'days'));
+  const windowDays =
+    Number.isFinite(daysRaw) && daysRaw > 0 ? daysRaw : DEFAULT_SUMMARY_WINDOW_DAYS;
+  const summary = aggregateRuns(await loadRuns(logDir, deps.fs), {
+    windowDays,
+    now: deps.now,
+  });
   const stopPresent = await deps.fs.exists(join(haloDir, 'STOP'));
   const triggers = await listTriggers({
     haloDir,
@@ -122,6 +218,7 @@ export async function statusCommand(
       stop: stopPresent,
       budget,
       lastRun: lastRun ? { iter: lastRun.iter, outcome: lastRun.outcome } : null,
+      summary,
       triggers: triggers.map((t) => ({ name: t.name, alive: t.alive })),
     });
     return EXIT.OK;
@@ -136,6 +233,17 @@ export async function statusCommand(
   );
   io.print(`実行可否: ${budget.ok ? '可 (予算内)' : '不可 (予算超過)'}`);
   io.print(`直近ループ: ${lastRun ? `iter ${lastRun.iter} — ${lastRun.outcome}` : '実績なし'}`);
+  const outcomeText = Object.entries(summary.byOutcome)
+    .map(([k, v]) => `${k} ${v}`)
+    .join(' / ');
+  io.print(
+    `直近${summary.windowDays}日の実績: ${summary.total} 件` +
+      (outcomeText === '' ? '' : ` (${outcomeText})`),
+  );
+  const failureText = Object.entries(summary.failureCategories)
+    .map(([k, v]) => `${k} ${v}`)
+    .join(', ');
+  if (failureText !== '') io.print(`失敗内訳: ${failureText}`);
   io.print(
     `登録トリガー: ${triggers.length === 0 ? 'なし' : triggers.map((t) => `${t.name}${t.alive ? '' : ' (要再登録)'}`).join(', ')}`,
   );

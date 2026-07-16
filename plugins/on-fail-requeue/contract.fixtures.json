@@ -1,0 +1,31 @@
+{
+  "description": "on-fail-requeue documented input (D9 §4). Side effects only, no output.",
+  "cases": [
+    {
+      "schema": "on-fail.in.json",
+      "expect": "valid",
+      "data": {
+        "task_id": "42",
+        "reason": "HTTP 429 rate limit exceeded",
+        "retry_count": 1,
+        "gate": "30-test",
+        "workdir": "/tmp/wt"
+      }
+    },
+    {
+      "schema": "on-fail.in.json",
+      "expect": "valid",
+      "data": { "task_id": "42", "reason": "connection ECONNRESET", "retry_count": 0 }
+    },
+    {
+      "schema": "on-fail.in.json",
+      "expect": "invalid",
+      "data": { "task_id": "42", "retry_count": 1 }
+    },
+    {
+      "schema": "on-fail.in.json",
+      "expect": "invalid",
+      "data": { "task_id": "42", "reason": "x", "retry_count": -1 }
+    }
+  ]
+}
