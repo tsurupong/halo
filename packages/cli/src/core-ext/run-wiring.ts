@@ -292,6 +292,8 @@ export function createRunHooks(seams: RunWiringSeams = nodeRunWiringSeams()): Ru
             maxIter: ctx.config.maxIter,
             timeoutSec: ctx.config.timeoutSec,
             ...(ctx.config.profileName != null ? { profileName: ctx.config.profileName } : {}),
+            // executor のターン上限 (MAX_TURNS / --max-turns)。未指定は loop 既定 40。
+            ...(ctx.config.maxTurns != null ? { maxTurns: ctx.config.maxTurns } : {}),
           },
           ports,
           runner: makeRunner(ctx),
