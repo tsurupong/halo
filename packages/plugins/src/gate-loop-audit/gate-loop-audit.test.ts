@@ -8,8 +8,6 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const pluginDir = join(__dirname, '..', '..', '..', '..', 'plugins', 'gate-loop-audit');
-const launcherPath = join(pluginDir, 'audit.sh');
 const distPath = join(__dirname, '..', '..', 'dist', 'gate-loop-audit', 'main.js');
 
 if (!existsSync(distPath)) {
@@ -17,7 +15,7 @@ if (!existsSync(distPath)) {
 }
 
 function runLauncher(input: string): { code: number; stdout: string; stderr: string } {
-  const r = spawnSync('sh', [launcherPath], { input, encoding: 'utf8' });
+  const r = spawnSync(process.execPath, [distPath], { input, encoding: 'utf8' });
   return { code: r.status ?? 1, stdout: r.stdout, stderr: r.stderr };
 }
 

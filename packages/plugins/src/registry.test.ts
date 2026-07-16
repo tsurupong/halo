@@ -4,10 +4,11 @@
 //
 // entry/aux は registry 側が dist ルート相対（例: `./trigger-polling/fire.js`）、リポジトリ側が
 // monorepo 相対（例: `../../packages/plugins/dist/trigger-polling/fire.js`）と表現が異なるため、
-// entry/aux 以外のフィールドは完全一致、entry/aux は指す先の末尾パス（basename）の一致で比較する。
+// entry/aux 以外のフィールドは完全一致、entry/aux は指す先の末尾2セグメント（ディレクトリ名/ファイル名）
+// の一致で比較する（basename のみだと main.js のような同名ファイルでディレクトリ違いを見逃すため）。
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { join, dirname, basename } from 'node:path';
+import { join, dirname } from 'node:path';
 import { expect, test, describe } from 'vitest';
 import type { PluginManifest } from '@tsurupong/halo-contracts';
 import { BUNDLED_PLUGINS } from './registry.js';
@@ -68,8 +69,16 @@ async function fileExists(path: string): Promise<boolean> {
   }
 }
 
+/** パスの末尾2セグメント（ディレクトリ名/ファイル名）を取り出す。7プラグインが main.js のような
+ * 同名ファイルを使っていても、ディレクトリ違い（登録ミス）を検出できるようにするため basename 単独
+ * より一段強い比較単位として使う。 */
+function lastTwoSegments(path: string): string {
+  const parts = path.split('/').filter((p) => p !== '');
+  return parts.slice(-2).join('/');
+}
+
 /** registry の manifest とリポジトリの plugin.json を比較する。entry/aux はパス表現が
- * 異なる (dist相対 vs monorepo相対) ため basename の一致で判定し、それ以外は完全一致を見る。 */
+ * 異なる (dist相対 vs monorepo相対) ため末尾2セグメントの一致で判定し、それ以外は完全一致を見る。 */
 function expectManifestsMatch(registryManifest: PluginManifest, repoManifest: unknown): void {
   expect(repoManifest).toEqual(expect.any(Object));
   const repo = repoManifest as PluginManifest;
@@ -78,10 +87,15 @@ function expectManifestsMatch(registryManifest: PluginManifest, repoManifest: un
   const { entry: repoEntry, aux: repoAux, ...repoRest } = repo;
 
   expect(registryRest).toEqual(repoRest);
-  expect(basename(registryEntry)).toBe(basename(repoEntry));
+  expect(typeof repoEntry).toBe('string');
+  expect(repoEntry.length).toBeGreaterThan(0);
+  expect(lastTwoSegments(registryEntry)).toBe(lastTwoSegments(repoEntry));
 
   expect(Object.keys(registryAux ?? {}).sort()).toEqual(Object.keys(repoAux ?? {}).sort());
   for (const key of Object.keys(registryAux ?? {})) {
-    expect(basename((registryAux ?? {})[key]!)).toBe(basename((repoAux ?? {})[key]!));
+    const repoAuxValue = (repoAux ?? {})[key];
+    expect(typeof repoAuxValue).toBe('string');
+    expect((repoAuxValue ?? '').length).toBeGreaterThan(0);
+    expect(lastTwoSegments((registryAux ?? {})[key]!)).toBe(lastTwoSegments(repoAuxValue!));
   }
 }
