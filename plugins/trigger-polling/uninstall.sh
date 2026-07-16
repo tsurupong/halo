@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
-# trigger polling: install.sh が作成した Windows タスクを解除する。
+# trigger polling: install.sh が登録したスケジュールを解除する（設計 D10 §3, ADR-0015）。
 # 登録が無ければ何もせず正常終了する（冪等, 設計 04 §4.2）。
 # 引数: $1 = プロファイル名。
 set -euo pipefail
 
 PROFILE="${1:?profile required}"
-TASK_NAME="HALO_${PROFILE}"
+[[ "$PROFILE" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "invalid profile name: $PROFILE" >&2; exit 1; }
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-schtasks.exe /Delete /TN "$TASK_NAME" /F >/dev/null 2>&1 || true
-echo "trigger-polling: 解除しました TN=$TASK_NAME" >&2
+source "$SCRIPT_DIR/../lib/scheduler.sh"
+
+scheduler_uninstall polling "$PROFILE"
+
+echo "trigger-polling: 解除しました profile=$PROFILE" >&2
 exit 0
