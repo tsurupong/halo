@@ -8,7 +8,7 @@ set -euo pipefail
 PROFILE="${1:?profile name required}"
 
 # Windows パス継承問題の回避: PATH を Linux 側のみに洗い直す（設計 04 §4.2 / §7）。
-export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$HOME/.local/bin${HALO_PATH_EXTRA:+:$HALO_PATH_EXTRA}"
 
 # 無人実行では .bin の絶対パスを直接叩く（バージョン固定・ネット非依存, D1 §1.9）。
 HALO_HOME="${HALO_HOME:-$HOME/halo}"
@@ -19,4 +19,4 @@ if [[ ! -x "$HALO_BIN" ]]; then
   exit 1
 fi
 
-exec "$HALO_BIN" run "$PROFILE"
+exec "$HALO_BIN" run "$PROFILE" --cwd "$HALO_HOME"
