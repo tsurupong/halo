@@ -28,9 +28,9 @@ function mock(port: Port, name: string, script: string, env: Record<string, stri
     name,
     dirName: name,
     dir: MOCK_DIR,
-    execPath: join(MOCK_DIR, script),
+    entryPath: join(MOCK_DIR, script),
     order: 0,
-    manifest: { name, version: '1.0.0', port, exec: script, ...(minAutonomy ? { minAutonomy } : {}), env },
+    manifest: { name, version: '1.0.0', port, entry: script, ...(minAutonomy ? { minAutonomy } : {}), env },
   };
 }
 
@@ -56,7 +56,7 @@ function rig(ports: Partial<LoopPorts>, over: Omit<Partial<LoopDeps>, 'config'> 
   };
   const runner: PortRunner = (plugin, stdin, opts) =>
     runPort({
-      execPath: plugin.execPath,
+      execPath: plugin.entryPath,
       stdin,
       timeoutMs: (opts?.timeoutSec ?? 5) * 1000,
       env: { ...baseEnv(), STATE_DIR: stateDir, PLUGIN_NAME: plugin.name, ...(plugin.manifest.env ?? {}) },

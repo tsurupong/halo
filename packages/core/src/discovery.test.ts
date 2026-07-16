@@ -25,7 +25,7 @@ const validManifest = (over: Partial<PluginManifest> = {}): PluginManifest => ({
   name: '@halo/plugin-x',
   version: '1.0.0',
   port: 'sink',
-  exec: './run.sh',
+  entry: './run.sh',
   ...over,
 });
 
@@ -73,7 +73,7 @@ describe('comparePlugins / sortPlugins', () => {
     name,
     dirName,
     dir: `/d/${dirName}`,
-    execPath: `/d/${dirName}/run.sh`,
+    entryPath: `/d/${dirName}/run.sh`,
     order,
     manifest: validManifest({ name, port: 'gate' }),
   });
@@ -110,8 +110,8 @@ describe('validatePluginManifest', () => {
   });
 
   it('rejects missing required fields', () => {
-    expect(() => validatePluginManifest({ version: '1.0.0', port: 'sink', exec: './x' })).toThrow(DiscoveryError);
-    expect(() => validatePluginManifest({ name: 'x', port: 'sink', exec: './x' })).toThrow(/version/);
+    expect(() => validatePluginManifest({ version: '1.0.0', port: 'sink', entry: './x' })).toThrow(DiscoveryError);
+    expect(() => validatePluginManifest({ name: 'x', port: 'sink', entry: './x' })).toThrow(/version/);
   });
 
   it('rejects a bad semver', () => {
@@ -206,8 +206,41 @@ describe('discoverPort', () => {
     };
     const r = await discoverPort({ haloRoot, port: 'sink', fs: fakeFs(tree) });
     expect(r.plugins.map((p) => p.name)).toEqual(['commit', 'progress']);
-    expect(r.plugins[0]?.execPath).toBe(`${base}/10-git-commit/run.sh`);
+    expect(r.plugins[0]?.entryPath).toBe(`${base}/10-git-commit/run.sh`);
     expect(r.issues).toEqual([]);
+  });
+
+  it('resolves entry to an absolute entryPath', async () => {
+    const fs = fakeFs({
+      dirs: { [`/repo/.halo/ports/gate.d`]: [dir('g1')] },
+      files: {
+        [`/repo/.halo/ports/gate.d/g1/plugin.json`]: JSON.stringify({
+          name: '@x/g1',
+          version: '1.0.0',
+          port: 'gate',
+          entry: './dist/main.js',
+        }),
+      },
+    });
+    const d = await discoverPort({ haloRoot: '/repo/.halo', port: 'gate', fs });
+    expect(d.plugins[0]?.entryPath).toBe('/repo/.halo/ports/gate.d/g1/dist/main.js');
+  });
+
+  it('rejects legacy exec field with a migration message', async () => {
+    const fs = fakeFs({
+      dirs: { [`/repo/.halo/ports/gate.d`]: [dir('g1')] },
+      files: {
+        [`/repo/.halo/ports/gate.d/g1/plugin.json`]: JSON.stringify({
+          name: '@x/g1',
+          version: '1.0.0',
+          port: 'gate',
+          exec: './run.sh',
+        }),
+      },
+    });
+    const d = await discoverPort({ haloRoot: '/repo/.halo', port: 'gate', fs });
+    expect(d.plugins).toHaveLength(0);
+    expect(d.issues[0]?.message).toMatch(/exec.*v0\.3\.0.*entry/);
   });
 
   it('orders by filename prefix when order is omitted', async () => {
@@ -249,14 +282,14 @@ describe('discoverPort', () => {
     expect(r.issues[0]?.dir).toBe(`${base}/10-bad`);
   });
 
-  it('records an issue when requireExec is set and the exec is missing', async () => {
+  it('records an issue when requireEntry is set and the entry is missing', async () => {
     const tree: FakeTree = {
       dirs: { [base]: [dir('10-x')] },
-      files: { [`${base}/10-x/plugin.json`]: JSON.stringify(validManifest({ name: 'x', exec: './missing.sh' })) },
+      files: { [`${base}/10-x/plugin.json`]: JSON.stringify(validManifest({ name: 'x', entry: './missing.sh' })) },
     };
-    const r = await discoverPort({ haloRoot, port: 'sink', fs: fakeFs(tree), requireExec: true });
+    const r = await discoverPort({ haloRoot, port: 'sink', fs: fakeFs(tree), requireEntry: true });
     expect(r.plugins).toEqual([]);
-    expect(r.issues[0]?.message).toMatch(/exec not found/);
+    expect(r.issues[0]?.message).toMatch(/entry not found/);
   });
 });
 

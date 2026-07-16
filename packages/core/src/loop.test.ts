@@ -48,13 +48,13 @@ function plug(
     name,
     dirName: name,
     dir: `/x/${name}`,
-    execPath: `/x/${name}/run`,
+    entryPath: `/x/${name}/run`,
     order: 0,
     manifest: {
       name,
       version: '1.0.0',
       port,
-      exec: 'run',
+      entry: 'run',
       ...(minAutonomy ? { minAutonomy } : {}),
     },
   };
