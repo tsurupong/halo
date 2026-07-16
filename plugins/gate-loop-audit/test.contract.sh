@@ -31,20 +31,25 @@ new_repo() { # -> echoes workdir path with a clean initial commit
   echo "$wt"
 }
 
-run_audit() { # $1 workdir -> sets OUT/CODE
-  OUT="$(jq -cn --arg w "$1" '{task_id:"T-1", workdir:$w, changed_files:[]}' | bash "$DIR/audit.sh" 2>/dev/null)"
+run_audit() { # $1 workdir -> sets OUT/CODE/ERR (stderr は失敗診断用に保持)
+  OUT="$(jq -cn --arg w "$1" '{task_id:"T-1", workdir:$w, changed_files:[]}' | bash "$DIR/audit.sh" 2>"$TMP/audit.err")"
   CODE=$?
+  ERR="$(cat "$TMP/audit.err" 2>/dev/null)"
 }
 
 assert_pass() { # $1 label
-  if [[ $CODE -eq 0 && -z "$OUT" ]]; then echo "PASS  $1"; else echo "FAIL  $1: code=$CODE out=[$OUT]"; fail=1; fi
+  if [[ $CODE -eq 0 && -z "$OUT" ]]; then
+    echo "PASS  $1"
+  else
+    echo "FAIL  $1: code=$CODE out=[$OUT] err=[$ERR]"; fail=1
+  fi
 }
 assert_fail() { # $1 label
   if [[ $CODE -eq 2 ]] \
      && jq -e '(.reason|type=="string") and .gate=="50-loop-audit"' >/dev/null 2>&1 <<<"$OUT"; then
     echo "PASS  $1"
   else
-    echo "FAIL  $1: code=$CODE out=[$OUT]"; fail=1
+    echo "FAIL  $1: code=$CODE out=[$OUT] err=[$ERR]"; fail=1
   fi
 }
 
