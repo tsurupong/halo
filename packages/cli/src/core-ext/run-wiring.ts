@@ -236,9 +236,12 @@ async function isLockHeldByOther(
 // --- PortRunner ---------------------------------------------------------------
 
 function makeRunner(ctx: RunContext): PortRunner {
+  // 実行ビット欠落スクリプトのフォールバック (D10 §5): discovery が execArgv を
+  // 付けた plugin は `bash <path>` で spawn する。無ければ従来どおり直接起動。
   return (plugin: DiscoveredPlugin, stdin: unknown, opts?: { timeoutSec?: number }) =>
     runPort({
-      execPath: plugin.execPath,
+      execPath: plugin.execArgv?.[0] ?? plugin.execPath,
+      ...(plugin.execArgv !== undefined ? { args: plugin.execArgv.slice(1) } : {}),
       cwd: ctx.cwd,
       env: { ...baseEnv(), ...(plugin.manifest.env ?? {}) },
       stdin,
@@ -279,6 +282,10 @@ export function createRunHooks(seams: RunWiringSeams = nodeRunWiringSeams()): Ru
 
       try {
         const ports = await discoverLoopPorts(ctx.haloDir, seams.discoveryFs);
+        // ADR-0016 の完了判定基準: worktree「作成時点」の HEAD を控える。完了時の
+        // repo HEAD と比較すると、run 中にオペレータがコミットしただけで差分が出て
+        // 成果ゼロの偽 complete が発火する (2026-07-16 に実際に発生)。
+        const worktreeBase = new Map<string, string>();
         const logger = createLogger({ logDir: logsDir(ctx.haloDir), fs: seams.logsFs });
         // ハング検知: 各工程境界で logs/current.json を上書き (task md: phase-boundary-log)。
         const phaseTracker = createPhaseTracker({
@@ -302,8 +309,22 @@ export function createRunHooks(seams: RunWiringSeams = nodeRunWiringSeams()): Ru
           now: seams.now,
           isStopPresent: () => isStopFilePresent(ctx.haloDir, seams.logsFs),
           isBudgetOk: async () => !(await isBudgetExhaustedFor(ctx, seams)),
-          createWorktree: (task) => seams.worktree.create(ctx.cwd, String(task.task_id)),
-          removeWorktree: (workdir) => seams.worktree.remove(ctx.cwd, workdir),
+          createWorktree: async (task) => {
+            const workdir = await seams.worktree.create(ctx.cwd, String(task.task_id));
+            try {
+              worktreeBase.set(
+                workdir,
+                (await seams.git(workdir)(['rev-parse', 'HEAD'])).stdout.trim(),
+              );
+            } catch {
+              /* base 不明は resolvePrUrl 側で未完了扱いに倒れる */
+            }
+            return workdir;
+          },
+          removeWorktree: (workdir) => {
+            worktreeBase.delete(workdir);
+            return seams.worktree.remove(ctx.cwd, workdir);
+          },
           changedFiles: async (workdir) => {
             const { stdout } = await seams.git(workdir)(['status', '--porcelain']);
             return stdout
@@ -311,8 +332,19 @@ export function createRunHooks(seams: RunWiringSeams = nodeRunWiringSeams()): Ru
               .map((l) => l.slice(3).trim())
               .filter((l) => l !== '');
           },
-          // Phase 1 / L1: PR を生成する sink が無いため op=complete は発火させない (D1 §1.5)。
-          resolvePrUrl: () => '',
+          // ADR-0016: sink (sink-git-commit) が worktree に新規コミットを作った場合のみ
+          // `commit:<sha>` を完了参照として返し op=complete を発火させる。コミットが
+          // 無ければ '' → タスクは queue に残る (成果の無い passed を完了扱いしない)。
+          resolvePrUrl: async (_task, workdir) => {
+            const base = worktreeBase.get(workdir);
+            if (base === undefined || base === '') return ''; // 基準不明 → 未完了扱い。
+            try {
+              const head = (await seams.git(workdir)(['rev-parse', 'HEAD'])).stdout.trim();
+              return head !== '' && head !== base ? `commit:${head}` : '';
+            } catch {
+              return ''; // 判定不能は安全側 (未完了扱い)。
+            }
+          },
         };
         return await coreRunLoop(deps);
       } finally {

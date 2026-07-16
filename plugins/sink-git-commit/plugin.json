@@ -1,0 +1,8 @@
+{
+  "name": "@halo/plugin-sink-git-commit",
+  "version": "1.0.0",
+  "port": "sink",
+  "exec": "./commit.sh",
+  "order": 10,
+  "minAutonomy": "L1"
+}

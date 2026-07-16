@@ -7,6 +7,12 @@ import { resolveBinPath, listTriggers, type TriggerContext } from './triggers.js
 
 export type CheckStatus = 'OK' | 'WARN' | 'FAIL';
 
+/** スケジューラバックエンドの検出結果 (D10 §3.2/§4)。 */
+export type SchedulerBackend = 'schtasks' | 'systemd' | 'cron' | 'launchd' | 'none';
+
+/** c10 で存在を要求するコマンド (D10 §4)。 */
+export const REQUIRED_COMMANDS = ['node', 'git', 'claude'] as const;
+
 export interface CheckResult {
   id: number;
   title: string;
@@ -47,6 +53,12 @@ export interface DoctorProbes {
   onExt4(): Promise<boolean>;
   /** worktree 展開に足る空き容量があるか。 */
   diskOk(): Promise<boolean>;
+  /** コマンドが PATH に存在するか (c10)。未注入なら c10 は実行しない (後方互換)。 */
+  commandExists?(name: string): Promise<boolean>;
+  /** スケジューラバックエンドの検出 (c11)。未注入なら c11 は実行しない (後方互換)。 */
+  schedulerBackend?(): Promise<SchedulerBackend>;
+  /** WSL 上か。未注入なら c8 (ext4 配置) は従来どおり無条件実行 (後方互換)。 */
+  isWsl?(): Promise<boolean>;
 }
 
 // --- 個別検査 (純粋: 事実→CheckResult) ------------------------------------
@@ -183,7 +195,10 @@ export function checkLockStop(orphanLock: boolean, stopPresent: boolean): CheckR
   return { id: 7, title: 'flock / STOP 残留', status: 'WARN', detail: issues.join(', ') };
 }
 
-export function checkPlacement(onExt4: boolean): CheckResult {
+export function checkPlacement(onExt4: boolean, isWsl = true): CheckResult {
+  // ext4 配置は WSL 固有の制約。WSL 以外ではスキップ扱い (fail にしない, D10 §4)。
+  if (!isWsl)
+    return { id: 8, title: '配置制約 (WSL2)', status: 'OK', detail: 'WSL 以外のためスキップ' };
   if (onExt4) return { id: 8, title: '配置制約 (WSL2)', status: 'OK', detail: 'ext4 側に配置' };
   return {
     id: 8,
@@ -196,6 +211,39 @@ export function checkPlacement(onExt4: boolean): CheckResult {
 export function checkDisk(diskOk: boolean): CheckResult {
   if (diskOk) return { id: 9, title: 'ディスク残量', status: 'OK', detail: 'worktree 展開に十分' };
   return { id: 9, title: 'ディスク残量', status: 'WARN', detail: '空き容量が少ない可能性' };
+}
+
+export function checkRequiredCommands(missing: string[]): CheckResult {
+  if (missing.length === 0)
+    return {
+      id: 10,
+      title: '必須コマンド',
+      status: 'OK',
+      detail: `${REQUIRED_COMMANDS.join(' / ')} すべて存在`,
+    };
+  return {
+    id: 10,
+    title: '必須コマンド',
+    status: 'FAIL',
+    detail: `欠損: ${missing.join(', ')} — 例: \`pacman -S nodejs git\` / \`brew install node git\``,
+  };
+}
+
+export function checkSchedulerBackend(backend: SchedulerBackend): CheckResult {
+  if (backend === 'none')
+    return {
+      id: 11,
+      title: 'スケジューラバックエンド',
+      status: 'FAIL',
+      detail:
+        '検出なし (schtasks / systemd / cron / launchd) — 環境変数 HALO_SCHEDULER=cron などで明示固定できます',
+    };
+  return {
+    id: 11,
+    title: 'スケジューラバックエンド',
+    status: 'OK',
+    detail: `${backend} を使用`,
+  };
 }
 
 /** 集計 → 終了コード写像 (D3 §5.2)。 */
@@ -248,8 +296,25 @@ export async function runAll(probes: DoctorProbes): Promise<DoctorReport> {
 
   const stopPresent = await fs.exists(join(haloDir, 'STOP'));
   const c7 = checkLockStop(await probes.orphanLock(), stopPresent);
-  const c8 = checkPlacement(await probes.onExt4());
+  // isWsl 未注入時は従来どおり無条件で ext4 検査 (後方互換, D10 §4)。
+  const c8 = checkPlacement(
+    await probes.onExt4(),
+    probes.isWsl ? await probes.isWsl() : true,
+  );
   const c9 = checkDisk(await probes.diskOk());
 
-  return aggregate([c1, c2, c3, c4, c5, c6, c7, c8, c9]);
+  const checks = [c1, c2, c3, c4, c5, c6, c7, c8, c9];
+
+  if (probes.commandExists) {
+    const absent: string[] = [];
+    for (const name of REQUIRED_COMMANDS) {
+      if (!(await probes.commandExists(name))) absent.push(name);
+    }
+    checks.push(checkRequiredCommands(absent));
+  }
+  if (probes.schedulerBackend) {
+    checks.push(checkSchedulerBackend(await probes.schedulerBackend()));
+  }
+
+  return aggregate(checks);
 }

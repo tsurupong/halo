@@ -24,6 +24,12 @@ The only point of contact between plugins and the core is the **process boundary
 
 Because these three points are the entire contract, **plugins can be written in any language**. Even though the core is TypeScript, your plugin can be bash, Python, or Go. This guide shows examples in two languages, TypeScript (Node) and bash.
 
+> **Note (ADR-0017 / D11, 2026-07-16):** all bundled plugins are now TypeScript in
+> `packages/plugins`, spawned through thin POSIX `sh` launchers kept in `plugins/<name>/`
+> (the `plugin.json` contract below is unchanged). Their behavior tests are Vitest files
+> next to the sources (`packages/plugins/src/<name>/<name>.test.ts`); the bash examples in
+> this guide remain valid for third-party plugins.
+
 ```
       ┌─────────────┐   stdin(JSON)   ┌──────────────────┐
       │  HALO core  │ ───────────────▶│  your plugin     │

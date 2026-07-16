@@ -1,4 +1,5 @@
-#!/usr/bin/env bash
-# gate 30-test: 採用 runtime の test.sh へ委譲する薄いラッパー（D5 §2.4）。
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec bash "$HERE/../_delegate.sh" "30-test" "test.sh"
+#!/bin/sh
+# ADR-0017 / D11 §3: TypeScript 実装への薄い POSIX sh ランチャー。ロジックは持たない。
+HALO_LAUNCHER_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+export HALO_LAUNCHER_DIR
+exec node "$HALO_LAUNCHER_DIR/../../../packages/plugins/dist/gate-runtime-check/test.js" "$@"

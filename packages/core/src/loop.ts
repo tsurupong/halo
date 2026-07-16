@@ -305,8 +305,12 @@ export interface LoopDeps {
   removeWorktree: (workdir: string) => void | Promise<void>;
   /** Changed files for the gate input; defaults to `[]`. */
   changedFiles?: (workdir: string) => string[] | Promise<string[]>;
-  /** PR url passed to task-source `op=complete`; defaults to '' (Phase 1). */
-  resolvePrUrl?: (task: TaskSourceOut, workdir: string) => string;
+  /**
+   * Result reference passed to task-source `op=complete` — a PR URL, or any
+   * non-empty delivery reference such as `commit:<sha>` (ADR-0016). Empty string
+   * means "nothing delivered": complete is not fired and the task stays queued.
+   */
+  resolvePrUrl?: (task: TaskSourceOut, workdir: string) => string | Promise<string>;
   estimateTokens?: (text: string) => number;
   /** Hang-detection phase file (`current.json`); omitted → no phase writes. */
   phaseTracker?: PhaseTracker;
@@ -498,11 +502,11 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
         // Sink (best-effort, autonomy-filtered, D2 §2.5 / §3.6) then Complete.
         await markPhase(taskId, 'sink');
         await runSinks(deps, { task_id: taskId, workdir, summary: exec.out?.summary ?? '' });
-        // Only report completion when a PR URL was actually produced (D1 §1.5, L1).
-        // At L1 (report-only, no PR-producing sink) `resolvePrUrl` yields '' → the
-        // task is left in-progress for the operator's task-source rather than being
-        // force-completed with an empty pr_url.
-        const prUrl = deps.resolvePrUrl ? deps.resolvePrUrl(task, workdir) : '';
+        // Only report completion when a delivery reference was actually produced
+        // (D1 §1.5, ADR-0016): a PR URL, or `commit:<sha>` from a local commit sink.
+        // '' means nothing durable was delivered → the task is left in-progress for
+        // the operator's task-source rather than being force-completed.
+        const prUrl = deps.resolvePrUrl ? await deps.resolvePrUrl(task, workdir) : '';
         if (prUrl !== '') await runTaskSourceComplete(deps, taskId, prUrl);
         taskStates.delete(taskId);
         await record(deps, {
