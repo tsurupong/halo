@@ -21,7 +21,8 @@
   },
   "dependencies": {
     "@tsurupong/halo-contracts": "workspace:*",
-    "@tsurupong/halo-core": "workspace:*"
+    "@tsurupong/halo-core": "workspace:*",
+    "@tsurupong/halo-plugins": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.20.1"

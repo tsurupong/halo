@@ -83,6 +83,18 @@ Rules:
   time if the relative path ever needs to differ (not expected in Phase 2).
 - Exit code, stdin, stdout pass through `exec` untouched, so `runPort`'s
   timeout/SIGTERM/SIGKILL and `classifyExit` behavior are unchanged.
+- The relative `../../packages/plugins/dist/...` path above only holds inside
+  this monorepo checkout; it breaks once a launcher is copied elsewhere (e.g.
+  into a user repo's `.halo/ports/<port>.d/`) or installed via npm, where
+  `@tsurupong/halo-plugins` lands at an arbitrary `node_modules` depth. `halo
+  enable <plugin-name>` (`packages/cli/src/commands/enable.ts`) resolves that:
+  it resolves the installed `@tsurupong/halo-plugins` package at runtime
+  (`require.resolve('@tsurupong/halo-plugins/package.json')`) and writes a
+  launcher whose `exec node "<absolute path>"` line is already fully resolved,
+  plus a `plugin.json` copy, into `.halo/ports/<port>.d/<name>/`. The bundled
+  plugin metadata lives in `packages/plugins/src/registry.ts`
+  (`BUNDLED_PLUGINS`), one entry per enable-able plugin, kept in sync with the
+  `plugins/**/plugin.json` files by a drift test.
 
 ## 4. Per-plugin migration notes
 
