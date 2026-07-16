@@ -2,6 +2,6 @@
   "name": "@halo/plugin-on-fail-record",
   "version": "1.0.0",
   "port": "on-fail",
-  "exec": "./record.sh",
+  "entry": "../../packages/plugins/dist/on-fail-record/main.js",
   "order": 10
 }

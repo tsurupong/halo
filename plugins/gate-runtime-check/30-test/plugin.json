@@ -2,6 +2,6 @@
   "name": "@halo/plugin-gate-runtime-check-test",
   "version": "1.0.0",
   "port": "gate",
-  "exec": "./run.sh",
+  "entry": "../../../packages/plugins/dist/gate-runtime-check/test.js",
   "order": 30
 }

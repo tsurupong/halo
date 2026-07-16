@@ -45,8 +45,9 @@ export interface PluginManifest {
   version: string;
   /** The port this plugin belongs to. */
   port: Port;
-  /** Relative path to the executable (bash / node / python all allowed). */
-  exec: string;
+  /** Relative (or absolute) path to the plugin's main JS entry module.
+   *  Spawned as `process.execPath <entry>` by the core (ADR-0018). */
+  entry: string;
   /**
    * Execution order (numeric-prefix equivalent). Defaults to the filename's
    * numeric prefix when omitted.
@@ -65,6 +66,9 @@ export interface PluginManifest {
   timeoutSec?: number;
   /** Environment variables injected at launch (name → default value / reference). */
   env?: Record<string, string>;
+  /** Auxiliary JS entries (e.g. trigger install/uninstall, runtime check/test),
+   *  keyed by role name. Not spawned by the core loop. */
+  aux?: Record<string, string>;
 }
 
 /**

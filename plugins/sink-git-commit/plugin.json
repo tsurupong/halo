@@ -2,7 +2,7 @@
   "name": "@halo/plugin-sink-git-commit",
   "version": "1.0.0",
   "port": "sink",
-  "exec": "./commit.sh",
+  "entry": "../../packages/plugins/dist/sink-git-commit/main.js",
   "order": 10,
   "minAutonomy": "L1"
 }

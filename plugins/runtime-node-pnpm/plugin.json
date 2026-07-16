@@ -2,5 +2,9 @@
   "name": "@halo/plugin-runtime-node-pnpm",
   "version": "1.0.0",
   "port": "runtime",
-  "exec": "./setup.sh"
+  "entry": "../../packages/plugins/dist/runtime-node-pnpm/setup.js",
+  "aux": {
+    "check": "../../packages/plugins/dist/runtime-node-pnpm/check.js",
+    "test": "../../packages/plugins/dist/runtime-node-pnpm/test.js"
+  }
 }

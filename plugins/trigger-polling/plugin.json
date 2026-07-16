@@ -2,5 +2,10 @@
   "name": "@halo/plugin-trigger-polling",
   "version": "1.0.0",
   "port": "trigger",
-  "exec": "./fire"
+  "entry": "../../packages/plugins/dist/trigger-polling/fire.js",
+  "aux": {
+    "fire": "../../packages/plugins/dist/trigger-polling/fire.js",
+    "install": "../../packages/plugins/dist/trigger-polling/install.js",
+    "uninstall": "../../packages/plugins/dist/trigger-polling/uninstall.js"
+  }
 }
