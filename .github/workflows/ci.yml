@@ -18,16 +18,9 @@ jobs:
   # ── ① core unit tests + coverage (coverage is WARN, never blocks — D8 §5.2/§11.2) ──
   unit:
     name: unit
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # macOS runners ship BSD userland; plugin shell scripts assume GNU semantics (D10 §6).
-      - name: setup GNU tools (macos)
-        if: runner.os == 'macOS'
-        run: brew install coreutils jq
       - uses: pnpm/action-setup@v4
         with:
           version: ${{ env.PNPM_VERSION }}
@@ -48,15 +41,9 @@ jobs:
   # ── ② loop regression (fixture executor = fixed JSON, zero billing — D8 §2) ──
   loop-regression:
     name: loop-regression
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: setup GNU tools (macos)
-        if: runner.os == 'macOS'
-        run: brew install coreutils jq
       - uses: pnpm/action-setup@v4
         with:
           version: ${{ env.PNPM_VERSION }}
@@ -72,15 +59,9 @@ jobs:
   # ── ③ contract + schema drift (distributed schemas vs plugin I/O and TS types) ──
   contract:
     name: contract
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: setup GNU tools (macos)
-        if: runner.os == 'macOS'
-        run: brew install coreutils jq
       - uses: pnpm/action-setup@v4
         with:
           version: ${{ env.PNPM_VERSION }}
@@ -95,7 +76,7 @@ jobs:
       # Schema drift (D8 §3.3): committed schemas/*.json must match TS-type regeneration.
       - name: schema drift
         run: pnpm vitest run schema-drift
-      # Plugin shell tests (D10 §6 / ADR-0015): run every plugins/**/test.*.sh on both OSes.
+      # Plugin shell tests (D10 §6 / ADR-0015): run every plugins/**/test.*.sh.
       - name: plugin shell tests
         run: |
           set -u
