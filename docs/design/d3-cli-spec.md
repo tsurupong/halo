@@ -289,6 +289,7 @@ The correspondence of the core (the 9 modules of D2) functions each command call
 | `halo stop` / `halo resume` | Place/remove the kill switch | `--reason` | 0 |
 | `halo status` | Operation state, budget, actuals | `--json` `--profile` | 0 |
 | `halo doctor` | Environment self-diagnosis | `--json` `--fix` | 0 (OK/WARN) / 1 (FAIL) |
+| `halo enable <plugin-name>` | Generate an absolute-path launcher for a bundled plugin into `.halo/ports/<port>.d/` (D11 §3) | — | 0 / 3 |
 
 ## Appendix B. Glossary
 

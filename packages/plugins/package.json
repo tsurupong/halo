@@ -3,7 +3,10 @@
   "version": "0.1.0",
   "type": "module",
   "license": "MIT",
-  "private": true,
+  "exports": {
+    "./package.json": "./package.json",
+    "./*": "./dist/*.js"
+  },
   "files": [
     "dist"
   ],
@@ -17,5 +20,8 @@
   "devDependencies": {
     "@types/node": "^22.20.1"
   },
-  "description": "HALO bundled plugins - TypeScript implementations behind thin POSIX sh launchers (ADR-0017, D11)"
+  "description": "HALO bundled plugins - TypeScript implementations behind thin POSIX sh launchers (ADR-0017, D11)",
+  "publishConfig": {
+    "access": "public"
+  }
 }

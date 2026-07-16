@@ -15,6 +15,7 @@ import { stopCommand, resumeCommand } from './commands/stop.js';
 import { statusCommand } from './commands/status.js';
 import { watchdogCommand } from './commands/watchdog.js';
 import { doctorCommand } from './commands/doctor.js';
+import { enableCommand } from './commands/enable.js';
 import { createNodeCliFs } from './core-ext/fs.js';
 import { nodeSpawnAdapter, nodeDoctorProbes, defaultRunHooks } from './deps.js';
 
@@ -52,6 +53,7 @@ commands:
   status [--days <n>]                 稼働状態・予算残・直近実績 (既定 7 日のサマリ集計付き)
   watchdog [--action <mode>]          停滞ループの検知/回収 (report|kill|skip, 既定 report)
   doctor [--fix]                      環境自己診断 (9 検査)
+  enable <plugin-name>                同梱プラグインを絶対パスランチャーとして .halo/ に生成
 
 global flags:
   --cwd <path>   対象リポジトリルート   --json      機械可読出力
@@ -129,6 +131,8 @@ export async function run(argv: readonly string[], deps: Deps): Promise<ExitCode
           fs,
           probes: nodeDoctorProbes(global.cwd, fs, spawn),
         });
+      case 'enable':
+        return await enableCommand(rest, io, { fs });
       default:
         deps.streams.err(`error: unknown command '${command}'\n`);
         deps.streams.err(`hint: run \`halo --help\` for available commands.\n`);
