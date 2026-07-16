@@ -47,7 +47,7 @@ chmod +x "$TMP/bin/schtasks.exe"
 export PATH="$TMP/bin:$PATH"
 
 INSTALL_BIN="$HALO_HOME/node_modules/.bin/halo"
-PATH="$TMP/bin:$PATH" HALO_HOME="$HALO_HOME" HALO_BIN="$INSTALL_BIN" bash "$DIR/install.sh" nightly >/dev/null 2>&1
+PATH="$TMP/bin:$PATH" HALO_SCHEDULER=schtasks HALO_HOME="$HALO_HOME" HALO_BIN="$INSTALL_BIN" bash "$DIR/install.sh" nightly >/dev/null 2>&1
 [[ $? -eq 0 ]] && echo "PASS  install -> exit 0" || { echo "FAIL  install exit"; fail=1; }
 
 # --- install: TR 文字列へ HALO_BIN/HALO_HOME が永続化されているか（発火時フォールバック防止） ---
@@ -58,7 +58,7 @@ else
   echo "FAIL  TR string missing env: [$CREATE_ARGS]"; fail=1
 fi
 
-PATH="$TMP/bin:$PATH" bash "$DIR/uninstall.sh" nightly >/dev/null 2>&1
+PATH="$TMP/bin:$PATH" HALO_SCHEDULER=schtasks bash "$DIR/uninstall.sh" nightly >/dev/null 2>&1
 [[ $? -eq 0 ]] && echo "PASS  uninstall -> exit 0" || { echo "FAIL  uninstall exit"; fail=1; }
 
 exit "$fail"
