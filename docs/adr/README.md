@@ -17,3 +17,6 @@ The current top-level authority is Requirements Specification v1.8, and ADR-0009
 | [0010](0010-typescript-core.md) | TypeScript for Core, CLI, and Contracts (plugins remain any-language) | accepted | 2026-07-11 |
 | [0011](0011-specs-abolition-graph-consolidation.md) | Abolishing specs/ and Consolidating Requirements into the Knowledge Graph | accepted | 2026-07-11 |
 | [0012](0012-no-premature-numeric-fixing.md) | Do Not Fix Numeric Parameters in Advance (mechanism now, numbers from operational measurement) | accepted | 2026-07-11 |
+| [0013](0013-external-watchdog-supervisor.md) | External Watchdog Supervisor Process | proposed | 2026-07-15 |
+| [0014](0014-failure-requeue-and-quarantine.md) | Transient-Failure Requeue and Quarantine | proposed | 2026-07-15 |
+| [0015](0015-posix-portability-and-scheduler-abstraction.md) | POSIX Portability Target and Scheduler Backend Abstraction | proposed | 2026-07-16 |
