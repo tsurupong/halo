@@ -20,3 +20,4 @@ The current top-level authority is Requirements Specification v1.8, and ADR-0009
 | [0013](0013-external-watchdog-supervisor.md) | External Watchdog Supervisor Process | proposed | 2026-07-15 |
 | [0014](0014-failure-requeue-and-quarantine.md) | Transient-Failure Requeue and Quarantine | proposed | 2026-07-15 |
 | [0015](0015-posix-portability-and-scheduler-abstraction.md) | POSIX Portability Target and Scheduler Backend Abstraction | proposed | 2026-07-16 |
+| [0016](0016-local-commit-sink-and-completion.md) | Local Commit Sink and Generalized Completion Reference | proposed | 2026-07-16 |
