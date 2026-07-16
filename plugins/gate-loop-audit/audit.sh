@@ -69,6 +69,10 @@ fi
 (( total > MAX_DIFF_LINES )) && fail "diff ${total} 行 > ${MAX_DIFF_LINES}。タスクを分割せよ"
 
 # ②/⑤ ファイル単位検査（name-status: A/M/D/R…）
+# 可搬性注意: herestring の while ループ内から exit する形は bash 3.2 (macOS 標準) で
+# 挙動が壊れるため、違反をループ外へ持ち出してから fail する (D10 §5)。
+violation=""
+violation_hint=""
 if [[ -n "$namestatus" ]]; then
   while IFS=$'\t' read -r status path rest; do
     [[ -z "$status" ]] && continue
@@ -77,13 +81,20 @@ if [[ -n "$namestatus" ]]; then
     [[ -z "$path" ]] && continue
     # ⑤ 自己改変（ルール類）の禁止 — 変更種別を問わず fail
     if is_protected_file "$path"; then
-      fail "${path##*/} への自己改変が検出された（変更: $path）" "ハーネスのルール類は L2 上限・人間承認が必要"
+      violation="${path##*/} への自己改変が検出された（変更: $path）"
+      violation_hint="ハーネスのルール類は L2 上限・人間承認が必要"
+      break
     fi
     # ② テストファイルの削除・変更は fail（新規追加 A は許可）
     if is_test_file "$path" && [[ "$status" != A ]]; then
-      fail "テストファイル $path が変更/削除された（status=$status）" "テストの改変は禁止（新規追加のみ許可）"
+      violation="テストファイル $path が変更/削除された（status=$status）"
+      violation_hint="テストの改変は禁止（新規追加のみ許可）"
+      break
     fi
   done <<<"$namestatus"
+fi
+if [[ -n "$violation" ]]; then
+  fail "$violation" "$violation_hint"
 fi
 
 # ③ エスケープハッチ新規ゼロ（追加行のみ、+++ ヘッダは除外）

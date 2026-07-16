@@ -24,5 +24,6 @@ if [[ -n "${PNPM_STORE_DIR:-}" ]]; then
 fi
 
 # オフライン優先（ネットワーク非依存・ハードリンク共有）。
-pnpm install --offline --frozen-lockfile "${store_args[@]}" >&2 2>&1 || exit 2
+# ${arr[@]+...} は bash 3.2 (macOS) の set -u が空配列展開を unbound 扱いする問題の回避 (D10 §5)。
+pnpm install --offline --frozen-lockfile ${store_args[@]+"${store_args[@]}"} >&2 2>&1 || exit 2
 exit 0
