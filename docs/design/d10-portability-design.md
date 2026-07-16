@@ -2,6 +2,13 @@
 
 Related: ADR-0015 (POSIX target + scheduler abstraction), 04 (trigger/profiles/preflight), D3 (CLI spec), D5 (plugin dev guide), D7 (ops runbook), D9 (reliability design).
 
+> **Partially superseded by ADR-0017 / D11 (2026-07-16).** Workstreams 4 (shell-idiom
+> hardening, `require.sh` preflight) and 5 (ubuntu+macos CI matrix) are superseded by the
+> TypeScript plugin rewrite: bundled plugins are now TypeScript behind thin POSIX `sh`
+> launchers, the scheduler abstraction (WS2) lives in `packages/plugins/src/lib/scheduler.ts`
+> with the same identity keys, and CI runs on a single ubuntu runner. WS1 (fire correctness)
+> and WS3 (doctor checks) survive, with doctor c10 now requiring `node/git/claude`.
+
 ## 1. Scope and goals
 
 Make the same repository + `.halo/` setup behave identically on Linux, macOS, WSL2, and Linux CI containers (ADR-0015 target definition). Five workstreams, ordered by rollout:

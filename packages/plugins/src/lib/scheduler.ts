@@ -156,7 +156,7 @@ function installSchtasks(profile: string, spec: Spec, cmd: string): void {
   const taskName = `HALO_${profile}`;
   // 既存タスクがあれば削除して重複登録を防ぐ(冪等化)。
   run('schtasks.exe', ['/Delete', '/TN', taskName, '/F']);
-  const tr = `wsl.exe -e sh -lc '${cmd}'`;
+  const tr = `wsl.exe -e bash -lc '${cmd}'`;
   const args =
     spec.kind === 'interval'
       ? ['/Create', '/TN', taskName, '/SC', 'MINUTE', '/MO', String(spec.minutes), '/TR', tr, '/RL', 'LIMITED', '/F']
@@ -184,7 +184,7 @@ function installSystemd(trigger: string, profile: string, spec: Spec, cmd: strin
     spec.kind === 'interval' ? `*:0/${spec.minutes}` : `*-*-* ${pad(spec.hh)}:${pad(spec.mm)}:00`;
   writeFileSync(
     join(dir, `${unit}.service`),
-    `[Unit]\nDescription=HALO trigger ${trigger} (${profile})\n\n[Service]\nType=oneshot\nExecStart=/bin/sh -lc '${cmd}'\n`,
+    `[Unit]\nDescription=HALO trigger ${trigger} (${profile})\n\n[Service]\nType=oneshot\nExecStart=/bin/bash -lc '${cmd}'\n`,
   );
   writeFileSync(
     join(dir, `${unit}.timer`),
@@ -215,7 +215,7 @@ function cronStrip(current: string, marker: string): string[] {
 function installCron(trigger: string, profile: string, spec: Spec, cmd: string): void {
   const marker = `# HALO:${trigger}:${profile}`;
   const schedule =
-    spec.kind === 'interval' ? `*/${spec.minutes} * * * *` : `${spec.mm} ${spec.hh} * * *`;
+    spec.kind === 'interval' ? `*/${spec.minutes} * * * *` : `${pad(spec.mm)} ${pad(spec.hh)} * * *`;
   const current = run('crontab', ['-l']).stdout;
   const lines = cronStrip(current, marker);
   lines.push(`${schedule} ${cmd} ${marker}`);
@@ -248,7 +248,7 @@ function installLaunchd(trigger: string, profile: string, spec: Spec, cmd: strin
   run('launchctl', ['unload', plist]);
   writeFileSync(
     plist,
-    `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n<dict>\n  <key>Label</key>\n  <string>${label}</string>\n  <key>ProgramArguments</key>\n  <array>\n    <string>/bin/sh</string>\n    <string>-lc</string>\n    <string>${cmd}</string>\n  </array>\n${scheduleXml}\n</dict>\n</plist>\n`,
+    `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n<dict>\n  <key>Label</key>\n  <string>${label}</string>\n  <key>ProgramArguments</key>\n  <array>\n    <string>/bin/bash</string>\n    <string>-lc</string>\n    <string>${cmd}</string>\n  </array>\n${scheduleXml}\n</dict>\n</plist>\n`,
   );
   if (run('launchctl', ['load', plist]).code !== 0) throw new Error('scheduler: launchctl load failed');
 }
