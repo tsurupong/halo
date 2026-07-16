@@ -53,10 +53,10 @@ v0.2.0(ADR-0017 / D11)で全同梱プラグインの実装ロジックは TypeSc
 - 複数エントリを持つプラグイン(例: trigger-polling の install/uninstall/fire、runtime-node-pnpm の check/setup/test)は、従来どおりポート種別ごとの規約ファイル名で解決している箇所を `entries` マップに正規化する:
 
 ```json
-{ "port": "trigger", "entries": { "install": "./dist/.../install.js", "uninstall": "./dist/.../uninstall.js", "fire": "./dist/.../fire.js" } }
+{ "port": "trigger", "entry": "./dist/.../fire.js", "aux": { "install": "./dist/.../install.js", "uninstall": "./dist/.../uninstall.js", "fire": "./dist/.../fire.js" } }
 ```
 
-単一エントリのポートは `entry`(文字列)のみ。`entry` と `entries` は排他。
+`entry` は常に必須(core が spawn する主エントリ)。補助エントリは任意の `aux` マップで宣言する(排他の `entries` 案は、core の解決を単純に保つためこの形に精緻化した)。
 
 ### 3.2 core の起動方式(runPort)
 
