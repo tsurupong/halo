@@ -71,6 +71,16 @@ importers:
         specifier: ^22.20.1
         version: 22.20.1
 
+  packages/plugins:
+    dependencies:
+      '@tsurupong/halo-contracts':
+        specifier: workspace:*
+        version: link:../contracts
+    devDependencies:
+      '@types/node':
+        specifier: ^22.20.1
+        version: 22.20.1
+
 packages:
 
   '@ampproject/remapping@2.3.0':

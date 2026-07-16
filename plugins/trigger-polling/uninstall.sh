@@ -1,16 +1,5 @@
-#!/usr/bin/env bash
-# trigger polling: install.sh が登録したスケジュールを解除する（設計 D10 §3, ADR-0015）。
-# 登録が無ければ何もせず正常終了する（冪等, 設計 04 §4.2）。
-# 引数: $1 = プロファイル名。
-set -euo pipefail
-
-PROFILE="${1:?profile required}"
-[[ "$PROFILE" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "invalid profile name: $PROFILE" >&2; exit 1; }
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-source "$SCRIPT_DIR/../lib/scheduler.sh"
-
-scheduler_uninstall polling "$PROFILE"
-
-echo "trigger-polling: 解除しました profile=$PROFILE" >&2
-exit 0
+#!/bin/sh
+# ADR-0017 / D11 §3: TypeScript 実装への薄い POSIX sh ランチャー。ロジックは持たない。
+HALO_LAUNCHER_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+export HALO_LAUNCHER_DIR
+exec node "$HALO_LAUNCHER_DIR/../../packages/plugins/dist/trigger-polling/uninstall.js" "$@"
