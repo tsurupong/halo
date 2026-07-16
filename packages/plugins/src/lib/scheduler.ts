@@ -96,11 +96,16 @@ function validateName(value: string, label: string): void {
   if (!NAME_RE.test(value)) throw new Error(`scheduler: invalid ${label}: ${value}`);
 }
 
-export function schedulerInstall(trigger: string, profile: string, specStr: string, firePath: string): void {
+export function schedulerInstall(
+  trigger: string,
+  profile: string,
+  specStr: string,
+  fireArgv: readonly string[],
+): void {
   validateName(trigger, 'trigger');
   validateName(profile, 'profile');
   const spec = parseSpec(specStr);
-  const cmd = `${buildEnvAssign()}${firePath} ${profile}`;
+  const cmd = `${buildEnvAssign()}${fireArgv.map((a) => JSON.stringify(a)).join(' ')} ${profile}`;
 
   const backend = schedulerDetect();
   switch (backend) {
