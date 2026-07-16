@@ -1,6 +1,7 @@
 // trigger install/uninstall/list の委譲先 (D3 §2.3, §6, D1 §1.9)。core に trigger 用の
 // discovery ヘルパが無いため CLI 側に置く薄い層: アダプタ script の解決と spawn、
 // `.bin/halo` 絶対パス解決 (fire 埋め込み用), 有効トリガー一覧。実処理は bash アダプタ。
+import { isAbsolute } from 'node:path';
 import type { CliFs } from './fs.js';
 
 /** name/profile の許容文字 (シェル注入を避ける, install.sh と同じ制約)。 */
@@ -95,8 +96,10 @@ export interface TriggerEntry {
 }
 
 /**
- * 有効化されたトリガーアダプタ一覧 (`.halo/ports/trigger.d/*`)。各アダプタの fire
- * 存在で生存判定する簡易版 (パス移動検出は doctor と同じ発想)。
+ * 有効化されたトリガーアダプタ一覧 (`.halo/ports/trigger.d/*`)。各アダプタの `plugin.json` を
+ * 読み込み、`aux.fire` (entry契約化後は `halo enable` が dist ルート起点の絶対パスへ書き換え済み)
+ * の実在で生存判定する。plugin.json 自体が無い/壊れている、または aux.fire が無い場合は DEAD
+ * 扱い (D3 §2.3/§4)。
  */
 export async function listTriggers(ctx: TriggerContext): Promise<TriggerEntry[]> {
   const dir = join(ctx.haloDir, 'ports/trigger.d');
@@ -111,7 +114,23 @@ export async function listTriggers(ctx: TriggerContext): Promise<TriggerEntry[]>
     if (name.startsWith('.')) continue;
     const adir = join(dir, name);
     if (!(await ctx.fs.isDirectory(adir))) continue;
-    const fire = join(adir, 'fire');
+
+    let fire: string | undefined;
+    try {
+      const raw = await ctx.fs.readFile(join(adir, 'plugin.json'));
+      const manifest = JSON.parse(raw) as { aux?: Record<string, string> };
+      const rawFire = manifest.aux?.fire;
+      if (rawFire !== undefined) {
+        fire = isAbsolute(rawFire) ? rawFire : join(adir, rawFire.replace(/^\.\//, ''));
+      }
+    } catch {
+      fire = undefined;
+    }
+
+    if (fire === undefined) {
+      entries.push({ name, fire: join(adir, 'plugin.json'), alive: false });
+      continue;
+    }
     const alive = await ctx.fs.exists(fire);
     entries.push({ name, fire, alive });
   }

@@ -15,7 +15,16 @@ function okSpawn(result: Partial<SpawnResult> = {}) {
 function fsWithAdapter() {
   return memFs({
     dirs: ['/repo/.halo/ports/trigger.d/schedule'],
-    files: { '/repo/.halo/ports/trigger.d/schedule/fire': '#!/bin/bash' },
+    files: {
+      '/repo/.halo/ports/trigger.d/schedule/fire': '#!/bin/bash',
+      '/repo/.halo/ports/trigger.d/schedule/plugin.json': JSON.stringify({
+        name: '@halo/plugin-trigger-schedule',
+        version: '1.0.0',
+        port: 'trigger',
+        entry: '/repo/.halo/ports/trigger.d/schedule/fire',
+        aux: { fire: '/repo/.halo/ports/trigger.d/schedule/fire' },
+      }),
+    },
   });
 }
 
