@@ -95,7 +95,32 @@ export function nodeDoctorProbes(cwd: string, fs: CliFs, spawn: SpawnAdapter): D
     async diskOk() {
       return true; // 実測は重量プリフライトの責務 (D3 §4 注記)。doctor は簡易 OK。
     },
+    commandExists: binExists,
+    async isWsl() {
+      return isWslProc(fs);
+    },
+    async schedulerBackend() {
+      // HALO_SCHEDULER による明示固定 → WSL(schtasks) → systemd → cron → launchd (D10 §3.2)。
+      const fixed = SCHEDULER_BACKENDS.find((b) => b === process.env.HALO_SCHEDULER);
+      if (fixed) return fixed;
+      if ((await isWslProc(fs)) && (await binExists('schtasks.exe'))) return 'schtasks';
+      if (await binExists('systemctl')) return 'systemd';
+      if (await binExists('crontab')) return 'cron';
+      if (process.platform === 'darwin' && (await binExists('launchctl'))) return 'launchd';
+      return 'none';
+    },
   };
+}
+
+const SCHEDULER_BACKENDS = ['schtasks', 'systemd', 'cron', 'launchd', 'none'] as const;
+
+/** /proc/version に microsoft を含めば WSL (D10 §4)。非 Linux では読めず false。 */
+async function isWslProc(fs: CliFs): Promise<boolean> {
+  try {
+    return /microsoft/i.test(await fs.readFile('/proc/version'));
+  } catch {
+    return false;
+  }
 }
 
 /**
