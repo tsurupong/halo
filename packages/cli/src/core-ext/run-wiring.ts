@@ -181,7 +181,7 @@ function seamTmpdir(): string {
 /** haloDir 下の全 loop ポートを走査して LoopPorts を組む (D2 §6)。 */
 export async function discoverLoopPorts(haloDir: string, fs: DiscoveryFs): Promise<LoopPorts> {
   const [taskSource, context, executor, gate, sink, onFail] = await Promise.all(
-    LOOP_PORT_ORDER.map((port) => discoverPort({ haloRoot: haloDir, port, fs, requireExec: true })),
+    LOOP_PORT_ORDER.map((port) => discoverPort({ haloRoot: haloDir, port, fs, requireEntry: true })),
   );
   return {
     taskSource: taskSource!.plugins,
@@ -235,15 +235,15 @@ async function isLockHeldByOther(
 
 // --- PortRunner ---------------------------------------------------------------
 
-function makeRunner(ctx: RunContext): PortRunner {
-  // 実行ビット欠落スクリプトのフォールバック (D10 §5): discovery が execArgv を
-  // 付けた plugin は `bash <path>` で spawn する。無ければ従来どおり直接起動。
+export function makeRunner(ctx: RunContext): PortRunner {
+  // entry 契約 (ADR-0018): 自プロセスの Node で JS エントリを直接起動する。
+  // PATH 解決・exec-bit・shebang に依存しない (旧 D10 §5 フォールバックは廃止)。
   return (plugin: DiscoveredPlugin, stdin: unknown, opts?: { timeoutSec?: number }) =>
     runPort({
-      execPath: plugin.execArgv?.[0] ?? plugin.execPath,
-      ...(plugin.execArgv !== undefined ? { args: plugin.execArgv.slice(1) } : {}),
+      execPath: process.execPath,
+      args: [plugin.entryPath],
       cwd: ctx.cwd,
-      env: { ...baseEnv(), ...(plugin.manifest.env ?? {}) },
+      env: { ...baseEnv(), ...(plugin.manifest.env ?? {}), HALO_PLUGIN_DIR: plugin.dir },
       stdin,
       timeoutMs: (opts?.timeoutSec ?? DEFAULT_PORT_TIMEOUT_SEC) * 1000,
     });
