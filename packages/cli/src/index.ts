@@ -27,6 +27,7 @@ const VALUE_FLAGS = [
   'reason',
   'profile',
   'max-iter',
+  'max-turns',
   'autonomy',
   'timeout',
   'daily-budget',

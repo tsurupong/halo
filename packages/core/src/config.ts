@@ -28,6 +28,8 @@ export interface HaloConfig {
   taskFilter?: string;
   kindFilter?: string;
   profileName?: string;
+  /** executor へ渡す 1 タスクあたりのターン上限。未指定時は loop 既定 (LOOP_DEFAULTS.maxTurns)。 */
+  maxTurns?: number;
 }
 
 /**
@@ -74,7 +76,11 @@ function stripInlineComment(value: string): string {
 }
 
 function unquote(value: string): string {
-  if (value.length >= 2 && ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))) {
+  if (
+    value.length >= 2 &&
+    ((value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'")))
+  ) {
     return value.slice(1, -1);
   }
   return value;
@@ -103,6 +109,7 @@ export interface CliOverrides {
   dailyBudget?: string | number;
   taskFilter?: string;
   kindFilter?: string;
+  maxTurns?: string | number;
 }
 
 export interface ResolveConfigInput {
@@ -129,8 +136,13 @@ export function resolveConfig(input: ResolveConfigInput = {}): HaloConfig {
   const autonomyRaw = firstDefined(cli.autonomy, profile.AUTONOMY, defaults.AUTONOMY);
   const maxIterRaw = firstDefined(asStr(cli.maxIter), profile.MAX_ITER, defaults.MAX_ITER);
   const timeoutRaw = firstDefined(cli.timeout, profile.TIMEOUT, defaults.TIMEOUT);
-  const dailyItersRaw = firstDefined(asStr(cli.dailyBudget), profile.DAILY_MAX_ITERATIONS, defaults.DAILY_MAX_ITERATIONS);
+  const dailyItersRaw = firstDefined(
+    asStr(cli.dailyBudget),
+    profile.DAILY_MAX_ITERATIONS,
+    defaults.DAILY_MAX_ITERATIONS,
+  );
   const dailyCostRaw = firstDefined(profile.DAILY_MAX_COST_USD, defaults.DAILY_MAX_COST_USD);
+  const maxTurnsRaw = firstDefined(asStr(cli.maxTurns), profile.MAX_TURNS, defaults.MAX_TURNS);
   const taskFilter = firstDefined(cli.taskFilter, profile.TASK_FILTER, defaults.TASK_FILTER);
   const kindFilter = firstDefined(cli.kindFilter, profile.KIND_FILTER, defaults.KIND_FILTER);
 
@@ -138,8 +150,13 @@ export function resolveConfig(input: ResolveConfigInput = {}): HaloConfig {
     autonomy: normalizeAutonomy(requireValue(autonomyRaw, 'AUTONOMY')),
     maxIter: normalizePositiveInt(requireValue(maxIterRaw, 'MAX_ITER'), 'MAX_ITER'),
     timeoutSec: parseDuration(requireValue(timeoutRaw, 'TIMEOUT')),
-    ...(dailyItersRaw != null ? { dailyMaxIterations: normalizePositiveInt(dailyItersRaw, 'DAILY_MAX_ITERATIONS') } : {}),
-    ...(dailyCostRaw != null ? { dailyMaxCostUsd: normalizePositiveNumber(dailyCostRaw, 'DAILY_MAX_COST_USD') } : {}),
+    ...(dailyItersRaw != null
+      ? { dailyMaxIterations: normalizePositiveInt(dailyItersRaw, 'DAILY_MAX_ITERATIONS') }
+      : {}),
+    ...(dailyCostRaw != null
+      ? { dailyMaxCostUsd: normalizePositiveNumber(dailyCostRaw, 'DAILY_MAX_COST_USD') }
+      : {}),
+    ...(maxTurnsRaw != null ? { maxTurns: normalizePositiveInt(maxTurnsRaw, 'MAX_TURNS') } : {}),
     ...(taskFilter != null ? { taskFilter } : {}),
     ...(kindFilter != null ? { kindFilter } : {}),
     ...(input.profileName != null ? { profileName: input.profileName } : {}),
@@ -165,11 +182,14 @@ function requireValue(value: string | undefined, key: string): string {
 
 function normalizeAutonomy(value: string): MinAutonomy {
   if ((AUTONOMY_VALUES as readonly string[]).includes(value)) return value as MinAutonomy;
-  throw new ConfigError(`invalid AUTONOMY: '${value}' (expected one of ${AUTONOMY_VALUES.join(', ')})`);
+  throw new ConfigError(
+    `invalid AUTONOMY: '${value}' (expected one of ${AUTONOMY_VALUES.join(', ')})`,
+  );
 }
 
 function normalizePositiveInt(value: string, key: string): number {
-  if (!/^\d+$/.test(value.trim())) throw new ConfigError(`invalid ${key}: '${value}' (expected a positive integer)`);
+  if (!/^\d+$/.test(value.trim()))
+    throw new ConfigError(`invalid ${key}: '${value}' (expected a positive integer)`);
   const n = Number(value);
   if (n < 1) throw new ConfigError(`invalid ${key}: '${value}' (must be >= 1)`);
   return n;
@@ -177,7 +197,8 @@ function normalizePositiveInt(value: string, key: string): number {
 
 function normalizePositiveNumber(value: string, key: string): number {
   const n = Number(value);
-  if (!Number.isFinite(n) || n <= 0) throw new ConfigError(`invalid ${key}: '${value}' (expected a positive number)`);
+  if (!Number.isFinite(n) || n <= 0)
+    throw new ConfigError(`invalid ${key}: '${value}' (expected a positive number)`);
   return n;
 }
 
@@ -198,7 +219,8 @@ export function validateHarnessYml(parsed: unknown): HarnessYml {
     throw new ConfigError('.harness.yml: `kinds` must be a mapping');
   }
   const entries = Object.entries(kinds as Record<string, unknown>);
-  if (entries.length === 0) throw new ConfigError('.harness.yml: `kinds` must define at least one kind');
+  if (entries.length === 0)
+    throw new ConfigError('.harness.yml: `kinds` must define at least one kind');
   for (const [name, def] of entries) {
     validateKind(name, def);
   }
@@ -210,7 +232,11 @@ function validateKind(name: string, def: unknown): asserts def is HarnessKind {
     throw new ConfigError(`.harness.yml: kind '${name}' must be a mapping`);
   }
   const { runtimes, prompt } = def as Record<string, unknown>;
-  if (!Array.isArray(runtimes) || runtimes.length === 0 || !runtimes.every((r) => typeof r === 'string')) {
+  if (
+    !Array.isArray(runtimes) ||
+    runtimes.length === 0 ||
+    !runtimes.every((r) => typeof r === 'string')
+  ) {
     throw new ConfigError(`.harness.yml: kind '${name}' needs a non-empty string[] 'runtimes'`);
   }
   if (typeof prompt !== 'string' || prompt === '') {
@@ -229,7 +255,11 @@ export type KindResolution =
  * kind yields `needs-human` rather than throwing — the loop escalates, it does not
  * crash (D2 §2.7 構成不備は別扱い).
  */
-export function resolveKind(harness: HarnessYml, kindLabel?: string, defaultKind = 'code'): KindResolution {
+export function resolveKind(
+  harness: HarnessYml,
+  kindLabel?: string,
+  defaultKind = 'code',
+): KindResolution {
   const kind = kindLabel && kindLabel !== '' ? kindLabel : defaultKind;
   const def = harness.kinds[kind];
   if (!def) {

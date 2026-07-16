@@ -19,6 +19,7 @@ cat >"$TMP/bin/claude" <<'STUB'
 #!/usr/bin/env bash
 if [[ -n "${CLAUDE_ARGS_FILE:-}" ]]; then printf '%s\n' "$@" > "$CLAUDE_ARGS_FILE"; fi
 printf '%s\n' "${CLAUDE_STUB_OUT:-ok}"
+if [[ -n "${CLAUDE_STUB_ERR:-}" ]]; then printf '%s\n' "$CLAUDE_STUB_ERR" >&2; fi
 exit "${CLAUDE_STUB_EXIT:-0}"
 STUB
 chmod +x "$TMP/bin/claude"
@@ -72,6 +73,22 @@ if grep -qx "plan" "$TMP/args2" && ! grep -qx "acceptEdits" "$TMP/args2"; then
   echo "PASS  HALO_CLAUDE_PERMISSION_MODE overrides permission mode"
 else
   echo "FAIL  permission-mode override: args=[$(tr '\n' ' ' <"$TMP/args2")]"; fail=1
+fi
+
+# --- 非 0 終了時、stderr の理由が summary に伝搬される（max turns 到達等の真因を残す）---
+out="$(CLAUDE_STUB_OUT="" CLAUDE_STUB_ERR="Error: Reached max turns (40)" CLAUDE_STUB_EXIT=1 bash "$DIR/run.sh" <<<"$IN" 2>/dev/null)"
+if jq -e '.status=="stuck" and (.summary | contains("Reached max turns"))' >/dev/null 2>&1 <<<"$out"; then
+  echo "PASS  non-zero exit propagates stderr detail into summary"
+else
+  echo "FAIL  stderr propagation: out=[$out]"; fail=1
+fi
+
+# --- 非 0 終了時、stdout 側の末尾も理由として伝搬される ---
+out="$(CLAUDE_STUB_OUT="crash detail on stdout" CLAUDE_STUB_EXIT=1 bash "$DIR/run.sh" <<<"$IN" 2>/dev/null)"
+if jq -e '.summary | contains("crash detail on stdout")' >/dev/null 2>&1 <<<"$out"; then
+  echo "PASS  non-zero exit propagates stdout tail into summary"
+else
+  echo "FAIL  stdout propagation: out=[$out]"; fail=1
 fi
 
 # --- stdout は 1 個の JSON のみ（余計な行がない）---

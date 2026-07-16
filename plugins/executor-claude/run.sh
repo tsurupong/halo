@@ -30,13 +30,17 @@ if [[ ! -d "$workdir" ]]; then
   emit "stuck" "workdir does not exist: $workdir"
 fi
 
-# claude headless 実行。診断ノイズは捨て、stdout（結果本文）だけを捕捉する。
+# claude headless 実行。stdout（結果本文）を捕捉し、stderr は失敗時の理由伝搬のため
+# 一時ファイルへ退避する（従来の捨て置きだと「なぜ非0か」がコアに一切届かず、
+# max turns 到達のような決定論的失敗が summary "exited with code 1" に丸まっていた）。
+errfile="$(mktemp)"
+trap 'rm -f "$errfile"' EXIT
 out="$(cd "$workdir" && timeout "${timeout_sec}s" \
   claude -p "$prompt" \
     --strict-mcp-config \
     --permission-mode "$PERMISSION_MODE" \
     --max-turns "$max_turns" \
-    2>/dev/null)"
+    2>"$errfile")"
 code=$?
 
 # timeout(1) は時間切れで 124 を返す。
@@ -50,9 +54,11 @@ if grep -qF "$STUCK_MARKER" <<<"$out"; then
   emit "stuck" "executor reported stuck: ${tail_txt}"
 fi
 
-# 非 0 終了は行き詰まり扱い（failure 経路へ）。
+# 非 0 終了は行き詰まり扱い（failure 経路へ）。stdout/stderr の末尾を理由として
+# 添える — コアはこれを retry プロンプトと on-fail 記録へそのまま流す。
 if (( code != 0 )); then
-  emit "stuck" "claude exited with code ${code}"
+  detail="$({ printf '%s\n' "$out"; cat "$errfile"; } | grep . | tail -n 3 | tr '\n' ' ')"
+  emit "stuck" "claude exited with code ${code}${detail:+: ${detail}}"
 fi
 
 summary="$(printf '%s' "$out" | tail -n 3 | tr '\n' ' ')"
