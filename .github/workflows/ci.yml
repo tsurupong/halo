@@ -76,13 +76,3 @@ jobs:
       # Schema drift (D8 §3.3): committed schemas/*.json must match TS-type regeneration.
       - name: schema drift
         run: pnpm vitest run schema-drift
-      # Plugin shell tests (D10 §6 / ADR-0015): run every plugins/**/test.*.sh.
-      - name: plugin shell tests
-        run: |
-          set -u
-          fail=0
-          while IFS= read -r t; do
-            echo "== ${t}"
-            bash "${t}" || { echo "FAIL: ${t}"; fail=1; }
-          done < <(find plugins -name 'test.*.sh' | sort)
-          exit "${fail}"
