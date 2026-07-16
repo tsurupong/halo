@@ -1,0 +1,6 @@
+{
+  "name": "@halo/plugin-task-source-local",
+  "version": "1.0.0",
+  "port": "task-source",
+  "entry": "../../packages/plugins/dist/task-source-local/main.js"
+}

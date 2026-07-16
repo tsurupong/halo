@@ -138,6 +138,16 @@ export const BUNDLED_PLUGINS: BundledPlugin[] = [
     },
   },
   {
+    name: 'task-source-local',
+    port: 'task-source',
+    manifest: {
+      name: '@halo/plugin-task-source-local',
+      version: '1.0.0',
+      port: 'task-source',
+      entry: './task-source-local/main.js',
+    },
+  },
+  {
     name: 'trigger-polling',
     port: 'trigger',
     manifest: {
