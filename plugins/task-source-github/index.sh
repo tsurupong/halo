@@ -10,6 +10,10 @@ set -uo pipefail
 
 FAIL_THRESHOLD="${HALO_FAIL_THRESHOLD:-3}"
 
+# 依存コマンドのプリフライト（D10 §5）。欠落時は die と同じ安全側（stderr + exit 2）。
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../lib/require.sh"
+require_cmds jq gh || { echo "task-source-github: 依存コマンド欠落" >&2; exit 2; }
+
 input="$(cat)"
 op="$(jq -r '.op // empty' <<<"$input")"
 

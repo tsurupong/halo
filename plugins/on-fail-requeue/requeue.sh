@@ -14,6 +14,10 @@ MAX_ATTEMPTS="${REQUEUE_MAX_ATTEMPTS:-3}"
 REQUEUE_DIR="${HALO_REQUEUE_DIR:-.halo/requeue}"
 TASKS_DIR="${HALO_TASKS_DIR:-.halo/tasks}"
 
+# 依存コマンドのプリフライト（D10 §5）。ベストエフォートのため欠落時は理由を出して exit 0。
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../lib/require.sh"
+require_cmds jq || { echo "on-fail-requeue: 依存コマンド欠落のためスキップ" >&2; exit 0; }
+
 input="$(cat)"
 task_id="$(jq -r '.task_id // empty' <<<"$input")"
 reason="$(jq -r '.reason // ""' <<<"$input")"

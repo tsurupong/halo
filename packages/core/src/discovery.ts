@@ -64,6 +64,13 @@ export interface DiscoveredPlugin {
   dir: string;
   /** Absolute path to the executable (`dir` + manifest `exec`). */
   execPath: string;
+  /**
+   * When set, launch as `execArgv[0] execArgv.slice(1)...` instead of spawning
+   * `execPath` directly — the exec-bit fallback for shell scripts that lost
+   * their executable bit on NTFS checkouts (D10 §5), e.g. `['bash', execPath]`.
+   * Absent for executables, which keep the direct-spawn path unchanged.
+   */
+  execArgv?: readonly string[];
   /** Effective order used for the stable sort (field → prefix → {@link UNORDERED}). */
   order: number;
   /** The validated manifest. */
@@ -232,6 +239,12 @@ export interface DiscoveryFs {
   readDir(path: string): Promise<DirEntry[]>;
   readFile(path: string): Promise<string>;
   exists(path: string): Promise<boolean>;
+  /**
+   * X_OK probe (fs.access equivalent) for the exec-bit fallback (D10 §5).
+   * Optional so existing seams keep working; when absent the probe is skipped
+   * and every exec is treated as executable (the pre-fallback behaviour).
+   */
+  isExecutable?(path: string): Promise<boolean>;
 }
 
 export interface DiscoverPortOptions {
@@ -284,18 +297,49 @@ export async function discoverPort(options: DiscoverPortOptions): Promise<PortDi
       continue;
     }
 
+    const execArgv = await resolveExecArgv(execPath, fs);
+
     plugins.push({
       port,
       name: manifest.name,
       dirName: entry.name,
       dir,
       execPath,
+      ...(execArgv !== undefined ? { execArgv } : {}),
       order: effectiveOrder(manifest, entry.name),
       manifest,
     });
   }
 
   return { port, plugins: sortPlugins(plugins), issues };
+}
+
+/** Shebang whose interpreter is bash or sh (`#!/bin/sh`, `#!/usr/bin/env bash`, …). Pure. */
+export function isShellShebang(firstLine: string): boolean {
+  if (!firstLine.startsWith('#!')) return false;
+  return /(?:^|[/\s])(?:bash|sh)(?:\s|$)/.test(firstLine.slice(2).trim());
+}
+
+/**
+ * Exec-bit fallback (D10 §5): when the resolved exec exists but is not
+ * executable (NTFS checkouts drop the bit; spawning would fail with EACCES)
+ * and it is a shell script (`.sh` extension or a bash/sh shebang), return the
+ * argv to launch it through bash instead. Returns `undefined` — keep the
+ * direct-spawn path — for executables, non-scripts, and seams without an
+ * `isExecutable` probe.
+ */
+async function resolveExecArgv(execPath: string, fs: DiscoveryFs): Promise<readonly string[] | undefined> {
+  if (fs.isExecutable === undefined) return undefined;
+  if (!(await fs.exists(execPath))) return undefined;
+  if (await fs.isExecutable(execPath)) return undefined;
+  if (execPath.endsWith('.sh')) return ['bash', execPath];
+  let firstLine: string;
+  try {
+    firstLine = (await fs.readFile(execPath)).split('\n', 1)[0] ?? '';
+  } catch {
+    return undefined; // unreadable (e.g. binary read error) — keep existing behaviour
+  }
+  return isShellShebang(firstLine) ? ['bash', execPath] : undefined;
 }
 
 function parseJson(text: string, path: string): unknown {
@@ -360,6 +404,13 @@ export function createNodeDiscoveryFs(): DiscoveryFs {
     async exists(path) {
       const { access } = await import('node:fs/promises');
       return access(path).then(
+        () => true,
+        () => false,
+      );
+    },
+    async isExecutable(path) {
+      const { access, constants } = await import('node:fs/promises');
+      return access(path, constants.X_OK).then(
         () => true,
         () => false,
       );

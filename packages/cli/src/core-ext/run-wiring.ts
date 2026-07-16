@@ -236,9 +236,12 @@ async function isLockHeldByOther(
 // --- PortRunner ---------------------------------------------------------------
 
 function makeRunner(ctx: RunContext): PortRunner {
+  // 実行ビット欠落スクリプトのフォールバック (D10 §5): discovery が execArgv を
+  // 付けた plugin は `bash <path>` で spawn する。無ければ従来どおり直接起動。
   return (plugin: DiscoveredPlugin, stdin: unknown, opts?: { timeoutSec?: number }) =>
     runPort({
-      execPath: plugin.execPath,
+      execPath: plugin.execArgv?.[0] ?? plugin.execPath,
+      ...(plugin.execArgv !== undefined ? { args: plugin.execArgv.slice(1) } : {}),
       cwd: ctx.cwd,
       env: { ...baseEnv(), ...(plugin.manifest.env ?? {}) },
       stdin,

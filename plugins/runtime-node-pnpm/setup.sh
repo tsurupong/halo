@@ -5,6 +5,10 @@
 # 判定: 成功=exit 0 / 失敗=exit 2。診断は stderr、stdout は使わない。
 set -uo pipefail
 
+# 依存コマンドのプリフライト（D10 §5）。欠落時は既存エラーパスと同じ stderr + exit 2。
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../lib/require.sh"
+require_cmds jq pnpm || { echo "runtime-node-pnpm/setup: 依存コマンド欠落" >&2; exit 2; }
+
 input="$(cat)"
 workdir="$(jq -r '.workdir // empty' <<<"$input")"
 if [[ -z "$workdir" ]]; then

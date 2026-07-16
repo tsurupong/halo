@@ -6,6 +6,10 @@
 # ベストエフォート（部分失敗許容）。出力は無し、stdout は空に保つ。
 set -uo pipefail
 
+# 依存コマンドのプリフライト（D10 §5）。ベストエフォートのため欠落時は理由を出して exit 0。
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../lib/require.sh"
+require_cmds jq || { echo "on-fail-record: 依存コマンド欠落のためスキップ" >&2; exit 0; }
+
 input="$(cat)"
 task_id="$(jq -r '.task_id // empty' <<<"$input")"
 reason="$(jq -r '.reason // ""' <<<"$input")"
