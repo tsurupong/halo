@@ -14,6 +14,13 @@ RUNTIME_DIR="${HALO_RUNTIME_DIR:-$HERE/../runtime-node-pnpm}"
 
 emit_fail() { jq -cn --arg r "$1" --arg g "$gate" '{reason:$r, gate:$g}'; exit 2; }
 
+# 依存コマンドのプリフライト（D10 §5）。jq 不在時は emit_fail が使えないため printf で組む。
+. "$HERE/../lib/require.sh"
+if ! missing="$(require_cmds jq 2>&1)"; then
+  printf '{"reason":"%s","gate":"%s"}\n' "$missing" "$gate"
+  exit 2
+fi
+
 input="$(cat)"
 workdir="$(jq -r '.workdir // empty' <<<"$input")"
 [[ -n "$workdir" ]] || emit_fail "invalid gate input: workdir required"

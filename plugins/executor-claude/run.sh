@@ -17,6 +17,13 @@ PERMISSION_MODE="${HALO_CLAUDE_PERMISSION_MODE:-acceptEdits}"
 
 emit() { jq -cn --arg s "$1" --arg m "$2" '{status:$s, summary:$m}'; exit 0; }
 
+# 依存コマンドのプリフライト（D10 §5）。jq 自体が無い場合があるため JSON は printf で組む。
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../lib/require.sh"
+if ! missing="$(require_cmds jq timeout claude 2>&1)"; then
+  printf '{"status":"stuck","summary":"%s"}\n' "$missing"
+  exit 0
+fi
+
 input="$(cat)"
 prompt="$(jq -r '.prompt // empty' <<<"$input")"
 workdir="$(jq -r '.workdir // empty' <<<"$input")"

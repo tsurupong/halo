@@ -38,6 +38,13 @@ is_protected_file() {
   esac
 }
 
+# 依存コマンドのプリフライト（D10 §5）。jq 不在時は fail() が使えないため printf で組む。
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../lib/require.sh"
+if ! missing="$(require_cmds jq 2>&1)"; then
+  printf '{"reason":"%s","gate":"%s"}\n' "$missing" "$GATE"
+  exit 2
+fi
+
 input="$(cat)"
 workdir="$(jq -r '.workdir // empty' <<<"$input")"
 [[ -n "$workdir" && -d "$workdir" ]] || fail "workdir 不正: '$workdir'"
