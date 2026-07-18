@@ -9,11 +9,10 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const pluginRoot = join(__dirname, '..', '..', '..', '..', 'plugins', 'runtime-node-pnpm');
-const setupLauncher = join(pluginRoot, 'setup.sh');
-const checkLauncher = join(pluginRoot, 'check.sh');
-const testLauncher = join(pluginRoot, 'test.sh');
 const distDir = join(__dirname, '..', '..', 'dist', 'runtime-node-pnpm');
+const setupLauncher = join(distDir, 'setup.js');
+const checkLauncher = join(distDir, 'check.js');
+const testLauncher = join(distDir, 'test.js');
 
 for (const f of ['setup.js', 'check.js', 'test.js']) {
   const p = join(distDir, f);
@@ -27,7 +26,7 @@ function runLauncher(
   input: string,
   env: Record<string, string> = {},
 ): { code: number; stdout: string; stderr: string } {
-  const r = spawnSync('sh', [launcherPath], {
+  const r = spawnSync(process.execPath, [launcherPath], {
     input,
     env: { ...process.env, ...env },
     encoding: 'utf8',

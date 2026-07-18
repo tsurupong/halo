@@ -2,6 +2,6 @@
   "name": "@halo/plugin-gate-runtime-check-typecheck",
   "version": "1.0.0",
   "port": "gate",
-  "exec": "./run.sh",
+  "entry": "../../../packages/plugins/dist/gate-runtime-check/typecheck.js",
   "order": 10
 }

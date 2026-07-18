@@ -9,7 +9,7 @@
 // (D2 §1.2, D8 §1.1). The only side-effecting entry points inject a `DiscoveryFs`
 // seam — no singletons, no module-level state.
 
-import { join, dirname } from 'node:path';
+import { join, dirname, isAbsolute } from 'node:path';
 import type { Port, PluginManifest, MinAutonomy } from '@tsurupong/halo-contracts';
 
 /** Thrown when a candidate `plugin.json` violates the manifest contract (D1 §2). */
@@ -62,15 +62,8 @@ export interface DiscoveredPlugin {
   dirName: string;
   /** Absolute plugin directory. */
   dir: string;
-  /** Absolute path to the executable (`dir` + manifest `exec`). */
-  execPath: string;
-  /**
-   * When set, launch as `execArgv[0] execArgv.slice(1)...` instead of spawning
-   * `execPath` directly — the exec-bit fallback for shell scripts that lost
-   * their executable bit on NTFS checkouts (D10 §5), e.g. `['sh', execPath]`.
-   * Absent for executables, which keep the direct-spawn path unchanged.
-   */
-  execArgv?: readonly string[];
+  /** Absolute path to the entry module (`dir` + manifest `entry`). */
+  entryPath: string;
   /** Effective order used for the stable sort (field → prefix → {@link UNORDERED}). */
   order: number;
   /** The validated manifest. */
@@ -157,9 +150,14 @@ export function validatePluginManifest(value: unknown, expectedPort?: Port): Plu
   if (expectedPort && port !== expectedPort) {
     throw new DiscoveryError(`plugin.json: 'port' is '${port}' but was found under '${expectedPort}.d/'`);
   }
-  const exec = requireString(obj, 'exec');
+  if ('exec' in obj) {
+    throw new DiscoveryError(
+      "plugin.json: 'exec' was removed in v0.3.0 — declare a JS module via 'entry' (see ADR-0018)",
+    );
+  }
+  const entry = requireString(obj, 'entry');
 
-  const manifest: PluginManifest = { name, version, port: port as Port, exec };
+  const manifest: PluginManifest = { name, version, port: port as Port, entry };
 
   if ('order' in obj && obj.order !== undefined) {
     if (!Number.isInteger(obj.order)) throw new DiscoveryError("plugin.json: 'order' must be an integer");
@@ -189,8 +187,18 @@ export function validatePluginManifest(value: unknown, expectedPort?: Port): Plu
     }
     manifest.env = env as Record<string, string>;
   }
+  if ('aux' in obj && obj.aux !== undefined) {
+    const aux = obj.aux;
+    if (typeof aux !== 'object' || aux === null || Array.isArray(aux)) {
+      throw new DiscoveryError("plugin.json: 'aux' must be an object");
+    }
+    for (const [k, v] of Object.entries(aux as Record<string, unknown>)) {
+      if (typeof v !== 'string') throw new DiscoveryError(`plugin.json: aux['${k}'] must be a string`);
+    }
+    manifest.aux = aux as Record<string, string>;
+  }
 
-  const known = new Set(['name', 'version', 'port', 'exec', 'order', 'minAutonomy', 'timeoutSec', 'env']);
+  const known = new Set(['name', 'version', 'port', 'entry', 'aux', 'order', 'minAutonomy', 'timeoutSec', 'env']);
   for (const key of Object.keys(obj)) {
     if (!known.has(key)) throw new DiscoveryError(`plugin.json: unknown field '${key}' (additionalProperties: false)`);
   }
@@ -239,12 +247,6 @@ export interface DiscoveryFs {
   readDir(path: string): Promise<DirEntry[]>;
   readFile(path: string): Promise<string>;
   exists(path: string): Promise<boolean>;
-  /**
-   * X_OK probe (fs.access equivalent) for the exec-bit fallback (D10 §5).
-   * Optional so existing seams keep working; when absent the probe is skipped
-   * and every exec is treated as executable (the pre-fallback behaviour).
-   */
-  isExecutable?(path: string): Promise<boolean>;
 }
 
 export interface DiscoverPortOptions {
@@ -252,8 +254,8 @@ export interface DiscoverPortOptions {
   haloRoot: string;
   port: Port;
   fs: DiscoveryFs;
-  /** Also require the resolved `exec` to exist (off by default). */
-  requireExec?: boolean;
+  /** Also require the resolved `entry` to exist (off by default). */
+  requireEntry?: boolean;
 }
 
 /** Absolute path to a port's plugin directory (`<haloRoot>/ports/<port>.d`). Pure. */
@@ -291,55 +293,24 @@ export async function discoverPort(options: DiscoverPortOptions): Promise<PortDi
       continue;
     }
 
-    const execPath = join(dir, manifest.exec);
-    if (options.requireExec && !(await fs.exists(execPath))) {
-      issues.push({ dir, message: `exec not found: ${manifest.exec}` });
+    const entryPath = isAbsolute(manifest.entry) ? manifest.entry : join(dir, manifest.entry);
+    if (options.requireEntry && !(await fs.exists(entryPath))) {
+      issues.push({ dir, message: `entry not found: ${manifest.entry}` });
       continue;
     }
-
-    const execArgv = await resolveExecArgv(execPath, fs);
 
     plugins.push({
       port,
       name: manifest.name,
       dirName: entry.name,
       dir,
-      execPath,
-      ...(execArgv !== undefined ? { execArgv } : {}),
+      entryPath,
       order: effectiveOrder(manifest, entry.name),
       manifest,
     });
   }
 
   return { port, plugins: sortPlugins(plugins), issues };
-}
-
-/** Shebang whose interpreter is bash or sh (`#!/bin/sh`, `#!/usr/bin/env bash`, …). Pure. */
-export function isShellShebang(firstLine: string): boolean {
-  if (!firstLine.startsWith('#!')) return false;
-  return /(?:^|[/\s])(?:bash|sh)(?:\s|$)/.test(firstLine.slice(2).trim());
-}
-
-/**
- * Exec-bit fallback (D10 §5): when the resolved exec exists but is not
- * executable (NTFS checkouts drop the bit; spawning would fail with EACCES)
- * and it is a shell script (`.sh` extension or a bash/sh shebang), return the
- * argv to launch it through sh instead (plugins' launchers are POSIX sh, ADR-0017). Returns `undefined` — keep the
- * direct-spawn path — for executables, non-scripts, and seams without an
- * `isExecutable` probe.
- */
-async function resolveExecArgv(execPath: string, fs: DiscoveryFs): Promise<readonly string[] | undefined> {
-  if (fs.isExecutable === undefined) return undefined;
-  if (!(await fs.exists(execPath))) return undefined;
-  if (await fs.isExecutable(execPath)) return undefined;
-  if (execPath.endsWith('.sh')) return ['sh', execPath];
-  let firstLine: string;
-  try {
-    firstLine = (await fs.readFile(execPath)).split('\n', 1)[0] ?? '';
-  } catch {
-    return undefined; // unreadable (e.g. binary read error) — keep existing behaviour
-  }
-  return isShellShebang(firstLine) ? ['sh', execPath] : undefined;
 }
 
 function parseJson(text: string, path: string): unknown {
@@ -404,13 +375,6 @@ export function createNodeDiscoveryFs(): DiscoveryFs {
     async exists(path) {
       const { access } = await import('node:fs/promises');
       return access(path).then(
-        () => true,
-        () => false,
-      );
-    },
-    async isExecutable(path) {
-      const { access, constants } = await import('node:fs/promises');
-      return access(path, constants.X_OK).then(
         () => true,
         () => false,
       );

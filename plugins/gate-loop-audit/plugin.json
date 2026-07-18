@@ -2,6 +2,6 @@
   "name": "@halo/plugin-gate-loop-audit",
   "version": "1.0.0",
   "port": "gate",
-  "exec": "./audit.sh",
+  "entry": "../../packages/plugins/dist/gate-loop-audit/main.js",
   "order": 50
 }

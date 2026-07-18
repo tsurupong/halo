@@ -2,6 +2,6 @@
   "name": "@halo/plugin-on-fail-requeue",
   "version": "1.0.0",
   "port": "on-fail",
-  "exec": "./requeue.sh",
+  "entry": "../../packages/plugins/dist/on-fail-requeue/main.js",
   "order": 20
 }

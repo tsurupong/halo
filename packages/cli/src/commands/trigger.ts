@@ -1,5 +1,6 @@
-// `halo trigger install|uninstall|list` (T27, D3 §2.3): アダプタ script の spawn と
-// 終了コード写像のみ。実処理は bash アダプタ (D1 §1.9)。CLI は名前検証と spawn 回収だけ。
+// `halo trigger install|uninstall|list` (T27, D3 §2.3): entry 契約 (plugin.json の
+// aux.install/aux.uninstall) の解決と spawn、終了コード写像のみ。実処理は各アダプタの
+// TS 実装 (ADR-0017)。CLI は名前検証と spawn 回収だけ。
 import { type ParsedArgs } from '../args.js';
 import type { ExitCode } from '../exit-codes.js';
 import { EXIT, usageError, runtimeError } from '../exit-codes.js';

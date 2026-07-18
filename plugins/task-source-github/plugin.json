@@ -2,5 +2,5 @@
   "name": "@halo/plugin-task-source-github",
   "version": "1.0.0",
   "port": "task-source",
-  "exec": "./index.sh"
+  "entry": "../../packages/plugins/dist/task-source-github/main.js"
 }

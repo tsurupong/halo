@@ -23,9 +23,9 @@ function plug(port: DiscoveredPlugin['port'], name: string): DiscoveredPlugin {
     name,
     dirName: name,
     dir: `/x/${name}`,
-    execPath: `/x/${name}/run`,
+    entryPath: `/x/${name}/run`,
     order: 0,
-    manifest: { name, version: '1.0.0', port, exec: 'run' },
+    manifest: { name, version: '1.0.0', port, entry: 'run' },
   };
 }
 

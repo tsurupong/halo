@@ -8,8 +8,6 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const pluginDir = join(__dirname, '..', '..', '..', '..', 'plugins', 'task-source-github');
-const launcherPath = join(pluginDir, 'index.sh');
 const distPath = join(__dirname, '..', '..', 'dist', 'task-source-github', 'main.js');
 
 if (!existsSync(distPath)) {
@@ -17,7 +15,7 @@ if (!existsSync(distPath)) {
 }
 
 function runLauncher(input: string, env: Record<string, string> = {}) {
-  const r = spawnSync('sh', [launcherPath], {
+  const r = spawnSync(process.execPath, [distPath], {
     input,
     env: { ...process.env, ...env },
     encoding: 'utf8',

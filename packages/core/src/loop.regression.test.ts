@@ -1,5 +1,5 @@
 // loop regression tests (D8 §2): drive the real state machine end-to-end with
-// fixture plugins (bash scripts that echo canned JSON — test/mocks/*.sh). Real
+// fixture plugins (Node ESM scripts that echo canned JSON — test/mocks/*.mjs). Real
 // process boundary through runPort, zero network, zero claude billing. Covers the
 // five executor/gate/task paths (§2.2) and the five terminal conditions (§2.3).
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -28,9 +28,9 @@ function mock(port: Port, name: string, script: string, env: Record<string, stri
     name,
     dirName: name,
     dir: MOCK_DIR,
-    execPath: join(MOCK_DIR, script),
+    entryPath: join(MOCK_DIR, script),
     order: 0,
-    manifest: { name, version: '1.0.0', port, exec: script, ...(minAutonomy ? { minAutonomy } : {}), env },
+    manifest: { name, version: '1.0.0', port, entry: script, ...(minAutonomy ? { minAutonomy } : {}), env },
   };
 }
 
@@ -56,7 +56,8 @@ function rig(ports: Partial<LoopPorts>, over: Omit<Partial<LoopDeps>, 'config'> 
   };
   const runner: PortRunner = (plugin, stdin, opts) =>
     runPort({
-      execPath: plugin.execPath,
+      execPath: process.execPath,
+      args: [plugin.entryPath],
       stdin,
       timeoutMs: (opts?.timeoutSec ?? 5) * 1000,
       env: { ...baseEnv(), STATE_DIR: stateDir, PLUGIN_NAME: plugin.name, ...(plugin.manifest.env ?? {}) },
@@ -82,10 +83,10 @@ describe('loop regression (fixture plugins, zero billing)', () => {
   it('happy path: task → execute → gate pass → sink → complete → NO_TASK', async () => {
     const { deps, logs } = rig(
       {
-        taskSource: [mock('task-source', 'ts', 'task-source.sh', { TS_REPEAT: '1' })],
-        executor: [mock('executor', 'ex', 'executor.sh', { EXEC_STATUS: 'done' })],
-        gate: [mock('gate', 'g', 'gate.sh', { GATE_MODE: 'pass' })],
-        sink: [mock('sink', 'log', 'sink.sh', {}, 'L1')],
+        taskSource: [mock('task-source', 'ts', 'task-source.mjs', { TS_REPEAT: '1' })],
+        executor: [mock('executor', 'ex', 'executor.mjs', { EXEC_STATUS: 'done' })],
+        gate: [mock('gate', 'g', 'gate.mjs', { GATE_MODE: 'pass' })],
+        sink: [mock('sink', 'log', 'sink.mjs', {}, 'L1')],
       },
       // A PR url is produced → op=complete fires (M4/L1: complete gated on a real PR url).
       { resolvePrUrl: () => 'https://example/pr/1' },
@@ -100,10 +101,10 @@ describe('loop regression (fixture plugins, zero billing)', () => {
 
   it('gate fail → on-fail → retry with re-injected reason → success', async () => {
     const { deps } = rig({
-      taskSource: [mock('task-source', 'ts', 'task-source.sh', { TS_REPEAT: '2' })],
-      executor: [mock('executor', 'ex', 'executor.sh', { EXEC_STATUS: 'done' })],
-      gate: [mock('gate', 'g', 'gate.sh', { GATE_MODE: 'fail_then_pass' })],
-      onFail: [mock('on-fail', 'rec', 'on-fail.sh')],
+      taskSource: [mock('task-source', 'ts', 'task-source.mjs', { TS_REPEAT: '2' })],
+      executor: [mock('executor', 'ex', 'executor.mjs', { EXEC_STATUS: 'done' })],
+      gate: [mock('gate', 'g', 'gate.mjs', { GATE_MODE: 'fail_then_pass' })],
+      onFail: [mock('on-fail', 'rec', 'on-fail.mjs')],
     });
     const result = await runLoop(deps);
     expect(result.iterations[0]?.outcome).toBe('failed');
@@ -116,10 +117,10 @@ describe('loop regression (fixture plugins, zero billing)', () => {
   it('retry exhaustion: same task fails to threshold, then task-source stops paying it out', async () => {
     const { deps } = rig(
       {
-        taskSource: [mock('task-source', 'ts', 'task-source.sh', { TS_REPEAT: '3' })],
-        executor: [mock('executor', 'ex', 'executor.sh', { EXEC_STATUS: 'done' })],
-        gate: [mock('gate', 'g', 'gate.sh', { GATE_MODE: 'fail' })],
-        onFail: [mock('on-fail', 'rec', 'on-fail.sh')],
+        taskSource: [mock('task-source', 'ts', 'task-source.mjs', { TS_REPEAT: '3' })],
+        executor: [mock('executor', 'ex', 'executor.mjs', { EXEC_STATUS: 'done' })],
+        gate: [mock('gate', 'g', 'gate.mjs', { GATE_MODE: 'fail' })],
+        onFail: [mock('on-fail', 'rec', 'on-fail.mjs')],
       },
       { config: { retryThreshold: 3 } },
     );
@@ -133,10 +134,10 @@ describe('loop regression (fixture plugins, zero billing)', () => {
 
   it('stuck executor routes to the failure path without running the gate', async () => {
     const { deps } = rig({
-      taskSource: [mock('task-source', 'ts', 'task-source.sh', { TS_REPEAT: '1' })],
-      executor: [mock('executor', 'ex', 'executor.sh', { EXEC_STATUS: 'stuck' })],
-      gate: [mock('gate', 'g', 'gate.sh', { GATE_MODE: 'pass' })],
-      onFail: [mock('on-fail', 'rec', 'on-fail.sh')],
+      taskSource: [mock('task-source', 'ts', 'task-source.mjs', { TS_REPEAT: '1' })],
+      executor: [mock('executor', 'ex', 'executor.mjs', { EXEC_STATUS: 'stuck' })],
+      gate: [mock('gate', 'g', 'gate.mjs', { GATE_MODE: 'pass' })],
+      onFail: [mock('on-fail', 'rec', 'on-fail.mjs')],
     });
     const result = await runLoop(deps);
     expect(result.iterations[0]).toEqual(expect.objectContaining({ executorStatus: 'stuck', outcome: 'failed' }));
@@ -148,9 +149,9 @@ describe('loop regression (fixture plugins, zero billing)', () => {
     let iters = 0;
     const { deps } = rig(
       {
-        taskSource: [mock('task-source', 'ts', 'task-source.sh', { TS_REPEAT: '99' })],
-        executor: [mock('executor', 'ex', 'executor.sh', { EXEC_STATUS: 'done' })],
-        gate: [mock('gate', 'g', 'gate.sh', { GATE_MODE: 'pass' })],
+        taskSource: [mock('task-source', 'ts', 'task-source.mjs', { TS_REPEAT: '99' })],
+        executor: [mock('executor', 'ex', 'executor.mjs', { EXEC_STATUS: 'done' })],
+        gate: [mock('gate', 'g', 'gate.mjs', { GATE_MODE: 'pass' })],
       },
       { isBudgetOk: () => iters++ < 2 },
     );
@@ -163,9 +164,9 @@ describe('loop regression (fixture plugins, zero billing)', () => {
     let seen = 0;
     const { deps } = rig(
       {
-        taskSource: [mock('task-source', 'ts', 'task-source.sh', { TS_REPEAT: '99' })],
-        executor: [mock('executor', 'ex', 'executor.sh', { EXEC_STATUS: 'done' })],
-        gate: [mock('gate', 'g', 'gate.sh', { GATE_MODE: 'pass' })],
+        taskSource: [mock('task-source', 'ts', 'task-source.mjs', { TS_REPEAT: '99' })],
+        executor: [mock('executor', 'ex', 'executor.mjs', { EXEC_STATUS: 'done' })],
+        gate: [mock('gate', 'g', 'gate.mjs', { GATE_MODE: 'pass' })],
       },
       { isStopPresent: () => seen++ >= 1 },
     );
@@ -177,10 +178,10 @@ describe('loop regression (fixture plugins, zero billing)', () => {
   it('MAX_ITER caps the number of iterations', async () => {
     const { deps } = rig(
       {
-        taskSource: [mock('task-source', 'ts', 'task-source.sh', { TS_REPEAT: '99' })],
-        executor: [mock('executor', 'ex', 'executor.sh', { EXEC_STATUS: 'done' })],
-        gate: [mock('gate', 'g', 'gate.sh', { GATE_MODE: 'pass' })],
-        sink: [mock('sink', 'log', 'sink.sh', {}, 'L1')],
+        taskSource: [mock('task-source', 'ts', 'task-source.mjs', { TS_REPEAT: '99' })],
+        executor: [mock('executor', 'ex', 'executor.mjs', { EXEC_STATUS: 'done' })],
+        gate: [mock('gate', 'g', 'gate.mjs', { GATE_MODE: 'pass' })],
+        sink: [mock('sink', 'log', 'sink.mjs', {}, 'L1')],
       },
       { config: { maxIter: 3 } },
     );

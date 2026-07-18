@@ -1,8 +1,8 @@
-import { mkdtemp, rm, readFile, readdir } from 'node:fs/promises';
+import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { expect, test, describe, afterEach } from 'vitest';
 import { parseArgs } from '../args.js';
 import { createIo } from '../io.js';
@@ -25,7 +25,7 @@ const REPO_PLUGINS_PKG_JSON = join(
   'package.json',
 );
 
-describe('halo enable (ADR-0017 / D11 §3)', () => {
+describe('halo enable (entry契約化 Task 6)', () => {
   test('unknown plugin name is a usage error and lists available plugins', async () => {
     const fs = memFs();
     const cap = captureStreams();
@@ -49,16 +49,12 @@ describe('halo enable (ADR-0017 / D11 §3)', () => {
     expect(cap.err()).toContain('sink-progress-log');
   });
 
-  test('generates a launcher with an absolute path into the resolved dist', async () => {
+  test('generates plugin.json only, with entry/aux rewritten to absolute dist paths', async () => {
     const fs = memFs();
     const cap = captureStreams();
-    const chmods: Array<{ path: string; mode: number }> = [];
     const code = await enableCommand(parseArgs(['sink-progress-log'], {}), io(cap, '/repo'), {
       fs,
       resolvePluginsPackageJson: () => '/fake/node_modules/@tsurupong/halo-plugins/package.json',
-      chmod: async (path, mode) => {
-        chmods.push({ path, mode });
-      },
     });
     expect(code).toBe(EXIT.OK);
 
@@ -67,12 +63,15 @@ describe('halo enable (ADR-0017 / D11 §3)', () => {
     const manifest = JSON.parse(fs.files.get(`${dir}/plugin.json`)!);
     expect(manifest.name).toBe('@halo/plugin-sink-progress-log');
     expect(manifest.env).toBeUndefined();
-
-    const script = fs.files.get(`${dir}/log.sh`);
-    expect(script).toContain(
-      'exec node "/fake/node_modules/@tsurupong/halo-plugins/dist/sink-progress-log/main.js" "$@"',
+    expect(manifest.entry).toBe(
+      '/fake/node_modules/@tsurupong/halo-plugins/dist/sink-progress-log/main.js',
     );
-    expect(chmods).toEqual([{ path: `${dir}/log.sh`, mode: 0o755 }]);
+
+    // .sh ファイルは一切生成されない。
+    const generated = [...fs.files.keys()].filter((p) => p.startsWith(dir));
+    expect(generated).toEqual([`${dir}/plugin.json`]);
+    expect(generated.some((p) => p.endsWith('.sh'))).toBe(false);
+
     expect(cap.err()).toContain(`enabled sink-progress-log -> ${dir}`);
   });
 
@@ -82,7 +81,6 @@ describe('halo enable (ADR-0017 / D11 §3)', () => {
     await enableCommand(parseArgs(['gate-runtime-check-typecheck'], {}), io(cap, '/repo'), {
       fs,
       resolvePluginsPackageJson: () => '/fake/node_modules/@tsurupong/halo-plugins/package.json',
-      chmod: async () => {},
     });
     const dir = '/repo/.halo/ports/gate.d/gate-runtime-check-typecheck';
     const manifest = JSON.parse(fs.files.get(`${dir}/plugin.json`)!);
@@ -91,26 +89,45 @@ describe('halo enable (ADR-0017 / D11 §3)', () => {
     });
   });
 
-  test('is idempotent — re-running overwrites the same files without duplication', async () => {
+  test('aux entries (e.g. trigger fire/install/uninstall) are also absolutized', async () => {
+    const fs = memFs();
+    const cap = captureStreams();
+    await enableCommand(parseArgs(['trigger-polling'], {}), io(cap, '/repo'), {
+      fs,
+      resolvePluginsPackageJson: () => '/fake/node_modules/@tsurupong/halo-plugins/package.json',
+    });
+    const dir = '/repo/.halo/ports/trigger.d/trigger-polling';
+    const manifest = JSON.parse(fs.files.get(`${dir}/plugin.json`)!);
+    expect(manifest.aux.fire).toBe(
+      '/fake/node_modules/@tsurupong/halo-plugins/dist/trigger-polling/fire.js',
+    );
+    expect(manifest.aux.install).toBe(
+      '/fake/node_modules/@tsurupong/halo-plugins/dist/trigger-polling/install.js',
+    );
+    expect(manifest.aux.uninstall).toBe(
+      '/fake/node_modules/@tsurupong/halo-plugins/dist/trigger-polling/uninstall.js',
+    );
+  });
+
+  test('is idempotent — re-running overwrites the same plugin.json without duplication', async () => {
     const fs = memFs();
     const cap = captureStreams();
     const run = () =>
       enableCommand(parseArgs(['runtime-node-pnpm'], {}), io(cap, '/repo'), {
         fs,
         resolvePluginsPackageJson: () => '/fake/node_modules/@tsurupong/halo-plugins/package.json',
-        chmod: async () => {},
       });
     await run();
     const dir = '/repo/.halo/ports/runtime.d/runtime-node-pnpm';
-    const before = fs.files.get(`${dir}/setup.sh`);
+    const before = fs.files.get(`${dir}/plugin.json`);
     await run();
-    const after = fs.files.get(`${dir}/setup.sh`);
+    const after = fs.files.get(`${dir}/plugin.json`);
     expect(after).toBe(before);
-    expect(fs.files.has(`${dir}/check.sh`)).toBe(true);
-    expect(fs.files.has(`${dir}/test.sh`)).toBe(true);
+    const generated = [...fs.files.keys()].filter((p) => p.startsWith(dir));
+    expect(generated).toEqual([`${dir}/plugin.json`]);
   });
 
-  describe('generated launcher actually runs (real fs + sh)', () => {
+  describe('generated plugin.json entry actually runs (real fs + node)', () => {
     let tmp: string | undefined;
 
     afterEach(async () => {
@@ -118,7 +135,7 @@ describe('halo enable (ADR-0017 / D11 §3)', () => {
       tmp = undefined;
     });
 
-    test('sink-progress-log launcher executes and writes a log line', async () => {
+    test('sink-progress-log entry executes via node and writes a log line', async () => {
       tmp = await mkdtemp(join(tmpdir(), 'halo-enable-'));
       const cap = captureStreams();
       const code = await enableCommand(parseArgs(['sink-progress-log'], {}), io(cap, tmp), {
@@ -127,16 +144,25 @@ describe('halo enable (ADR-0017 / D11 §3)', () => {
       });
       expect(code).toBe(EXIT.OK);
 
-      const scriptPath = join(tmp, '.halo', 'ports', 'sink.d', 'sink-progress-log', 'log.sh');
+      const manifestPath = join(
+        tmp,
+        '.halo',
+        'ports',
+        'sink.d',
+        'sink-progress-log',
+        'plugin.json',
+      );
+      const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
       const logsDir = join(tmp, 'logs');
       const input = JSON.stringify({ task_id: 't-1', workdir: tmp, summary: 'hello from test' });
-      const result = spawnSync('sh', [scriptPath], {
+
+      execFileSync(process.execPath, [manifest.entry], {
         input,
         encoding: 'utf8',
         env: { ...process.env, HALO_LOGS_DIR: logsDir },
       });
 
-      expect(result.status).toBe(0);
+      const { readdir } = await import('node:fs/promises');
       const files = await readdir(logsDir).catch(() => []);
       expect(files.length).toBeGreaterThan(0);
       const entries = await readFile(join(logsDir, files[0]!), 'utf8');

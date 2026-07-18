@@ -1,5 +1,5 @@
 // D10 §4 (portability) の doctor 拡張: c10 必須コマンド / c11 スケジューラバックエンド /
-// c8 の WSL 条件化。probe 未注入時の後方互換 (従来 9 検査) も assert する。
+// c8 の WSL 条件化。probe 未注入時の後方互換 (従来 9 検査+c12) も assert する。
 import { expect, test, describe } from 'vitest';
 import {
   checkRequiredCommands,
@@ -12,6 +12,7 @@ import {
   type SchedulerBackend,
 } from './doctor.js';
 import type { CliFs } from './fs.js';
+import { memFs } from './testkit.js';
 
 function stubFs(): CliFs {
   return {
@@ -128,11 +129,65 @@ describe('c8 配置制約の WSL 条件化', () => {
 });
 
 describe('後方互換: probe 未注入', () => {
-  test('c10/c11 は実行されず 9 検査のまま、c8 は無条件実行', async () => {
+  test('c10/c11 は実行されず c1-c9/c12 の10検査のまま、c8 は無条件実行', async () => {
     const report = await runAll(baseProbes({ onExt4: async () => false }));
-    expect(report.checks).toHaveLength(9);
+    expect(report.checks).toHaveLength(10);
     expect(findCheck(report.checks, 10)).toBeUndefined();
     expect(findCheck(report.checks, 11)).toBeUndefined();
     expect(findCheck(report.checks, 8)?.status).toBe('WARN');
+  });
+});
+
+describe('c12 旧ランチャー設定の検出 (entry契約化 Task 6 Step D)', () => {
+  test('.sh ファイルが ports 配下に残存 → WARN', async () => {
+    const fs = memFs({
+      files: {
+        '/repo/.harness.yml': 'kinds:\n',
+        '/repo/.halo/ports/sink.d/sink-progress-log/plugin.json': JSON.stringify({
+          entry: '/dist/sink-progress-log/main.js',
+        }),
+        '/repo/.halo/ports/sink.d/sink-progress-log/log.sh': '#!/bin/sh\n',
+      },
+    });
+    const report = await runAll(baseProbes({ fs }));
+    const c12 = findCheck(report.checks, 12);
+    expect(c12?.status).toBe('WARN');
+    expect(c12?.detail).toContain('sink-progress-log');
+  });
+
+  test('plugin.json が .sh を参照している → WARN', async () => {
+    const fs = memFs({
+      files: {
+        '/repo/.harness.yml': 'kinds:\n',
+        '/repo/.halo/ports/trigger.d/trigger-polling/plugin.json': JSON.stringify({
+          entry: '/dist/trigger-polling/fire.js',
+          aux: { fire: '/dist/trigger-polling/fire.sh' },
+        }),
+      },
+    });
+    const report = await runAll(baseProbes({ fs }));
+    const c12 = findCheck(report.checks, 12);
+    expect(c12?.status).toBe('WARN');
+    expect(c12?.detail).toContain('trigger-polling');
+  });
+
+  test('.sh 参照が一切ない → OK', async () => {
+    const fs = memFs({
+      files: {
+        '/repo/.harness.yml': 'kinds:\n',
+        '/repo/.halo/ports/sink.d/sink-progress-log/plugin.json': JSON.stringify({
+          entry: '/dist/sink-progress-log/main.js',
+        }),
+      },
+    });
+    const report = await runAll(baseProbes({ fs }));
+    const c12 = findCheck(report.checks, 12);
+    expect(c12?.status).toBe('OK');
+  });
+
+  test('ports 配下が空/未作成 → OK (FAIL にしない)', async () => {
+    const report = await runAll(baseProbes());
+    const c12 = findCheck(report.checks, 12);
+    expect(c12?.status).toBe('OK');
   });
 });

@@ -9,6 +9,7 @@ import {
   checkLockStop,
   checkPlacement,
   checkDisk,
+  checkLegacyLauncherConfig,
   aggregate,
 } from './doctor.js';
 
@@ -58,5 +59,11 @@ describe('doctor pure checks (T28)', () => {
     expect(warnOnly.warn).toBe(1);
     const withFail = aggregate([checkClaude(false, false)]);
     expect(withFail.exitCode).toBe(1);
+  });
+  test('legacy launcher config: 残存なし → OK / 残存あり → WARN', () => {
+    expect(checkLegacyLauncherConfig([]).status).toBe('OK');
+    const warn = checkLegacyLauncherConfig(['trigger.d/trigger-polling (.sh ファイル残存)']);
+    expect(warn.status).toBe('WARN');
+    expect(warn.detail).toContain('trigger-polling');
   });
 });

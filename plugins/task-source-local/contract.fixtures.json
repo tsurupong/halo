@@ -1,0 +1,30 @@
+{
+  "description": "task-source-local documented I/O (D8 §3.2). Inputs are op-discriminated; op=next output carries task_id (string|null).",
+  "cases": [
+    { "schema": "task-source.in.json", "expect": "valid", "data": { "op": "next" } },
+    {
+      "schema": "task-source.in.json",
+      "expect": "valid",
+      "data": { "op": "complete", "task_id": "42", "pr_url": "https://github.com/o/r/pull/7" }
+    },
+    {
+      "schema": "task-source.in.json",
+      "expect": "valid",
+      "data": { "op": "fail", "task_id": "42", "reason": "gate failed", "retry_count": 2 }
+    },
+    {
+      "schema": "task-source.in.json",
+      "expect": "invalid",
+      "data": { "op": "complete", "task_id": "42" }
+    },
+    { "schema": "task-source.in.json", "expect": "invalid", "data": { "op": "bogus" } },
+    {
+      "schema": "task-source.out.json",
+      "expect": "valid",
+      "data": { "task_id": "42", "title": "Fix bug", "body": "do it", "kind": "code" }
+    },
+    { "schema": "task-source.out.json", "expect": "valid", "data": { "task_id": null } },
+    { "schema": "task-source.out.json", "expect": "invalid", "data": { "title": "no id" } },
+    { "schema": "task-source.out.json", "expect": "invalid", "data": { "task_id": 42 } }
+  ]
+}

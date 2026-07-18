@@ -1,10 +1,11 @@
 // run 統合テスト (JOB1, D8 §2/§4): `runCommand` を *実 RunHooks* (createRunHooks) で
-// 駆動し、実プロセス境界 (runPort + bash フィクスチャ) と実 git worktree を通す。
-// executor/task-source は bash フィクスチャなのでネットワーク/claude 課金ゼロ。
-// 対象リポジトリは tmpdir 上の実 git リポジトリで、.halo/ports/*.d に見本相当の
+// 駆動し、実プロセス境界 (runPort + node フィクスチャ) と実 git worktree を通す。
+// executor/task-source は node フィクスチャ (entry 契約, ADR-0018: `spawn(process.execPath,
+// [entryPath])` で直接起動されるため exec-bit/shebang は不要) なのでネットワーク/claude
+// 課金ゼロ。対象リポジトリは tmpdir 上の実 git リポジトリで、.halo/ports/*.d に見本相当の
 // 極小プラグインを配置する (discovery が monorepo/plugins ではなく対象リポジトリから
 // 解決することの回帰も兼ねる, D2 §6)。
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -28,16 +29,11 @@ function git(...args: string[]): void {
   execFileSync('git', args, { cwd: repo, stdio: 'ignore' });
 }
 
-function writeExec(path: string, body: string): void {
-  writeFileSync(path, body, 'utf8');
-  chmodSync(path, 0o755);
-}
-
-/** plugin.json + 実行スクリプトを 1 プラグイン分書き出す。 */
+/** plugin.json + JS エントリを 1 プラグイン分書き出す (entry 契約, ADR-0018)。 */
 function plugin(
   port: string,
   dirName: string,
-  exec: string,
+  entry: string,
   body: string,
   env: Record<string, string> = {},
 ): void {
@@ -47,56 +43,83 @@ function plugin(
     name: `@fx/${dirName}`,
     version: '1.0.0',
     port,
-    exec: `./${exec}`,
+    entry: `./${entry}`,
     ...(Object.keys(env).length ? { env } : {}),
   };
   writeFileSync(join(dir, 'plugin.json'), JSON.stringify(manifest, null, 2));
-  writeExec(join(dir, exec), body);
+  writeFileSync(join(dir, entry), body, 'utf8');
 }
 
-const TASK_SOURCE = `#!/usr/bin/env bash
-set -uo pipefail
-in="$(cat)"
-op="$(printf '%s' "$in" | jq -r '.op // "next"')"
-mark="$STATE_DIR/served"
-if [[ "$op" == "next" ]]; then
-  if [[ -f "$mark" ]]; then jq -cn '{task_id:null}'; else touch "$mark"; jq -cn '{task_id:"7",title:"t",body:"do it"}'; fi
-else
-  echo "$op" >> "$STATE_DIR/ops"; jq -cn '{}'
-fi
-exit 0
+// CommonJS フィクスチャ (拡張子 .cjs で package.json の type とは無関係に CJS として実行)。
+// stdin の単一 JSON オブジェクトを読み、stdout に単一 JSON オブジェクトを書いて exit する
+// (D1 §3 の実行契約)。
+
+const TASK_SOURCE = `
+const fs = require('fs');
+const input = JSON.parse(fs.readFileSync(0, 'utf8') || '{}');
+const op = input.op || 'next';
+const stateDir = process.env.STATE_DIR;
+const mark = stateDir + '/served';
+if (op === 'next') {
+  if (fs.existsSync(mark)) {
+    process.stdout.write(JSON.stringify({ task_id: null }));
+  } else {
+    fs.writeFileSync(mark, '');
+    process.stdout.write(JSON.stringify({ task_id: '7', title: 't', body: 'do it' }));
+  }
+} else {
+  fs.appendFileSync(stateDir + '/ops', op + '\\n');
+  process.stdout.write(JSON.stringify({}));
+}
+process.exit(0);
 `;
 
 // 毎回タスクを払い出す task-source (retry/複数周回の検証用)。
-const TASK_SOURCE_REPEAT = `#!/usr/bin/env bash
-set -uo pipefail
-in="$(cat)"; op="$(printf '%s' "$in" | jq -r '.op // "next"')"
-if [[ "$op" == "next" ]]; then jq -cn '{task_id:"9",title:"t",body:"b"}'; else jq -cn '{}'; fi
-exit 0
+const TASK_SOURCE_REPEAT = `
+const fs = require('fs');
+const input = JSON.parse(fs.readFileSync(0, 'utf8') || '{}');
+const op = input.op || 'next';
+if (op === 'next') {
+  process.stdout.write(JSON.stringify({ task_id: '9', title: 't', body: 'b' }));
+} else {
+  process.stdout.write(JSON.stringify({}));
+}
+process.exit(0);
 `;
 
-const EXEC_DONE = `#!/usr/bin/env bash
-cat >/dev/null; jq -cn '{status:"done",summary:"ok"}'; exit 0
+const EXEC_DONE = `
+require('fs').readFileSync(0);
+process.stdout.write(JSON.stringify({ status: 'done', summary: 'ok' }));
+process.exit(0);
 `;
 
-const GATE_PASS = `#!/usr/bin/env bash
-cat >/dev/null; exit 0
+const GATE_PASS = `
+require('fs').readFileSync(0);
+process.exit(0);
 `;
 
 // worktree の HEAD を記録する executor (使い捨て worktree が常に最新 HEAD 起点である回帰用)。
-const EXEC_RECORD_HEAD = `#!/usr/bin/env bash
-in="$(cat)"
-wd="$(printf '%s' "$in" | jq -r '.workdir')"
-git -C "$wd" rev-parse HEAD > "$STATE_DIR/wt-head"
-jq -cn '{status:"done",summary:"ok"}'; exit 0
+const EXEC_RECORD_HEAD = `
+const fs = require('fs');
+const { execFileSync } = require('child_process');
+const input = JSON.parse(fs.readFileSync(0, 'utf8') || '{}');
+const head = execFileSync('git', ['-C', input.workdir, 'rev-parse', 'HEAD']).toString();
+fs.writeFileSync(process.env.STATE_DIR + '/wt-head', head);
+process.stdout.write(JSON.stringify({ status: 'done', summary: 'ok' }));
+process.exit(0);
 `;
 
-const GATE_FAIL = `#!/usr/bin/env bash
-cat >/dev/null; jq -cn '{reason:"boom",gate:"g"}'; exit 2
+const GATE_FAIL = `
+require('fs').readFileSync(0);
+process.stdout.write(JSON.stringify({ reason: 'boom', gate: 'g' }));
+process.exit(2);
 `;
 
-const ONFAIL = `#!/usr/bin/env bash
-in="$(cat)"; printf '%s\\n' "$in" >> "$STATE_DIR/onfail"; exit 0
+const ONFAIL = `
+const fs = require('fs');
+const input = fs.readFileSync(0, 'utf8');
+fs.appendFileSync(process.env.STATE_DIR + '/onfail', input + '\\n');
+process.exit(0);
 `;
 
 function io(cap: ReturnType<typeof captureStreams>) {
@@ -144,9 +167,9 @@ afterEach(() => {
 describe('run integration (real hooks, zero billing)', () => {
   it('happy path: task → execute → gate pass → NO_TASK → exit 0, iter log written', async () => {
     const state = join(repo, '.halo', 'state');
-    plugin('task-source', 'ts', 'index.sh', TASK_SOURCE, { STATE_DIR: state });
-    plugin('executor', 'ex', 'run.sh', EXEC_DONE);
-    plugin('gate', '10-g', 'run.sh', GATE_PASS);
+    plugin('task-source', 'ts', 'index.cjs', TASK_SOURCE, { STATE_DIR: state });
+    plugin('executor', 'ex', 'run.cjs', EXEC_DONE);
+    plugin('gate', '10-g', 'run.cjs', GATE_PASS);
     git('add', '-A');
     git('commit', '-q', '-m', 'fixtures');
 
@@ -162,9 +185,9 @@ describe('run integration (real hooks, zero billing)', () => {
 
   it('stale feature branch: 既存 feature/issue-<id> があっても worktree は最新 HEAD 起点', async () => {
     const state = join(repo, '.halo', 'state');
-    plugin('task-source', 'ts', 'index.sh', TASK_SOURCE, { STATE_DIR: state });
-    plugin('executor', 'ex', 'run.sh', EXEC_RECORD_HEAD, { STATE_DIR: state });
-    plugin('gate', '10-g', 'run.sh', GATE_PASS);
+    plugin('task-source', 'ts', 'index.cjs', TASK_SOURCE, { STATE_DIR: state });
+    plugin('executor', 'ex', 'run.cjs', EXEC_RECORD_HEAD, { STATE_DIR: state });
+    plugin('gate', '10-g', 'run.cjs', GATE_PASS);
     git('add', '-A');
     git('commit', '-q', '-m', 'fixtures');
     // 古い時点を指す残骸ブランチを作ってから main を進める。
@@ -184,20 +207,22 @@ describe('run integration (real hooks, zero billing)', () => {
   it('HALO_WORKTREE_DIR: worktree の置き場を環境変数で上書きできる', async () => {
     const state = join(repo, '.halo', 'state');
     const wtBase = mkdtempSync(join(tmpdir(), 'halo-wt-base-'));
-    plugin('task-source', 'ts', 'index.sh', TASK_SOURCE, { STATE_DIR: state });
+    plugin('task-source', 'ts', 'index.cjs', TASK_SOURCE, { STATE_DIR: state });
     // workdir の実パスを記録する executor (置き場の検証用)。
     plugin(
       'executor',
       'ex',
-      'run.sh',
-      `#!/usr/bin/env bash
-in="$(cat)"
-printf '%s' "$in" | jq -r '.workdir' > "$STATE_DIR/wt-path"
-jq -cn '{status:"done",summary:"ok"}'; exit 0
+      'run.cjs',
+      `
+const fs = require('fs');
+const input = JSON.parse(fs.readFileSync(0, 'utf8') || '{}');
+fs.writeFileSync(process.env.STATE_DIR + '/wt-path', input.workdir);
+process.stdout.write(JSON.stringify({ status: 'done', summary: 'ok' }));
+process.exit(0);
 `,
       { STATE_DIR: state },
     );
-    plugin('gate', '10-g', 'run.sh', GATE_PASS);
+    plugin('gate', '10-g', 'run.cjs', GATE_PASS);
     git('add', '-A');
     git('commit', '-q', '-m', 'fixtures');
 
@@ -215,9 +240,9 @@ jq -cn '{status:"done",summary:"ok"}'; exit 0
 
   it('preflight STOP: .halo/STOP present → exit 0, loop never runs (no logs)', async () => {
     const state = join(repo, '.halo', 'state');
-    plugin('task-source', 'ts', 'index.sh', TASK_SOURCE, { STATE_DIR: state });
-    plugin('executor', 'ex', 'run.sh', EXEC_DONE);
-    plugin('gate', '10-g', 'run.sh', GATE_PASS);
+    plugin('task-source', 'ts', 'index.cjs', TASK_SOURCE, { STATE_DIR: state });
+    plugin('executor', 'ex', 'run.cjs', EXEC_DONE);
+    plugin('gate', '10-g', 'run.cjs', GATE_PASS);
     git('add', '-A');
     git('commit', '-q', '-m', 'fixtures');
     writeFileSync(join(repo, '.halo', 'STOP'), 'stop\n');
@@ -231,10 +256,10 @@ jq -cn '{status:"done",summary:"ok"}'; exit 0
 
   it('gate fail path: executor done + gate fail → on-fail runs, outcome failed, exit 0', async () => {
     const state = join(repo, '.halo', 'state');
-    plugin('task-source', 'ts', 'index.sh', TASK_SOURCE_REPEAT, { STATE_DIR: state });
-    plugin('executor', 'ex', 'run.sh', EXEC_DONE);
-    plugin('gate', '10-g', 'run.sh', GATE_FAIL);
-    plugin('on-fail', 'rec', 'run.sh', ONFAIL, { STATE_DIR: state });
+    plugin('task-source', 'ts', 'index.cjs', TASK_SOURCE_REPEAT, { STATE_DIR: state });
+    plugin('executor', 'ex', 'run.cjs', EXEC_DONE);
+    plugin('gate', '10-g', 'run.cjs', GATE_FAIL);
+    plugin('on-fail', 'rec', 'run.cjs', ONFAIL, { STATE_DIR: state });
     git('add', '-A');
     git('commit', '-q', '-m', 'fixtures');
 

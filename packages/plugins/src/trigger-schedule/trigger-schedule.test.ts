@@ -20,9 +20,12 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pluginRoot = join(__dirname, '..', '..', '..', '..', 'plugins', 'trigger-schedule');
 const distDir = join(__dirname, '..', '..', 'dist', 'trigger-schedule');
-const firePath = join(pluginRoot, 'fire');
-const installPath = join(pluginRoot, 'install.sh');
-const uninstallPath = join(pluginRoot, 'uninstall.sh');
+const installJsPath = join(distDir, 'install.js');
+const uninstallPath = join(distDir, 'uninstall.js');
+// plugin.json aux.fire は "../../packages/plugins/dist/trigger-schedule/fire.js" なので、
+// pluginRoot(plugins/trigger-schedule の絶対パス)から解決すると distDir/fire.js の絶対パスになる。
+const resolvedFireJs = join(distDir, 'fire.js');
+const firePath = resolvedFireJs;
 
 for (const f of ['fire.js', 'install.js', 'uninstall.js']) {
   const p = join(distDir, f);
@@ -82,6 +85,17 @@ function runIsolated(
   return { code: r.status ?? 1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 
+/** install.js を HALO_PLUGIN_DIR=pluginRoot 付きで隔離環境実行する(install.sh 経由をやめた分の薄いラッパー)。 */
+function runInstallIsolated(
+  args: string[],
+  opts: { stubDir: string; coreBin: string; home: string; procFile?: string; extraEnv?: Record<string, string> },
+): { code: number; stdout: string; stderr: string } {
+  return runIsolated(process.execPath, [installJsPath, ...args], {
+    ...opts,
+    extraEnv: { ...opts.extraEnv, HALO_PLUGIN_DIR: pluginRoot },
+  });
+}
+
 describe('trigger-schedule: fire (contract)', () => {
   it('fire invokes .bin/halo run nightly --cwd $HALO_HOME', () => {
     const root = mkTmp();
@@ -94,7 +108,7 @@ describe('trigger-schedule: fire (contract)', () => {
     );
     chmodSync(join(haloHome, 'node_modules', '.bin', 'halo'), 0o755);
 
-    const r = spawnSync(firePath, ['nightly'], {
+    const r = spawnSync(process.execPath, [firePath, 'nightly'], {
       env: { ...process.env, HALO_HOME: haloHome },
       encoding: 'utf8',
     });
@@ -104,13 +118,13 @@ describe('trigger-schedule: fire (contract)', () => {
 
   it('fire without profile -> nonzero', () => {
     const root = mkTmp();
-    const r = spawnSync(firePath, [], { env: { ...process.env, HALO_HOME: root }, encoding: 'utf8' });
+    const r = spawnSync(process.execPath, [firePath], { env: { ...process.env, HALO_HOME: root }, encoding: 'utf8' });
     expect(r.status).not.toBe(0);
   });
 
   it('fire without halo bin -> nonzero', () => {
     const root = mkTmp();
-    const r = spawnSync(firePath, ['nightly'], {
+    const r = spawnSync(process.execPath, [firePath, 'nightly'], {
       env: { ...process.env, HALO_HOME: join(root, 'missing') },
       encoding: 'utf8',
     });
@@ -128,7 +142,7 @@ describe('trigger-schedule: fire (contract)', () => {
     );
     chmodSync(join(haloHome, 'node_modules', '.bin', 'halo'), 0o755);
 
-    let r = spawnSync(firePath, ['nightly'], {
+    let r = spawnSync(process.execPath, [firePath, 'nightly'], {
       env: { ...process.env, HALO_HOME: haloHome },
       encoding: 'utf8',
     });
@@ -136,7 +150,7 @@ describe('trigger-schedule: fire (contract)', () => {
     const path1 = readFileSync(pathFile, 'utf8').trim();
     expect(`:${path1}:`).toContain(`:${process.env['HOME']}/.local/bin:`);
 
-    r = spawnSync(firePath, ['nightly'], {
+    r = spawnSync(process.execPath, [firePath, 'nightly'], {
       env: { ...process.env, HALO_HOME: haloHome, HALO_PATH_EXTRA: '/opt/x' },
       encoding: 'utf8',
     });
@@ -164,13 +178,14 @@ describe('trigger-schedule: install/uninstall (schtasks, HALO_SCHEDULER 強制�
     );
     chmodSync(join(stubDir, 'schtasks.exe'), 0o755);
 
-    const r1 = spawnSync(installPath, ['nightly'], {
+    const r1 = spawnSync(process.execPath, [installJsPath, 'nightly'], {
       env: {
         ...process.env,
         PATH: `${stubDir}:${process.env['PATH'] ?? ''}`,
         HALO_SCHEDULER: 'schtasks',
         HALO_HOME: haloHome,
         HALO_BIN: installBin,
+        HALO_PLUGIN_DIR: pluginRoot,
       },
       encoding: 'utf8',
     });
@@ -180,7 +195,7 @@ describe('trigger-schedule: install/uninstall (schtasks, HALO_SCHEDULER 強制�
     expect(createArgs).toContain(`HALO_HOME="${haloHome}"`);
     expect(createArgs).toContain(`HALO_BIN="${installBin}"`);
 
-    const r2 = spawnSync(uninstallPath, ['nightly'], {
+    const r2 = spawnSync(process.execPath, [uninstallPath, 'nightly'], {
       env: { ...process.env, PATH: `${stubDir}:${process.env['PATH'] ?? ''}`, HALO_SCHEDULER: 'schtasks' },
       encoding: 'utf8',
     });
@@ -206,7 +221,7 @@ describe('trigger-schedule: install/uninstall backends (自動検出, 隔離環�
     );
     chmodSync(join(wslBin, 'schtasks.exe'), 0o755);
 
-    const r = runIsolated(installPath, ['nightly'], {
+    const r = runInstallIsolated(['nightly'], {
       stubDir: wslBin,
       coreBin,
       home,
@@ -218,7 +233,7 @@ describe('trigger-schedule: install/uninstall backends (自動検出, 隔離環�
     expect(create).toContain('/TN HALO_nightly');
     expect(create).toContain('/SC DAILY /ST 03:00');
     expect(create).toContain(
-      `/TR wsl.exe -e bash -lc 'HALO_HOME="/opt/halo" HALO_BIN="/opt/halo/bin/halo" ${firePath} nightly'`,
+      `/TR wsl.exe -e bash -lc 'HALO_HOME="/opt/halo" HALO_BIN="/opt/halo/bin/halo" ${JSON.stringify(process.execPath)} ${JSON.stringify(resolvedFireJs)} nightly'`,
     );
   });
 
@@ -238,7 +253,7 @@ describe('trigger-schedule: install/uninstall backends (自動検出, 隔離環�
     );
     chmodSync(join(wslBin, 'schtasks.exe'), 0o755);
 
-    const r = runIsolated(installPath, ['nightly'], {
+    const r = runInstallIsolated(['nightly'], {
       stubDir: wslBin,
       coreBin,
       home,
@@ -261,7 +276,7 @@ describe('trigger-schedule: install/uninstall backends (自動検出, 隔離環�
     writeFileSync(join(wslBin, 'schtasks.exe'), '#!/usr/bin/env bash\nexit 0\n');
     chmodSync(join(wslBin, 'schtasks.exe'), 0o755);
 
-    const r = runIsolated(installPath, ['bad name'], { stubDir: wslBin, coreBin, home, procFile: procWsl });
+    const r = runInstallIsolated(['bad name'], { stubDir: wslBin, coreBin, home, procFile: procWsl });
     expect(r.code).not.toBe(0);
   });
 
@@ -283,7 +298,7 @@ describe('trigger-schedule: install/uninstall backends (自動検出, 隔離環�
     chmodSync(join(cronBin, 'crontab'), 0o755);
     writeFileSync(state, '0 0 * * * /keep/me\n');
 
-    const r = runIsolated(installPath, ['nightly'], {
+    const r = runInstallIsolated(['nightly'], {
       stubDir: cronBin,
       coreBin,
       home,
@@ -293,7 +308,7 @@ describe('trigger-schedule: install/uninstall backends (自動検出, 隔離環�
     expect(r.code).toBe(0);
     const stateContent = readFileSync(state, 'utf8');
     expect(stateContent).toContain(
-      `00 03 * * * HALO_BIN="/opt/halo/bin/halo" ${firePath} nightly # HALO:schedule:nightly`,
+      `00 03 * * * HALO_BIN="/opt/halo/bin/halo" ${JSON.stringify(process.execPath)} ${JSON.stringify(resolvedFireJs)} nightly # HALO:schedule:nightly`,
     );
     expect(stateContent).toContain('/keep/me');
   });
@@ -316,7 +331,7 @@ describe('trigger-schedule: install/uninstall backends (自動検出, 隔離環�
     chmodSync(join(cronBin, 'crontab'), 0o755);
     writeFileSync(state, `0 0 * * * /keep/me\n00 03 * * * ${firePath} nightly # HALO:schedule:nightly\n`);
 
-    const r = runIsolated(uninstallPath, ['nightly'], { stubDir: cronBin, coreBin, home, procFile: procPlain });
+    const r = runIsolated(process.execPath, [uninstallPath, 'nightly'], { stubDir: cronBin, coreBin, home, procFile: procPlain });
     expect(r.code).toBe(0);
     const stateContent = readFileSync(state, 'utf8');
     expect(stateContent).toContain('/keep/me');
@@ -339,7 +354,7 @@ describe('trigger-schedule: install/uninstall backends (自動検出, 隔離環�
     );
     chmodSync(join(wslBin, 'schtasks.exe'), 0o755);
 
-    const r = runIsolated(uninstallPath, ['nightly'], { stubDir: wslBin, coreBin, home, procFile: procWsl });
+    const r = runIsolated(process.execPath, [uninstallPath, 'nightly'], { stubDir: wslBin, coreBin, home, procFile: procWsl });
     expect(r.code).toBe(0);
     expect(readFileSync(log, 'utf8')).toContain('/Delete /TN HALO_nightly /F');
   });

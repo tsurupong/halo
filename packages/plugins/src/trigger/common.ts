@@ -47,10 +47,10 @@ export function fire(trigger: string, profile: string): never {
   process.exit(r.error !== undefined ? 1 : (r.status ?? 1));
 }
 
-/** install 実処理。冪等(再実行は削除→再登録)。firePath はランチャー(plugins/<dir>/fire)。 */
-export function install(trigger: string, profile: string, spec: string, firePath: string): never {
+/** install 実処理。冪等(再実行は削除→再登録)。fireArgv は fire を起動する argv(node + スクリプトパス)。 */
+export function install(trigger: string, profile: string, spec: string, fireArgv: readonly string[]): never {
   try {
-    schedulerInstall(trigger, profile, spec, firePath);
+    schedulerInstall(trigger, profile, spec, fireArgv);
   } catch (e) {
     diag(e instanceof Error ? e.message : String(e));
     process.exit(1);

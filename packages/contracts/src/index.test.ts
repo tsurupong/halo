@@ -34,7 +34,7 @@ test('valid port I/O values type-check', () => {
     name: '@halo/plugin-sink-progress-log',
     version: '1.0.0',
     port: 'sink',
-    exec: './20-progress-log.sh',
+    entry: './20-progress-log.js',
     minAutonomy: 'L1',
   };
 
@@ -55,7 +55,7 @@ test('missing required fields are compile errors', () => {
   // @ts-expect-error status is required on ExecutorOut
   const missingStatus: ExecutorOut = { summary: 'no status' };
   // @ts-expect-error port is required on PluginManifest
-  const missingPort: PluginManifest = { name: 'x', version: '1.0.0', exec: './x.sh' };
+  const missingPort: PluginManifest = { name: 'x', version: '1.0.0', entry: './x.js' };
   // @ts-expect-error 'L4' is not a valid MinAutonomy
   const badAutonomy: PluginManifest['minAutonomy'] = 'L4';
 
@@ -72,5 +72,5 @@ test('generated schemas are reachable via the JSON subpath export', () => {
 
   // The plugin.json schema carries D1's port enum (8 values) and semver pattern.
   expect(pluginSchema.properties.port.enum).toHaveLength(8);
-  expect(pluginSchema.required).toContain('exec');
+  expect(pluginSchema.required).toContain('entry');
 });

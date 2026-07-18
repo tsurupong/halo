@@ -6,12 +6,10 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const pluginDir = join(__dirname, '..', '..', '..', '..', 'plugins', 'sink-git-commit');
-const launcherPath = join(pluginDir, 'commit.sh');
 const distPath = join(__dirname, '..', '..', 'dist', 'sink-git-commit', 'main.js');
 
 function runLauncher(input: string, env: Record<string, string> = {}) {
-  const r = spawnSync('sh', [launcherPath], { input, env: { ...process.env, ...env }, encoding: 'utf8' });
+  const r = spawnSync(process.execPath, [distPath], { input, env: { ...process.env, ...env }, encoding: 'utf8' });
   return { code: r.status ?? 1, stdout: r.stdout, stderr: r.stderr };
 }
 

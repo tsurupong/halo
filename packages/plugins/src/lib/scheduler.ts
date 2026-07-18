@@ -18,6 +18,9 @@ export type Spec = { kind: 'interval'; minutes: number } | { kind: 'daily'; hh: 
 
 const NAME_RE = /^[A-Za-z0-9._-]+$/;
 const SAFE_PATH_RE = /^[A-Za-z0-9/._-]+$/;
+// fireArgv 用: 絶対パスの空白区切り(例: POSIX の `/opt/my app/...`)を許容するため空白のみ追加。
+// `\` と `:` は許容していないため Windows ネイティブパス(`C:\Program Files\...`)は非対応。
+const SAFE_ARGV_RE = /^[A-Za-z0-9/._ -]+$/;
 
 function isWsl(): boolean {
   const procPath = process.env['HALO_PROC_VERSION'] ?? '/proc/version';
@@ -96,11 +99,25 @@ function validateName(value: string, label: string): void {
   if (!NAME_RE.test(value)) throw new Error(`scheduler: invalid ${label}: ${value}`);
 }
 
-export function schedulerInstall(trigger: string, profile: string, specStr: string, firePath: string): void {
+// fireArgv の各要素を安全文字集合で検証する。JSON.stringify は $ やバッククォートを
+// エスケープしないため、bash の二重引用符コンテキストで再解釈されうる(コマンド注入対策)。
+function validateFireArgv(fireArgv: readonly string[]): void {
+  for (const a of fireArgv) {
+    if (!SAFE_ARGV_RE.test(a)) throw new Error(`scheduler: invalid fireArgv element: ${a}`);
+  }
+}
+
+export function schedulerInstall(
+  trigger: string,
+  profile: string,
+  specStr: string,
+  fireArgv: readonly string[],
+): void {
   validateName(trigger, 'trigger');
   validateName(profile, 'profile');
+  validateFireArgv(fireArgv);
   const spec = parseSpec(specStr);
-  const cmd = `${buildEnvAssign()}${firePath} ${profile}`;
+  const cmd = `${buildEnvAssign()}${fireArgv.map((a) => JSON.stringify(a)).join(' ')} ${profile}`;
 
   const backend = schedulerDetect();
   switch (backend) {

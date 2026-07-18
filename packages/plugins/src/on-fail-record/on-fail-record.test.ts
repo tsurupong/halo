@@ -6,12 +6,10 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const pluginDir = join(__dirname, '..', '..', '..', '..', 'plugins', 'on-fail-record');
-const launcherPath = join(pluginDir, 'record.sh');
 const distPath = join(__dirname, '..', '..', 'dist', 'on-fail-record', 'main.js');
 
 function runLauncher(input: string, env: Record<string, string> = {}) {
-  const r = spawnSync('sh', [launcherPath], { input, env: { ...process.env, ...env }, encoding: 'utf8' });
+  const r = spawnSync(process.execPath, [distPath], { input, env: { ...process.env, ...env }, encoding: 'utf8' });
   return { code: r.status ?? 1, stdout: r.stdout, stderr: r.stderr };
 }
 
@@ -114,7 +112,7 @@ describe('on-fail-record 正常系', () => {
     });
     const env = { ...process.env };
     delete env['HALO_CATALOG'];
-    const r = spawnSync('sh', [launcherPath], { input, cwd: repo, encoding: 'utf8', env });
+    const r = spawnSync(process.execPath, [distPath], { input, cwd: repo, encoding: 'utf8', env });
     const status = r.status ?? 1;
     expect(status).toBe(0);
     expect(r.stdout).toBe('');

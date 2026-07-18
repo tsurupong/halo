@@ -65,7 +65,7 @@ describe('doctor (T28)', () => {
     expect(code).toBe(EXIT.OK);
     const out = JSON.parse(cap.out());
     expect(out.summary.fail).toBe(0);
-    expect(out.checks).toHaveLength(9);
+    expect(out.checks).toHaveLength(10);
   });
 
   test('missing gh binary → FAIL → exit 1', async () => {
