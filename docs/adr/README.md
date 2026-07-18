@@ -3,6 +3,8 @@
 A record of HALO's design decisions. Source: HALO Requirements Specification v1.5 (2026-07-09); ADR-0009 onward is v1.8 (2026-07-11).
 The current top-level authority is Requirements Specification v1.8, and ADR-0009 onward takes v1.8 as its starting point (0008 and earlier record decisions as of v1.5).
 
+**Revision convention**: ADRs are immutable once accepted — a change of decision is recorded as a **new ADR**, never by rewriting the old one. The old ADR's Status is updated to `superseded by ADR-NNNN` (decision replaced) or `accepted (amended by ADR-NNNN)` (decision unchanged, scope/enforcement extended), with a link in both directions. Status values: `proposed` / `accepted` / `accepted (amended by NNNN)` / `superseded by NNNN` / `deprecated`.
+
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
 | [0001](0001-ports-and-adapters-unified-contract.md) | Adoption of Ports & Adapters Structure and a Unified Contract | accepted | 2026-07-09 |
@@ -22,3 +24,7 @@ The current top-level authority is Requirements Specification v1.8, and ADR-0009
 | [0015](0015-posix-portability-and-scheduler-abstraction.md) | POSIX Portability Target and Scheduler Backend Abstraction | proposed | 2026-07-16 |
 | [0016](0016-local-commit-sink-and-completion.md) | Local Commit Sink and Generalized Completion Reference | proposed | 2026-07-16 |
 | [0017](0017-typescript-plugins.md) | Rewrite Shell Plugins in TypeScript | proposed | 2026-07-16 |
+| [0018](0018-entry-contract.md) | Plugin Entry Contract (Drop sh Launchers) | accepted | 2026-07-18 |
+| [0019](0019-pre-execution-permission-enforcement.md) | Pre-Execution Permission Enforcement (settings injection by executor) | proposed | 2026-07-18 |
+| [0020](0020-executor-permission-profile.md) | Executor Permission Profile (allowedTools + dontAsk) | proposed | 2026-07-18 |
+| [0021](0021-cost-based-stop-condition.md) | Cost-Based Stop Condition (max budget USD) | proposed | 2026-07-18 |

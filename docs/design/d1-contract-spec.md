@@ -224,6 +224,7 @@ Prompt execution. The initial adapter is `claude -p` (headless).
 | `budget` | `object` | ✓ | Execution budget |
 | `budget.max_turns` | `integer` | ✓ | Turn limit (initial value 40) |
 | `budget.timeout_sec` | `integer` | ✓ | Timeout in seconds (initial value 900) |
+| `budget.max_budget_usd` | `number` | | Optional dollar ceiling for this execution (ADR-0021). Passed through to the runtime's budget stop when supported; executors that cannot enforce it may ignore it (the core's accumulated-cost check remains the backstop). Added in contract MINOR (§7) |
 
 **Output (stdout)**
 
@@ -252,10 +253,13 @@ Prompt execution. The initial adapter is `claude -p` (headless).
 claude -p "$PROMPT" \
   --mcp-config "$HALO_ROOT/.halo/mcp.json" \
   --strict-mcp-config \
+  --settings "$HALO_SETTINGS_FILE" \
+  --permission-mode dontAsk \
   --allowedTools "mcp__codegraph__*,mcp__knowledge__*,Edit,Write,Bash" \
   --max-turns 40
 ```
 
+- `--settings "$HALO_SETTINGS_FILE"` injects the HALO-managed deny set at spawn (D4 §2.4, ADR-0019); `--permission-mode dontAsk` makes the allowlist a hard boundary — unlisted tools are denied outright instead of prompting (ADR-0020). Both are executor-adapter behavior; the settings-file *content* is governed by D4, outside this contract.
 - `--strict-mcp-config` reads only the harness-managed `mcp.json` (fixing the visible tool scope = reproducibility and security).
 - `mcp.json` is generated at startup by merging `ports/mcp.d/*.json` (§1.10).
 - The worktree lifecycle (add → runtime detection → setup → execution → remove) follows requirements §4.2③, matching bubblewrap's write permission to `workdir`.
@@ -277,7 +281,8 @@ claude -p "$PROMPT" \
       "required": ["max_turns", "timeout_sec"],
       "properties": {
         "max_turns": { "type": "integer", "default": 40 },
-        "timeout_sec": { "type": "integer", "default": 900 }
+        "timeout_sec": { "type": "integer", "default": 900 },
+        "max_budget_usd": { "type": "number" }
       }
     }
   }
@@ -784,7 +789,7 @@ The contract defined by this document is HALO's public API and is **managed most
 | Change kind | semver | Example |
 |---|---|---|
 | **Breaking change = major** | MAJOR | Adding/removing/renaming a required field, changing a type, changing the exit-code convention, removing a port, incompatible changes to the kg:// format |
-| Backward-compatible feature addition = minor | MINOR | Adding an optional field, adding a new port or new status value (within a range that does not break existing behavior), adding an optional field to `plugin.json` |
+| Backward-compatible feature addition = minor | MINOR | Adding an optional field (e.g., `executor.in.budget.max_budget_usd`, ADR-0021), adding a new port or new status value (within a range that does not break existing behavior), adding an optional field to `plugin.json` |
 | Backward-compatible fix = patch | PATCH | Fixing descriptions/examples, clarifying Schema wording (without changing meaning) |
 
 - The contract version is kept in sync with the package version of `packages/contracts` and mapped to this document's version.

@@ -1,7 +1,7 @@
 # ADR-0004: Prohibition of Self-Modification (Safety Invariant)
 
 **Date**: 2026-07-09
-**Status**: accepted
+**Status**: accepted (amended by [ADR-0019](0019-pre-execution-permission-enforcement.md) — decision unchanged; enforcement extended to two layers: ex-ante settings deny + ex-post loop-audit gate)
 **Deciders**: Owner (recorded from HALO Requirements Specification v1.8 §11.1)
 
 ## Context
@@ -34,7 +34,7 @@ In the loop-audit gate, treat agent modifications to CLAUDE.md / PROMPT.md / .ha
 - Harness-improvement tasks always require human review and are excluded from full automation (an intentional constraint).
 
 ### Risks
-- Inspection gaps in loop-audit itself → the git-diff-based static checks are documented **enumeratively**, keeping the inspection targets under definitive management. **The authoritative list of checks is [D4 Security Design §4](../design/d4-security-design.md)** (this ADR is a summary of it). As of v1.8, the authoritative set is **7 items**:
+- Inspection gaps in loop-audit itself → mitigated in two ways: **(a)** since [ADR-0019](0019-pre-execution-permission-enforcement.md), the gate is the *second* layer — the same protected set is denied ex-ante via settings injection at executor spawn, so loop-audit only needs to catch what slipped past deny; **(b)** the git-diff-based static checks are documented **enumeratively**, keeping the inspection targets under definitive management. **The authoritative list of checks is [D4 Security Design §4](../design/d4-security-design.md)** (this ADR is a summary of it). As of v1.8, the authoritative set is **7 items**:
   1. **spec_refs exist** — query whether the task's `spec_refs` (`kg://` node IDs) actually exist in the knowledge graph (read-only). Note: the v1.5 `test -f specs/*.md` is abolished.
   2. **Test files unchanged** (deletion/modification fails; new additions permitted).
   3. **Zero new escape hatches** (new additions of `eslint-disable` / `as any` / `@ts-ignore` prohibited).

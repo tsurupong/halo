@@ -75,7 +75,7 @@ Note: #5 is duplicated between PreToolUse (preemptive, blocking before tool exec
 ### 2.3 settings.json deny / sandbox Settings
 
 ```jsonc
-// Distributed from .halo/ and placed as the target repository's .claude/settings.json (excerpt. D4 §2.2)
+// HALO-managed deny set, injected at executor spawn via --settings (excerpt. D4 §2.2; injection flow D4 §2.4, ADR-0019. Not statically placed in the target repo)
 {
   "permissions": {
     "deny": [
@@ -154,6 +154,7 @@ Expands Requirements Document §6.2 into implementation parameters. Among the nu
 | iteration timeout | 900 seconds (15 min) | executor budget / `timeout` | Cut off resource occupation / stalling of one task |
 | `MAX_ITER` | 20 (provisional) | profiles/*.env | Upper limit of iterations per startup |
 | Daily budget | Computed from the day's logs/ actuals; if exceeded, terminate immediately even if started | `halo run` lightweight preflight | Primary control preventing "running all day before you notice" under high-frequency startups |
+| `MAX_BUDGET_USD` | No default (mechanism only, per ADR-0012; profiles supply the number) | profiles/*.env → `executor.in.budget.max_budget_usd` + preflight accumulation | Dollar ceiling (ADR-0021): the core accumulates `iter_N.json` `executor.cost.usd_estimate`; accumulated cost ≥ ceiling is treated as over-budget in PreflightLight (normal non-execution, exit 0). Also passed to the runtime's budget stop where supported |
 | Profile TIMEOUT | Profile-dependent | profiles/*.env | Cut off an entire startup (consistent with the polling interval) |
 | STUCK detection | Stop on STUCK marker output | executor output analysis | Early stopping of infinite loops |
 | retry limit | 3 times (provisional) | task-source / on-fail | `needs-human` after 3 fails on the same Issue (infinite-loop blocking, Requirements Document §4.2) |
@@ -301,5 +302,5 @@ Expands Requirements Document §6.2 into implementation parameters. Among the nu
 2. Blocking dangerous operations (list of 9 PreToolUse hook items + duplication of settings.json deny and sandbox.denyRead)
 3. GitHub authentication (fine-grained PAT permission scope detail table, no full repo scope, no merge permission)
 4. Prompt injection mitigation (do not trust Issue body, minimize tools, safe outputs)
-5. Cost control parameter table (max-turns/timeout/MAX_ITER/daily budget/ccusage/switch at monthly $200)
+5. Cost control parameter table (max-turns/timeout/MAX_ITER/daily budget/MAX_BUDGET_USD/ccusage/switch at monthly $200)
 6. JSON schema of `logs/iter_N.json` (effect-measurement fields such as gate pass rate) + STOP file and observation-tool-independence policy
