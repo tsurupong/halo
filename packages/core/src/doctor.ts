@@ -1,4 +1,4 @@
-// doctor の 9 検査 (D3 §4)。判定は各検査を純粋関数化し、環境事実 (バイナリ存在・
+// doctor の 10 検査 (D3 §4)。判定は各検査を純粋関数化し、環境事実 (バイナリ存在・
 // 認証・パス整合) は Probes シームから注入してテスト可能にする。CLI は集計結果を
 // 終了コードへ写像するだけ (D3 §5.2: FAIL あり=1 / WARN のみ=0)。
 import type { CliFs } from './fs.js';
@@ -272,7 +272,7 @@ function join(...parts: string[]): string {
     .join('/');
 }
 
-/** §4 の全 9 検査を実行して集計する。事実収集は Probes に委譲、判定は上の純粋関数。 */
+/** §4 の全 10 検査を実行して集計する。事実収集は Probes に委譲、判定は上の純粋関数。 */
 export async function runAll(probes: DoctorProbes): Promise<DoctorReport> {
   const { haloDir, cwd, fs, command } = probes;
 

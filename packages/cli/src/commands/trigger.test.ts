@@ -22,7 +22,11 @@ function fsWithAdapter() {
         version: '1.0.0',
         port: 'trigger',
         entry: '/repo/.halo/ports/trigger.d/schedule/fire',
-        aux: { fire: '/repo/.halo/ports/trigger.d/schedule/fire' },
+        aux: {
+          fire: '/repo/.halo/ports/trigger.d/schedule/fire',
+          install: '/repo/.halo/ports/trigger.d/schedule/install.js',
+          uninstall: '/repo/.halo/ports/trigger.d/schedule/uninstall.js',
+        },
       }),
     },
   });
@@ -39,9 +43,12 @@ describe('trigger install/uninstall/list (T27)', () => {
     });
     expect(code).toBe(EXIT.OK);
     expect(spawn).toHaveBeenCalledWith(
-      '/repo/.halo/ports/trigger.d/schedule/install.sh',
-      ['nightly'],
-      expect.objectContaining({ HALO_BIN: '/repo/node_modules/.bin/halo' }),
+      process.execPath,
+      ['/repo/.halo/ports/trigger.d/schedule/install.js', 'nightly'],
+      expect.objectContaining({
+        HALO_BIN: '/repo/node_modules/.bin/halo',
+        HALO_PLUGIN_DIR: '/repo/.halo/ports/trigger.d/schedule',
+      }),
     );
   });
 
@@ -87,8 +94,8 @@ describe('trigger install/uninstall/list (T27)', () => {
     });
     expect(code).toBe(EXIT.OK);
     expect(spawn).toHaveBeenCalledWith(
-      '/repo/.halo/ports/trigger.d/schedule/uninstall.sh',
-      [],
+      process.execPath,
+      ['/repo/.halo/ports/trigger.d/schedule/uninstall.js'],
       expect.anything(),
     );
   });

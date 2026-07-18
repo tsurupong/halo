@@ -7,11 +7,13 @@ import type { CommandProbe, DoctorProbes } from './core-ext/doctor.js';
 import type { RunHooks } from './commands/run.js';
 import { createRunHooks } from './core-ext/run-wiring.js';
 
-/** アダプタ script (POSIX sh ランチャー, ADR-0017) を実行する SpawnAdapter (D1 §1.9)。 */
+/** entry 契約 (plugin.json の aux.install/aux.uninstall 等, ADR-0017) を実行する SpawnAdapter。
+ * `script` には呼び出しコマンド (通常 `process.execPath`)、`args` にはスクリプトの絶対パス以下の
+ * argv が core 側 (triggers.ts) で組み立てられて渡る (D1 §1.9)。 */
 export function nodeSpawnAdapter(): SpawnAdapter {
   return (script, args, env) =>
     new Promise<SpawnResult>((resolve, reject) => {
-      const child = nodeSpawn('sh', [script, ...args], {
+      const child = nodeSpawn(script, [...args], {
         env: { ...process.env, ...env },
         stdio: ['ignore', 'pipe', 'pipe'],
       });

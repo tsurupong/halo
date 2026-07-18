@@ -18,7 +18,8 @@ export type Spec = { kind: 'interval'; minutes: number } | { kind: 'daily'; hh: 
 
 const NAME_RE = /^[A-Za-z0-9._-]+$/;
 const SAFE_PATH_RE = /^[A-Za-z0-9/._-]+$/;
-// fireArgv 用: 絶対パスの空白区切り(例: `C:\Program Files\...`)を許容するため空白のみ追加。
+// fireArgv 用: 絶対パスの空白区切り(例: POSIX の `/opt/my app/...`)を許容するため空白のみ追加。
+// `\` と `:` は許容していないため Windows ネイティブパス(`C:\Program Files\...`)は非対応。
 const SAFE_ARGV_RE = /^[A-Za-z0-9/._ -]+$/;
 
 function isWsl(): boolean {

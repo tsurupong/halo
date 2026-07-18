@@ -1,6 +1,7 @@
 // trigger install/uninstall/list の委譲先 (D3 §2.3, §6, D1 §1.9)。core に trigger 用の
-// discovery ヘルパが無いため CLI 側に置く薄い層: アダプタ script の解決と spawn、
-// `.bin/halo` 絶対パス解決 (fire 埋め込み用), 有効トリガー一覧。実処理は bash アダプタ。
+// discovery ヘルパが無いため CLI 側に置く薄い層: entry契約 (plugin.json の aux.install/
+// aux.uninstall) の解決と node での spawn、`.bin/halo` 絶対パス解決 (fire 埋め込み用),
+// 有効トリガー一覧。実処理は各アダプタの TS 実装 (ADR-0017)。
 import { isAbsolute } from 'node:path';
 import type { CliFs } from './fs.js';
 
@@ -53,38 +54,71 @@ export interface AdapterOutcome {
   stderr: string;
 }
 
-async function requireAdapterScript(
-  ctx: TriggerContext,
-  name: string,
-  script: string,
-): Promise<string> {
-  const dir = triggerDir(ctx.haloDir, name);
-  if (!(await ctx.fs.isDirectory(dir))) {
-    throw new Error(`unknown trigger adapter: ${name}`);
-  }
-  return join(dir, script);
+interface ResolvedAux {
+  /** aux[key] の絶対パス (adapterDir 起点で解決済み)。 */
+  scriptPath: string;
+  /** アダプタディレクトリの絶対パス (HALO_PLUGIN_DIR 用)。 */
+  adapterDir: string;
 }
 
-/** `install.sh <profile>` を呼び OS スケジューラへ登録。fire 用に HALO_BIN を注入 (D3 §2.3)。 */
+/**
+ * adapter ディレクトリの plugin.json を読み、`aux[key]` の絶対パスを解決する (entry契約, D11 §3)。
+ * plugin.json 不在/壊れている、または `aux[key]` が無い場合は fail-fast する。
+ */
+async function resolveAux(ctx: TriggerContext, name: string, key: string): Promise<ResolvedAux> {
+  const adapterDir = triggerDir(ctx.haloDir, name);
+  if (!(await ctx.fs.isDirectory(adapterDir))) {
+    throw new Error(`unknown trigger adapter: ${name}`);
+  }
+  let manifest: { aux?: Record<string, string> };
+  try {
+    const raw = await ctx.fs.readFile(join(adapterDir, 'plugin.json'));
+    manifest = JSON.parse(raw) as { aux?: Record<string, string> };
+  } catch {
+    throw new Error(`trigger adapter '${name}': plugin.json not found or invalid`);
+  }
+  const rawScript = manifest.aux?.[key];
+  if (rawScript === undefined) {
+    throw new Error(`trigger adapter '${name}': plugin.json に aux.${key} がありません`);
+  }
+  const scriptPath = isAbsolute(rawScript)
+    ? rawScript
+    : join(adapterDir, rawScript.replace(/^\.\//, ''));
+  return { scriptPath, adapterDir };
+}
+
+/** `install.js <profile>` を node で起動し OS スケジューラへ登録。fire 用に HALO_BIN を注入 (D3 §2.3)。 */
 export async function installTrigger(
   ctx: TriggerContext,
   name: string,
   profile: string,
 ): Promise<AdapterOutcome> {
-  const script = await requireAdapterScript(ctx, name, 'install.sh');
-  const env = { HALO_BIN: resolveBinPath(ctx.cwd), HALO_HOME: ctx.cwd };
-  return ctx.spawn(script, [profile], env);
+  const { scriptPath, adapterDir } = await resolveAux(ctx, name, 'install');
+  const env = {
+    HALO_BIN: resolveBinPath(ctx.cwd),
+    HALO_HOME: ctx.cwd,
+    HALO_PLUGIN_DIR: adapterDir,
+  };
+  return ctx.spawn(process.execPath, [scriptPath, profile], env);
 }
 
-/** `uninstall.sh [<profile>]` を呼び登録解除。未登録でも冪等成功はアダプタ側の責務。 */
+/** `uninstall.js [<profile>]` を node で起動し登録解除。未登録でも冪等成功はアダプタ側の責務。 */
 export async function uninstallTrigger(
   ctx: TriggerContext,
   name: string,
   profile: string | undefined,
 ): Promise<AdapterOutcome> {
-  const script = await requireAdapterScript(ctx, name, 'uninstall.sh');
-  const env = { HALO_BIN: resolveBinPath(ctx.cwd), HALO_HOME: ctx.cwd };
-  return ctx.spawn(script, profile !== undefined ? [profile] : [], env);
+  const { scriptPath, adapterDir } = await resolveAux(ctx, name, 'uninstall');
+  const env = {
+    HALO_BIN: resolveBinPath(ctx.cwd),
+    HALO_HOME: ctx.cwd,
+    HALO_PLUGIN_DIR: adapterDir,
+  };
+  return ctx.spawn(
+    process.execPath,
+    profile !== undefined ? [scriptPath, profile] : [scriptPath],
+    env,
+  );
 }
 
 export interface TriggerEntry {
