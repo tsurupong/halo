@@ -14,4 +14,11 @@ export default tseslint.config(
       sourceType: 'module',
     },
   },
+  {
+    // テストモック等の素の Node ESM (.mjs) は Node ランタイムのグローバルを持つ
+    files: ['**/*.mjs'],
+    languageOptions: {
+      globals: { process: 'readonly', console: 'readonly', Buffer: 'readonly' },
+    },
+  },
 );
