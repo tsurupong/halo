@@ -1,6 +1,6 @@
 # D11: TypeScript Plugin Migration Design
 
-Related: ADR-0017 (decision), ADR-0001 (unified contract), ADR-0015 (scheduler abstraction), D1 (contract spec), D5 (plugin dev guide), D8 (test strategy), D10 (portability — workstreams 4/6 superseded here).
+Related: ADR-0017 (decision), ADR-0018 (entry contract — §3 revised by it, sh launcher removed), ADR-0001 (unified contract), ADR-0015 (scheduler abstraction), D1 (contract spec), D5 (plugin dev guide), D8 (test strategy), D10 (portability — workstreams 4/6 superseded here).
 
 ## 1. Scope and goals
 
@@ -56,45 +56,61 @@ Input/output types come from `@tsurupong/halo-contracts`; each plugin validates 
 stdin against the distributed JSON schema with ajv (the same schemas the contract
 tests use), turning today's implicit `jq` parsing into typed, validated I/O.
 
-## 3. Launcher contract
+## 3. Entry contract (revised by ADR-0018 — supersedes the original launcher design)
 
-`plugins/<name>/` keeps its directory as the discovery unit:
+`plugins/<name>/` keeps its directory as the discovery unit, but there is no
+launcher file — `plugin.json` points straight at the built JS module:
 
 ```
 plugins/sink-git-commit/
-  plugin.json             # unchanged shape; exec: "run.sh" (or existing name)
-  run.sh                  # thin launcher, POSIX sh only:
+  plugin.json             # entry: "../../packages/plugins/dist/sink-git-commit/main.js"
   contract.fixtures.json  # unchanged
 ```
 
-Launcher body (identical for every plugin, only the entry name differs):
+`plugin.json` carries a mandatory `entry` (path to the plugin's JS module,
+resolved relative to the plugin directory unless absolute) and an optional
+`aux` map of named secondary entry points (e.g. trigger plugins expose
+`{ "install": "...install.js", "uninstall": "...uninstall.js" }` instead of a
+`fire|install|uninstall` launcher subcommand). `exec` no longer exists in the
+manifest; `packages/core/src/discovery.ts` (`validatePluginManifest`) rejects
+any manifest that still has it.
 
-```sh
-#!/bin/sh
-exec node "$(dirname "$0")/../../packages/plugins/dist/sink-git-commit/main.js" "$@"
+The core spawns the entry directly — no shell, no launcher, no exec bit:
+
+```ts
+// packages/cli/src/core-ext/run-wiring.ts (makeRunner)
+runPort({
+  execPath: process.execPath,       // the running core's own `node`
+  args: [plugin.entryPath],
+  env: { ...baseEnv(), ...plugin.manifest.env, HALO_PLUGIN_DIR: plugin.dir },
+  ...
+});
 ```
 
 Rules:
 
-- POSIX `sh` builtins only (`dirname` is required by POSIX). No bash, no `jq`.
-- `"$@"` forwards subcommand args (trigger plugins use `fire|install|uninstall`).
-- The npm-published layout resolves `dist/` relative to the installed package;
-  the launcher path is the only per-layout difference and is generated at build
-  time if the relative path ever needs to differ (not expected in Phase 2).
-- Exit code, stdin, stdout pass through `exec` untouched, so `runPort`'s
-  timeout/SIGTERM/SIGKILL and `classifyExit` behavior are unchanged.
-- The relative `../../packages/plugins/dist/...` path above only holds inside
-  this monorepo checkout; it breaks once a launcher is copied elsewhere (e.g.
-  into a user repo's `.halo/ports/<port>.d/`) or installed via npm, where
-  `@tsurupong/halo-plugins` lands at an arbitrary `node_modules` depth. `halo
-  enable <plugin-name>` (`packages/cli/src/commands/enable.ts`) resolves that:
-  it resolves the installed `@tsurupong/halo-plugins` package at runtime
-  (`require.resolve('@tsurupong/halo-plugins/package.json')`) and writes a
-  launcher whose `exec node "<absolute path>"` line is already fully resolved,
-  plus a `plugin.json` copy, into `.halo/ports/<port>.d/<name>/`. The bundled
-  plugin metadata lives in `packages/plugins/src/registry.ts`
-  (`BUNDLED_PLUGINS`), one entry per enable-able plugin, kept in sync with the
-  `plugins/**/plugin.json` files by a drift test.
+- No POSIX `sh` dependency, no exec bit, no shebang — `runPort` (unchanged,
+  ADR-0017) spawns `process.execPath` with `entryPath` as its sole argv, exactly
+  as it spawns any other subprocess. This is what makes native Windows
+  execution possible (ADR-0018 §Consequences).
+- `HALO_PLUGIN_DIR` (the plugin's own directory) is injected into the child env
+  so a plugin can resolve its own `aux` files or bundled assets without relying
+  on argv[0]/cwd conventions.
+- Exit code, stdin, stdout pass through untouched — `runPort`'s
+  timeout/SIGTERM/SIGKILL and `classifyExit` behavior are unchanged from
+  ADR-0017.
+- The relative `../../packages/plugins/dist/...` `entry` path above only holds
+  inside this monorepo checkout; it breaks once a `plugin.json` is copied
+  elsewhere (e.g. into a user repo's `.halo/ports/<port>.d/`) or installed via
+  npm, where `@tsurupong/halo-plugins` lands at an arbitrary `node_modules`
+  depth. `halo enable <plugin-name>` (`packages/cli/src/commands/enable.ts`)
+  resolves that: it resolves the installed `@tsurupong/halo-plugins` package at
+  runtime (`require.resolve('@tsurupong/halo-plugins/package.json')`) and
+  writes a `plugin.json` whose `entry`/`aux` are already absolute paths into
+  `dist/` — no launcher file, no `chmod`. The bundled plugin metadata lives in
+  `packages/plugins/src/registry.ts` (`BUNDLED_PLUGINS`), one entry per
+  enable-able plugin, kept in sync with the `plugins/**/plugin.json` files by a
+  drift test.
 
 ## 4. Per-plugin migration notes
 

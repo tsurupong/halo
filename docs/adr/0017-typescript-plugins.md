@@ -4,6 +4,10 @@
 **Status**: proposed
 **Deciders**: Owner
 
+**Superseded-by**: ADR-0018 (Decision item 3, "Thin POSIX `sh` launchers", is
+superseded — plugins are spawned directly via `entry`/`aux`, no `sh` launcher.
+Decision items 1–2, 4–6 are unaffected.)
+
 ## Context
 
 All bundled plugins are Bash scripts (12 plugins + `plugins/lib`, ~800 lines total)
