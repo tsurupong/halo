@@ -69,6 +69,7 @@ It takes the form `halo <command> [subcommand] [args] [flags]`. The first level 
 | `--autonomy <L1\|L2\|L3>` | enum | The profile's `AUTONOMY` | Override the autonomy (reflected in the sink filter, D1 §1.5) |
 | `--timeout <duration>` | duration | The profile's `TIMEOUT` | Override the execution time limit of one launch (e.g., `3h` / `90m`) |
 | `--daily-budget <n>` | integer | The profile's `DAILY_MAX_ITERATIONS` | Override the daily iteration budget |
+| `--max-budget-usd <n>` | number | The profile's `MAX_BUDGET_USD` (unset = no dollar ceiling) | Override the dollar ceiling per launch (ADR-0021). Accumulated `cost.usd_estimate` ≥ this value is over-budget = normal non-execution (exit 0) |
 | `--dry-run` | bool | false | A verification run equivalent to `--max-iter 1`. For checking connectivity of the launch path (the dry-run of Requirements §9 Phase 1). The sink follows autonomy, but for the initial launch test a low autonomy is also specified as an operation |
 | `--profiles-dir <path>` | path | `.halo/profiles` | Override the profile search directory (for testing) |
 
@@ -225,7 +226,7 @@ The CLI's exit code represents "whether execution is possible and the kind of fa
 
 | Exit code | Meaning | Applicable example |
 |---|---|---|
-| `0` | Normal completion | Loop normal completion, `--help`/`--version`, `stop`/`resume` success, doctor all OK, a legitimate immediate termination by preflight (STOP detection / flock concurrent-launch avoidance / zero ready / budget exceeded are "normal non-execution" as exit 0) |
+| `0` | Normal completion | Loop normal completion, `--help`/`--version`, `stop`/`resume` success, doctor all OK, a legitimate immediate termination by preflight (STOP detection / flock concurrent-launch avoidance / zero ready / budget exceeded — iteration count or dollar ceiling (ADR-0021) — are "normal non-execution" as exit 0) |
 | `1` | Runtime error | An unrecoverable error within the loop, heavy preflight failure (git contamination / disk shortage / credit exhaustion), trigger install registration failure, doctor has a FAIL item |
 | `2` | Reserved (equivalent to plugin fail) | Normally not returned by the CLI itself. Not used for CLI anomalies to avoid collision with D1's plugin fail convention |
 | `3` | Configuration/usage error | Invalid arguments, unknown profile/trigger name, `.harness.yml` absent/invalid, unknown command |
@@ -281,7 +282,7 @@ The correspondence of the core (the 9 modules of D2) functions each command call
 
 | Command | Purpose | Representative flags | Main exit codes |
 |---|---|---|---|
-| `halo run <profile>` | One launch (the actual processing triggers invoke) | `--max-iter` `--autonomy` `--timeout` `--daily-budget` `--dry-run` | 0 (normal/immediate termination) / 1 (anomaly) / 3 (configuration) |
+| `halo run <profile>` | One launch (the actual processing triggers invoke) | `--max-iter` `--autonomy` `--timeout` `--daily-budget` `--max-budget-usd` `--dry-run` | 0 (normal/immediate termination) / 1 (anomaly) / 3 (configuration) |
 | `halo project init` | Place the repository under HALO management | `--kind` `--runtime` `--force` `--no-gitignore` | 0 / 3 |
 | `halo trigger install <name> <profile>` | Register a trigger | — | 0 / 1 / 3 |
 | `halo trigger uninstall <name> [<profile>]` | Unregister a trigger (idempotent) | — | 0 / 3 |

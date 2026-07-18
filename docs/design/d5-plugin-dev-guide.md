@@ -248,11 +248,12 @@ Input is the `op=next` output of task-source itself (task information). Output i
 
 The core that runs the prompt. The initial adapter is `claude -p` (headless).
 
-- Input: `{ prompt, workdir, budget:{ max_turns, timeout_sec } }`.
+- Input: `{ prompt, workdir, budget:{ max_turns, timeout_sec, max_budget_usd? } }`. `max_budget_usd` is optional (ADR-0021): pass it to the runtime's budget stop if supported, otherwise ignore it — the core's accumulated-cost preflight check is the backstop either way.
 - Output: `{ status, summary, cost? }`. If **`status` is anything other than `done`** (`stuck`/`timeout`), the core drops into the failure path (on-fail).
 - If the agent gets stuck, return `status: "stuck"`. There is also a convention where the agent itself emits a `STUCK:` marker in the artifacts (D1 §5) — the executor adapter detects it and converts it to `status: "stuck"`.
 - Abnormal termination of the process itself is treated as an error. As a principle, the decision is made via the stdout `status`.
 - Use `--strict-mcp-config` to have it read only the harness-managed `mcp.json` (reproducibility and security).
+- Permission profile (Claude Code adapters): inject the HALO-managed deny set via `--settings "$HALO_SETTINGS_FILE"` (D4 §2.4, ADR-0019) and launch with `--permission-mode dontAsk` + a minimal `--allowedTools` list (ADR-0020) — listed tools run unprompted, everything else is denied outright. Never default to `bypassPermissions`; it approves all tools and voids the allowlist boundary.
 
 ### 2.4 ④ gate
 
