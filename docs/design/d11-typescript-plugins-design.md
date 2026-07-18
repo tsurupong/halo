@@ -150,7 +150,7 @@ because the launcher swap is per-plugin.
 ## 7. Acceptance criteria
 
 - All contract fixtures pass through the Vitest driver for all 11 plugins.
-- `halo doctor` and an e2e dry run (`scripts/e2e-dry-run.sh`) pass with only
+- `halo doctor` and an e2e dry run (`scripts/e2e-dry-run.mjs`) pass with only
   `node`, `git`, `pnpm` (+ `gh`/`claude`/scheduler binaries where those ports are
   used) on PATH — no `jq`, no bash.
 - CI green on the single ubuntu runner with the shell-test step removed.

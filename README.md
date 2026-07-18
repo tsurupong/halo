@@ -60,7 +60,7 @@ plugins/       # Port implementations (<port-kind>-<impl-name>)
 docs/
   adr/         # Architecture decision records (ADR-0001–0012)
   design/      # Design docs D1–D9 (contract spec, core design, CLI spec, test strategy, etc.)
-scripts/       # e2e-dry-run.sh (manual E2E smoke test, incurs LLM billing)
+scripts/       # e2e-dry-run.mjs (manual E2E smoke test, incurs LLM billing)
 ```
 
 Each plugin consists of `plugin.json` (name / version / port / exec), shell scripts, `test.contract.sh`, and `contract.fixtures.json`; contract tests verify that its I/O conforms to the JSON Schemas.
@@ -75,7 +75,7 @@ pnpm lint           # eslint
 pnpm format         # prettier --check
 ```
 
-CI (`.github/workflows/ci.yml`) runs three jobs — unit, loop-regression, and contract — none of which call an LLM: zero billing, fully deterministic. The loop regression tests replace the executor with a fixture that returns fixed JSON. The E2E smoke test that actually calls Claude is run manually via `scripts/e2e-dry-run.sh`.
+CI (`.github/workflows/ci.yml`) runs three jobs — unit, loop-regression, and contract — none of which call an LLM: zero billing, fully deterministic. The loop regression tests replace the executor with a fixture that returns fixed JSON. The E2E smoke test that actually calls Claude is run manually via `scripts/e2e-dry-run.mjs`.
 
 ## Design documents
 

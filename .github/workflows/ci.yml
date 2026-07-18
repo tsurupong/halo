@@ -1,7 +1,7 @@
 # HALO CI (T38, D8 §5). PR-required jobs are the three zero-billing / deterministic
 # layers (D8 §5.1 table): unit, loop-regression, contract (+ schema-drift, §3.3).
 # The paid, non-deterministic E2E dry-run (D8 §4/§5.1 row 4) is NOT run here — it is
-# a manual / pre-release smoke (see test/e2e/smoke.md, scripts/e2e-dry-run.sh).
+# a manual / pre-release smoke (see test/e2e/smoke.md, scripts/e2e-dry-run.mjs).
 name: CI
 
 on:
