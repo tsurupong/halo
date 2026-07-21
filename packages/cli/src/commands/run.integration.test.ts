@@ -147,6 +147,11 @@ beforeEach(() => {
   git('config', 'user.name', 't');
   git('config', 'commit.gpgsign', 'false');
   mkdirSync(join(repo, '.halo', 'state'), { recursive: true });
+  // .harness.yml は必須 (要件 §4.2③): 無いと preflight.heavy が NO_HARNESS_YML で止まる。
+  writeFileSync(
+    join(repo, '.harness.yml'),
+    'kinds:\n  code:\n    runtimes: [node-pnpm]\n    prompt: .halo/prompts/code.md\n',
+  );
   writeProfile();
 });
 

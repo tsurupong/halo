@@ -306,6 +306,12 @@ export interface LoopDeps {
   /** Changed files for the gate input; defaults to `[]`. */
   changedFiles?: (workdir: string) => string[] | Promise<string[]>;
   /**
+   * Worktree base commit for the gate input `base` (C2 / D4 §4.2): the HEAD captured
+   * at worktree creation, so diff-based gates audit committed + uncommitted changes.
+   * Omitted or returning '' → gates fall back to `git diff HEAD`.
+   */
+  gateBase?: (workdir: string) => string | Promise<string>;
+  /**
    * Result reference passed to task-source `op=complete` — a PR URL, or any
    * non-empty delivery reference such as `commit:<sha>` (ADR-0016). Empty string
    * means "nothing delivered": complete is not fired and the task stays queued.
@@ -461,8 +467,9 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
       if (exec.outcome !== 'done') {
         // Executor failure path (stuck / timeout / crash) → OnFail, retry (D2 §2.3).
         // Retain the reason so the next attempt's prompt sees why it failed (L2).
+        const execReason = executorFailureReason(exec);
         state.retryCount += 1;
-        state.lastFailure = { reason: executorFailureReason(exec) };
+        state.lastFailure = { reason: execReason };
         taskStates.set(taskId, state);
         await markPhase(taskId, 'on_fail');
         await runBestEffort(
@@ -470,6 +477,9 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
           deps.runner,
           onFailInput(taskId, exec.outcome, state.retryCount, { gate: exec.outcome, workdir }),
         );
+        // Report to the task-source so it records the failure and escalates at its
+        // threshold (needs-human) — the infinite-loop breaker (要件 §4.2① / §11.2).
+        await runTaskSourceFail(deps, taskId, execReason, state.retryCount);
         const outcome = outcomeForFailure(state.retryCount, retryThreshold);
         await record(deps, {
           iter,
@@ -494,7 +504,13 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
       // Gate (logical-AND strategy, D2 §3.6).
       await markPhase(taskId, 'gate');
       const changed = deps.changedFiles ? await deps.changedFiles(workdir) : [];
-      const gateIn: GateIn = { task_id: taskId, workdir, changed_files: changed };
+      const gateBase = deps.gateBase ? await deps.gateBase(workdir) : '';
+      const gateIn: GateIn = {
+        task_id: taskId,
+        workdir,
+        changed_files: changed,
+        ...(gateBase !== '' ? { base: gateBase } : {}),
+      };
       const gateRuns = await runGates(deps, gateIn);
       const verdict = evaluateGates(gateRuns);
 
@@ -539,6 +555,9 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
           deps.runner,
           onFailInput(taskId, failure.reason, state.retryCount, { gate: failure.gate, workdir }),
         );
+        // Report to the task-source so it records the failure and escalates at its
+        // threshold (needs-human) — the infinite-loop breaker (要件 §4.2① / §11.2).
+        await runTaskSourceFail(deps, taskId, failure.reason, state.retryCount);
         const outcome = outcomeForFailure(state.retryCount, retryThreshold);
         await record(deps, {
           iter,
@@ -600,6 +619,31 @@ async function runTaskSourceComplete(deps: LoopDeps, taskId: string, prUrl: stri
     await deps.runner(ts, { op: 'complete', task_id: taskId, pr_url: prUrl }, portOpts(ts));
   } catch {
     /* best-effort: a complete failure must not crash the loop */
+  }
+}
+
+/**
+ * Report a failed iteration to the task-source (D1 §1.1 op=fail). The task-source is
+ * the source of truth for retry accounting: it records the failure and, on reaching
+ * its threshold, escalates (needs-human label / needs-human/ move) to break the
+ * infinite-retry loop (要件 §4.2① / §11.2). Best-effort — a fail-report failure must
+ * not crash the loop, mirroring runTaskSourceComplete.
+ */
+async function runTaskSourceFail(
+  deps: LoopDeps,
+  taskId: string,
+  reason: string,
+  retryCount: number,
+): Promise<void> {
+  const ts = deps.ports.taskSource[0]!;
+  try {
+    await deps.runner(
+      ts,
+      { op: 'fail', task_id: taskId, reason, retry_count: retryCount },
+      portOpts(ts),
+    );
+  } catch {
+    /* best-effort: a fail-report failure must not crash the loop */
   }
 }
 

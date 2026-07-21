@@ -19,7 +19,11 @@ import type { BudgetStatus } from './budget.js';
 export type LightStopReason = 'STOP' | 'LOCK_HELD' | 'BUDGET_EXCEEDED';
 
 /** A heavy-stage abort — the loop skips executing this task and records it (D2 §4.2). */
-export type HeavyStopReason = 'DIRTY_WORKTREE' | 'DISK_LOW' | 'GRAPH_STALE';
+export type HeavyStopReason =
+  | 'DIRTY_WORKTREE'
+  | 'DISK_LOW'
+  | 'GRAPH_STALE'
+  | 'NO_HARNESS_YML';
 
 export type LightDecision = { proceed: true } | { proceed: false; reason: LightStopReason };
 export type HeavyDecision = { proceed: true } | { proceed: false; reason: HeavyStopReason };
@@ -61,6 +65,13 @@ export async function runPreflightLight(checks: LightChecks): Promise<LightDecis
  * omitted optional check is treated as passing.
  */
 export interface HeavyChecks {
+  /**
+   * `.harness.yml` (the required per-repo kind declaration, 要件 §4.2③ / D2 §7) is
+   * present. Its absence is a repository misconfiguration, not a transient fault —
+   * the run must not execute tasks against a repo that never declared its kinds.
+   * Omitted → treated as passing (Phase 1 / tests that predate the wiring).
+   */
+  harnessYmlPresent?: Check;
   /** git working tree has no uncommitted changes (D2 §4.2 #1). */
   worktreeClean: Check;
   /** Free disk above the worktree threshold (D2 §4.2 #2; Phase 1 stub → omit). */
@@ -75,6 +86,8 @@ export interface HeavyChecks {
  * records it and moves on (§4.2 中止(記録)). Optional checks default to pass.
  */
 export async function runPreflightHeavy(checks: HeavyChecks): Promise<HeavyDecision> {
+  if (checks.harnessYmlPresent && !(await checks.harnessYmlPresent()))
+    return { proceed: false, reason: 'NO_HARNESS_YML' };
   if (!(await checks.worktreeClean())) return { proceed: false, reason: 'DIRTY_WORKTREE' };
   if (checks.diskOk && !(await checks.diskOk())) return { proceed: false, reason: 'DISK_LOW' };
   if (checks.graphFresh && !(await checks.graphFresh())) return { proceed: false, reason: 'GRAPH_STALE' };

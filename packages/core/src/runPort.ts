@@ -38,7 +38,9 @@ export interface RunPortInput {
   cwd?: string;
   /**
    * Environment for the child. When omitted the child inherits nothing beyond the
-   * spawn default; the loop supplies a scrubbed env (要件 §6.1 PATH re-homing).
+   * spawn default. The wiring (run-wiring `makeRunner`) supplies this: the executor
+   * port gets a minimized env (secrets dropped, PATH scrubbed of `/mnt/c` — S1 /
+   * 要件 §6.1); other ports get the full base env.
    */
   env?: Record<string, string>;
   /** The single JSON value written to the child's stdin, then EOF. */

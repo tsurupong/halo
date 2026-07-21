@@ -344,15 +344,18 @@ describe('runLoop', () => {
       gate: [plug('gate', 'g')],
       onFail: [plug('on-fail', 'rec')],
     });
+    // Count only `op=next` calls: complete/fail are side-effect-only and (like
+    // task-source-local) do not consume the queue, so the same task re-appears on
+    // the next `next` until it is completed.
+    let tsNext = 0;
     const h = harness({
       ports,
       respond: (name, stdin, i) => {
-        if (name === 'ts')
-          return (stdin as { op?: string }).op === 'complete'
-            ? res()
-            : i < 2
-              ? jsonRes({ task_id: '1' })
-              : jsonRes({ task_id: null });
+        if (name === 'ts') {
+          const op = (stdin as { op?: string }).op;
+          if (op === 'complete' || op === 'fail') return res();
+          return tsNext++ < 2 ? jsonRes({ task_id: '1' }) : jsonRes({ task_id: null });
+        }
         if (name === 'ex') return jsonRes({ status: 'done', summary: 'ok' });
         if (name === 'g')
           return i === 0
@@ -369,6 +372,39 @@ describe('runLoop', () => {
     // retry_count が iter_N.json に残る (夜間運用の事後分析用, 06 §6.2)。
     expect(h.logs[0]?.task?.retryCount).toBe(1);
     expect(h.logs[1]?.task?.retryCount).toBe(1);
+  });
+
+  // C1: the failure path reports op=fail to the task-source so it can record the
+  // failure and escalate (needs-human) at its threshold — the infinite-loop breaker
+  // (要件 §4.2① / §11.2). Without this the escalation handlers are dead code.
+  it('reports op=fail to the task-source with retry_count on a gate failure', async () => {
+    const ports = emptyPorts({
+      taskSource: [plug('task-source', 'ts')],
+      executor: [plug('executor', 'ex')],
+      gate: [plug('gate', 'g')],
+      onFail: [plug('on-fail', 'rec')],
+    });
+    let tsNext = 0;
+    const h = harness({
+      ports,
+      respond: (name, stdin) => {
+        if (name === 'ts') {
+          const op = (stdin as { op?: string }).op;
+          if (op === 'complete' || op === 'fail') return res();
+          return tsNext++ < 1 ? jsonRes({ task_id: '1' }) : jsonRes({ task_id: null });
+        }
+        if (name === 'ex') return jsonRes({ status: 'done', summary: 'ok' });
+        if (name === 'g') return jsonRes({ reason: 'coverage low', gate: '30-test' }, { exitCode: 2 });
+        return res();
+      },
+    });
+    await runLoop(h.deps);
+    const failCall = h.calls.find(
+      (c) => c.name === 'ts' && (c.stdin as { op?: string }).op === 'fail',
+    );
+    expect(failCall).toBeDefined();
+    expect(failCall?.stdin).toMatchObject({ op: 'fail', task_id: '1', retry_count: 1 });
+    expect((failCall?.stdin as { reason?: string }).reason).toContain('coverage low');
   });
 
   it('routes a stuck executor to the failure path (D2 §2.3)', async () => {
@@ -649,10 +685,16 @@ describe('runLoop', () => {
       executor: [plug('executor', 'ex')],
       gate: [plug('gate', 'g')],
     });
+    // Count only `op=next` calls (complete/fail are side-effect-only, task stays).
+    let tsNext = 0;
     const h = harness({
       ports,
-      respond: (name, _stdin, i) => {
-        if (name === 'ts') return i < 2 ? jsonRes({ task_id: '1' }) : jsonRes({ task_id: null });
+      respond: (name, stdin, i) => {
+        if (name === 'ts') {
+          const op = (stdin as { op?: string }).op;
+          if (op === 'complete' || op === 'fail') return res();
+          return tsNext++ < 2 ? jsonRes({ task_id: '1' }) : jsonRes({ task_id: null });
+        }
         if (name === 'ex')
           return i === 0
             ? jsonRes({ status: 'stuck', summary: 'blocked on X' })
