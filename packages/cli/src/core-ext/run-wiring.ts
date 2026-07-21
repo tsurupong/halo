@@ -19,6 +19,7 @@ import type {
 } from '@tsurupong/halo-core';
 import {
   discoverPort,
+  findHarnessYml,
   createNodeDiscoveryFs,
   runPort,
   runPreflightLight,
@@ -79,6 +80,36 @@ function join(a: string, b: string): string {
 function baseEnv(): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) if (typeof v === 'string') out[k] = v;
+  return out;
+}
+
+/**
+ * S1 (要件 §6.1): git-forge のクレデンシャルは task-source/sink には要るが executor
+ * (claude -p) には不要。プロンプトインジェクション時の秘匿情報窃取を防ぐため、executor
+ * 子プロセスの env からは除外する。ANTHROPIC 系など executor 自身の認証は残す。
+ */
+const EXECUTOR_ENV_DENYLIST = [
+  'GH_TOKEN',
+  'GITHUB_TOKEN',
+  'GH_ENTERPRISE_TOKEN',
+  'GITHUB_ENTERPRISE_TOKEN',
+];
+
+/** PATH から `/mnt/c` 由来 (Windows) を除去する (WSL2 洗浄, 要件 §6.1)。 */
+function scrubPath(pathVal: string | undefined): string {
+  return (pathVal ?? '')
+    .split(':')
+    .filter((p) => p !== '' && !p.startsWith('/mnt/c'))
+    .join(':');
+}
+
+/** executor 用の最小化 env: 秘匿トークンを落とし、PATH を洗浄する。 */
+function executorEnv(base: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(base)) {
+    if (!EXECUTOR_ENV_DENYLIST.includes(k)) out[k] = v;
+  }
+  out['PATH'] = scrubPath(base['PATH']);
   return out;
 }
 
@@ -238,15 +269,18 @@ async function isLockHeldByOther(
 export function makeRunner(ctx: RunContext): PortRunner {
   // entry 契約 (ADR-0018): 自プロセスの Node で JS エントリを直接起動する。
   // PATH 解決・exec-bit・shebang に依存しない (旧 D10 §5 フォールバックは廃止)。
-  return (plugin: DiscoveredPlugin, stdin: unknown, opts?: { timeoutSec?: number }) =>
-    runPort({
+  return (plugin: DiscoveredPlugin, stdin: unknown, opts?: { timeoutSec?: number }) => {
+    // S1: executor には秘匿トークンを渡さず PATH を洗浄する (要件 §6.1)。他ポートは従来どおり。
+    const env = plugin.port === 'executor' ? executorEnv(baseEnv()) : baseEnv();
+    return runPort({
       execPath: process.execPath,
       args: [plugin.entryPath],
       cwd: ctx.cwd,
-      env: { ...baseEnv(), ...(plugin.manifest.env ?? {}), HALO_PLUGIN_DIR: plugin.dir },
+      env: { ...env, ...(plugin.manifest.env ?? {}), HALO_PLUGIN_DIR: plugin.dir },
       stdin,
       timeoutMs: (opts?.timeoutSec ?? DEFAULT_PORT_TIMEOUT_SEC) * 1000,
     });
+  };
 }
 
 // --- RunHooks 組み立て --------------------------------------------------------
@@ -263,8 +297,11 @@ export function createRunHooks(seams: RunWiringSeams = nodeRunWiringSeams()): Ru
     },
 
     async preflightHeavy(ctx: RunContext): Promise<HeavyDecision> {
-      // Phase 1 重量段は worktree clean のみ (disk/graph は D2 §4.2 の後続フェーズ)。
+      // 重量段: .harness.yml 必須チェック (要件 §4.2③) + worktree clean。
+      // disk/graph は D2 §4.2 の後続フェーズ。
       return runPreflightHeavy({
+        harnessYmlPresent: async () =>
+          (await findHarnessYml(ctx.cwd, seams.discoveryFs)) !== null,
         worktreeClean: () => isWorktreeClean(seams.git(ctx.cwd)),
       });
     },
@@ -282,6 +319,21 @@ export function createRunHooks(seams: RunWiringSeams = nodeRunWiringSeams()): Ru
 
       try {
         const ports = await discoverLoopPorts(ctx.haloDir, seams.discoveryFs);
+        // C3 (要件 §4.2③ / D2 §8.2): worktree 作成後に採用 runtime の setup(依存実体化)を
+        // 走らせるため runtime ポートを発見する。Phase 1 は単一 runtime 前提で先頭を採用。
+        // 未配備・発見失敗なら setup はスキップ(依存不足は gate が検出する)。
+        let runtimePlugin: DiscoveredPlugin | undefined;
+        try {
+          const disc = await discoverPort({
+            haloRoot: ctx.haloDir,
+            port: 'runtime',
+            fs: seams.discoveryFs,
+            requireEntry: true,
+          });
+          runtimePlugin = disc.plugins[0];
+        } catch {
+          runtimePlugin = undefined;
+        }
         // ADR-0016 の完了判定基準: worktree「作成時点」の HEAD を控える。完了時の
         // repo HEAD と比較すると、run 中にオペレータがコミットしただけで差分が出て
         // 成果ゼロの偽 complete が発火する (2026-07-16 に実際に発生)。
@@ -319,6 +371,28 @@ export function createRunHooks(seams: RunWiringSeams = nodeRunWiringSeams()): Ru
             } catch {
               /* base 不明は resolvePrUrl 側で未完了扱いに倒れる */
             }
+            // SetUp 段 (D2 §8.2): 採用 runtime の setup を workdir で実行し依存を実体化する。
+            // 失敗は致命的にせず記録のみ — gate(typecheck/test)が依存不足を fail として検出する。
+            if (runtimePlugin !== undefined) {
+              const setupRes = await runPort({
+                execPath: process.execPath,
+                args: [runtimePlugin.entryPath],
+                cwd: workdir,
+                env: {
+                  ...baseEnv(),
+                  ...(runtimePlugin.manifest.env ?? {}),
+                  HALO_PLUGIN_DIR: runtimePlugin.dir,
+                },
+                stdin: { workdir, changed_files: [] },
+                timeoutMs: DEFAULT_PORT_TIMEOUT_SEC * 1000,
+              });
+              if (setupRes.exitCode !== 0) {
+                process.stderr.write(
+                  `[halo] runtime setup failed (exit ${setupRes.exitCode ?? 'signal'}); ` +
+                    `gate will surface missing deps\n`,
+                );
+              }
+            }
             return workdir;
           },
           removeWorktree: (workdir) => {
@@ -332,6 +406,9 @@ export function createRunHooks(seams: RunWiringSeams = nodeRunWiringSeams()): Ru
               .map((l) => l.slice(3).trim())
               .filter((l) => l !== '');
           },
+          // C2 (D4 §4.2): worktree 作成時 HEAD を gate へ渡し、loop-audit が
+          // `git diff <base>` で committed + uncommitted の両方を検査できるようにする。
+          gateBase: (workdir) => worktreeBase.get(workdir) ?? '',
           // ADR-0016: sink (sink-git-commit) が worktree に新規コミットを作った場合のみ
           // `commit:<sha>` を完了参照として返し op=complete を発火させる。コミットが
           // 無ければ '' → タスクは queue に残る (成果の無い passed を完了扱いしない)。

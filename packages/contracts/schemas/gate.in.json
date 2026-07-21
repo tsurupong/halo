@@ -16,6 +16,10 @@
       "items": {
         "type": "string"
       }
+    },
+    "base": {
+      "type": "string",
+      "description": "Worktree base commit (the HEAD captured at worktree creation). When present, diff-based gates inspect `git diff <base>` so BOTH committed and uncommitted changes are audited (D4 §4.2); without it, gates fall back to `git diff HEAD` and an executor that commits its work would escape inspection."
     }
   },
   "required": [

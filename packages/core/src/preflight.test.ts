@@ -84,6 +84,22 @@ describe('runPreflightHeavy', () => {
       reason: 'GRAPH_STALE',
     });
   });
+
+  it('aborts with NO_HARNESS_YML before worktreeClean (要件 §4.2③)', async () => {
+    const clean = vi.fn(() => true);
+    const decision = await runPreflightHeavy({
+      harnessYmlPresent: () => false,
+      worktreeClean: clean,
+    });
+    expect(decision).toEqual({ proceed: false, reason: 'NO_HARNESS_YML' });
+    expect(clean).not.toHaveBeenCalled();
+  });
+
+  it('proceeds when .harness.yml is present', async () => {
+    expect(
+      await runPreflightHeavy({ harnessYmlPresent: () => true, worktreeClean: () => true }),
+    ).toEqual({ proceed: true });
+  });
 });
 
 describe('concrete check builders', () => {

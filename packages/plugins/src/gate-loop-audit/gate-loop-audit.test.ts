@@ -24,6 +24,19 @@ function runAudit(workdir: string): { code: number; stdout: string; stderr: stri
   return runLauncher(input);
 }
 
+function runAuditWithBase(
+  workdir: string,
+  base: string,
+): { code: number; stdout: string; stderr: string } {
+  const input = JSON.stringify({ task_id: 'T-1', workdir, changed_files: [], base });
+  return runLauncher(input);
+}
+
+function headSha(cwd: string): string {
+  const r = spawnSync('git', ['-C', cwd, 'rev-parse', 'HEAD'], { encoding: 'utf8' });
+  return r.stdout.trim();
+}
+
 function git(cwd: string, args: string[]): void {
   const r = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' });
   if (r.status !== 0) {
@@ -126,6 +139,23 @@ describe('gate-loop-audit (launcher contract)', () => {
     expect(code).toBe(2);
     const out = JSON.parse(stdout) as { reason: string; gate: string };
     expect(typeof out.reason).toBe('string');
+    expect(out.gate).toBe('50-loop-audit');
+  });
+
+  // C2 (D4 §4.2): a COMMITTED self-modification escapes `git diff HEAD` but is caught
+  // when the worktree base is supplied via `base` (git diff <base>).
+  it('committed PROMPT.md change bypasses HEAD diff but is caught with base', () => {
+    const wt = newRepo(makeTmpRoot());
+    const base = headSha(wt);
+    writeFileSync(join(wt, 'PROMPT.md'), '# prompt tampered\n');
+    git(wt, ['add', '-A']);
+    git(wt, ['commit', '-qm', 'sneaky']);
+    // Without base: the committed change is invisible to `git diff HEAD` → passes.
+    expect(runAudit(wt).code).toBe(0);
+    // With base: `git diff <base>` sees the committed change → fail (check 5).
+    const withBase = runAuditWithBase(wt, base);
+    expect(withBase.code).toBe(2);
+    const out = JSON.parse(withBase.stdout) as { reason: string; gate: string };
     expect(out.gate).toBe('50-loop-audit');
   });
 

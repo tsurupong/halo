@@ -16,9 +16,34 @@ const stuckMarker = process.env['HALO_STUCK_MARKER'] ?? '[HALO:STUCK]';
 // 変更できず、無変更のまま status:done を返して偽グリーンになる。
 const permissionMode = process.env['HALO_CLAUDE_PERMISSION_MODE'] ?? 'acceptEdits';
 
-function emit(status: string, summary: string): never {
-  writeStdoutJson({ status, summary });
+function emit(status: string, summary: string, costUsd?: number): never {
+  writeStdoutJson(
+    costUsd !== undefined
+      ? { status, summary, cost: { usd_estimate: costUsd } }
+      : { status, summary },
+  );
   process.exit(0);
+}
+
+/**
+ * S3: `--output-format json` の結果エンベロープを解釈する。`result`(本文テキスト)と
+ * `total_cost_usd`(日次コスト予算 DAILY_MAX_COST_USD の集計元)を取り出す。JSON でない
+ * 場合(古い claude / テストスタブ)は生テキストへフォールバックする。
+ */
+function parseEnvelope(raw: string): { text: string; cost?: number; isError: boolean } {
+  try {
+    const j = JSON.parse(raw) as Record<string, unknown>;
+    if (j !== null && typeof j === 'object') {
+      const text = typeof j['result'] === 'string' ? (j['result'] as string) : raw;
+      const rawCost = j['total_cost_usd'] ?? j['cost_usd'];
+      const cost =
+        typeof rawCost === 'number' && Number.isFinite(rawCost) ? rawCost : undefined;
+      return { text, ...(cost !== undefined ? { cost } : {}), isError: j['is_error'] === true };
+    }
+  } catch {
+    /* JSON でない → 生テキスト扱い */
+  }
+  return { text: raw, isError: false };
 }
 
 const input = await readStdinJson().catch(() => undefined);
@@ -45,7 +70,12 @@ const r = spawnSync(
   [
     '-p', prompt,
     '--strict-mcp-config',
+    // S2: 対象リポジトリの project/local 設定 (.claude/settings.json の allow/hooks) を
+    // 無視し、無人ループの実効権限をリポジトリ側ファイルに拡張させない (要件 §6.1 / D4 §2)。
+    '--setting-sources', 'user',
     '--permission-mode', permissionMode,
+    // S3: cost を取得するため結果を JSON エンベロープで受け取る (DAILY_MAX_COST_USD の集計元)。
+    '--output-format', 'json',
     '--max-turns', String(maxTurns),
   ],
   {
@@ -72,16 +102,20 @@ const code = r.status ?? 1;
 const lastLines = (text: string, n: number): string =>
   text.split('\n').filter((l) => l !== '').slice(-n).join(' ');
 
-// STUCK マーカー検出 → stuck へ変換(自己申告の行き詰まり)。
-if (out.includes(stuckMarker)) {
-  emit('stuck', `executor reported stuck: ${lastLines(out, 5)}`);
+// S3: JSON エンベロープを解釈して本文テキストと cost を取り出す(非JSONは生テキスト)。
+const env = parseEnvelope(out);
+const text = env.text;
+
+// STUCK マーカー検出 → stuck へ変換(自己申告の行き詰まり)。cost は取れれば添える。
+if (text.includes(stuckMarker)) {
+  emit('stuck', `executor reported stuck: ${lastLines(text, 5)}`, env.cost);
 }
 
-// 非 0 終了は行き詰まり扱い(failure 経路へ)。stdout/stderr の末尾を理由として添える。
-if (code !== 0) {
-  const detail = lastLines(`${out}\n${err}`, 3);
-  emit('stuck', `claude exited with code ${code}${detail !== '' ? `: ${detail}` : ''}`);
+// 非 0 終了 or エンベロープの is_error は行き詰まり扱い(failure 経路へ)。
+if (code !== 0 || env.isError) {
+  const detail = lastLines(`${text}\n${err}`, 3);
+  emit('stuck', `claude failed (exit ${code})${detail !== '' ? `: ${detail}` : ''}`, env.cost);
 }
 
-const summary = lastLines(out, 3);
-emit('done', summary !== '' ? summary : 'execution completed');
+const summary = lastLines(text, 3);
+emit('done', summary !== '' ? summary : 'execution completed', env.cost);

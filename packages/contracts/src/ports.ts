@@ -120,6 +120,13 @@ export interface GateIn {
   /** Absolute worktree path under inspection. */
   workdir: string;
   changed_files: string[];
+  /**
+   * Worktree base commit (the HEAD captured at worktree creation). When present,
+   * diff-based gates inspect `git diff <base>` so BOTH committed and uncommitted
+   * changes are audited (D4 §4.2); without it, gates fall back to `git diff HEAD`
+   * and an executor that commits its work would escape inspection.
+   */
+  base?: string;
 }
 
 /** gate output, emitted on fail only (D1 §1.4). */

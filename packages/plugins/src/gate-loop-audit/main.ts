@@ -30,6 +30,8 @@ function isTestFile(path: string): boolean {
 
 function isProtectedFile(path: string): boolean {
   const base = path.split('/').pop() ?? path;
+  // .claude/settings*.json は hooks/allow で実効権限を拡張できるため保護対象 (S2, D4 §2)。
+  if (path.includes('.claude/') && /^settings(\.local)?\.json$/.test(base)) return true;
   return base === 'CLAUDE.md' || base === 'PROMPT.md' || base === '.harness.yml';
 }
 
@@ -39,13 +41,19 @@ if (workdir === undefined || !existsSync(workdir)) fail(`workdir 不正: '${work
 if (run('git', ['-C', workdir, 'rev-parse', '--git-dir']).code !== 0)
   fail(`workdir が git リポジトリではない: ${workdir}`);
 
-// intent-to-add: 未追跡の新規ファイルも diff HEAD に現れるようにする(作業ツリーは変更しない)。
+// 比較基準(D4 §4.2): worktree 作成時 HEAD の `base` が渡れば `git diff <base>` で
+// committed + uncommitted の両方を検査する(executor が自分でコミットしても回避不能)。
+// 無ければ後方互換で `git diff HEAD`(作業ツリー未コミット差分のみ)へ倒す。
+const base = str(input, 'base');
+const diffTarget = base !== undefined && base !== '' ? base : 'HEAD';
+
+// intent-to-add: 未追跡の新規ファイルも diff に現れるようにする(作業ツリーは変更しない)。
 run('git', ['-C', workdir, 'add', '-A', '-N']);
 
-// 作業ツリーの未コミット差分(HEAD 比)を検査対象とする。
-const numstat = run('git', ['-C', workdir, 'diff', 'HEAD', '--numstat']).stdout;
-const namestatus = run('git', ['-C', workdir, 'diff', 'HEAD', '--name-status']).stdout;
-const diff = run('git', ['-C', workdir, 'diff', 'HEAD']).stdout;
+// diffTarget(base or HEAD)からの差分を検査対象とする。
+const numstat = run('git', ['-C', workdir, 'diff', diffTarget, '--numstat']).stdout;
+const namestatus = run('git', ['-C', workdir, 'diff', diffTarget, '--name-status']).stdout;
+const diff = run('git', ['-C', workdir, 'diff', diffTarget]).stdout;
 
 // ⑥ diff 1500 行上限
 let total = 0;

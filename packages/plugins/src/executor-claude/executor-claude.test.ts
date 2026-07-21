@@ -134,6 +134,35 @@ describe('executor-claude contract', () => {
     expect(args).toContain('acceptEdits');
   });
 
+  it('passes --setting-sources user and --output-format json (S2/S3)', () => {
+    const { stubBinDir, workdir } = setupStubBin();
+    const argsFile = join(dirname(stubBinDir), 'args-s23');
+    const input = JSON.stringify({ prompt: 'x', workdir, budget: { max_turns: 40, timeout_sec: 900 } });
+    runLauncher(input, { ...baseEnv(stubBinDir), CLAUDE_ARGS_FILE: argsFile });
+    const args = readFileSync(argsFile, 'utf8').split('\n');
+    expect(args).toContain('--setting-sources');
+    expect(args).toContain('user');
+    expect(args).toContain('--output-format');
+    expect(args).toContain('json');
+  });
+
+  it('extracts total_cost_usd from a JSON envelope into cost.usd_estimate (S3)', () => {
+    const { stubBinDir, workdir } = setupStubBin();
+    const input = JSON.stringify({ prompt: 'x', workdir, budget: { max_turns: 40, timeout_sec: 900 } });
+    const { stdout } = runLauncher(input, {
+      ...baseEnv(stubBinDir),
+      CLAUDE_STUB_OUT: JSON.stringify({ result: 'done ok', total_cost_usd: 0.42, is_error: false }),
+    });
+    const out = JSON.parse(stdout) as {
+      status: string;
+      summary: string;
+      cost?: { usd_estimate: number };
+    };
+    expect(out.status).toBe('done');
+    expect(out.summary).toContain('done ok');
+    expect(out.cost?.usd_estimate).toBe(0.42);
+  });
+
   it('HALO_CLAUDE_PERMISSION_MODE overrides permission mode', () => {
     const { stubBinDir, workdir } = setupStubBin();
     const argsFile = join(dirname(stubBinDir), 'args2');
