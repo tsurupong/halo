@@ -280,6 +280,8 @@ export interface LoopConfig {
   retryThreshold?: number;
   contextTokenLimit?: number;
   maxTurns?: number;
+  /** 1 実行あたりの USD 上限 (ADR-0021)。executor.in.budget.max_budget_usd へパススルー。 */
+  maxBudgetUsd?: number;
   executorTimeoutSec?: number;
   /** Seconds added to the executor budget to derive its process-level wall (D2 §3.3, M2). */
   executorTimeoutGraceSec?: number;
@@ -453,7 +455,12 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
       const execIn: ExecutorIn = {
         prompt,
         workdir,
-        budget: { max_turns: maxTurns, timeout_sec: execTimeout },
+        budget: {
+          max_turns: maxTurns,
+          timeout_sec: execTimeout,
+          // ADR-0021: 設定時のみ付与 (契約上は任意フィールド、MINOR)。
+          ...(cfg.maxBudgetUsd !== undefined ? { max_budget_usd: cfg.maxBudgetUsd } : {}),
+        },
       };
       await markPhase(taskId, 'execute');
       let exec: ExecClassification;

@@ -141,6 +141,24 @@ describe('executor-claude contract', () => {
     }
   });
 
+  it('passes --max-budget-usd only when budget.max_budget_usd is set (ADR-0021)', () => {
+    const { stubBinDir, workdir } = setupStubBin();
+    const argsFile = join(dirname(stubBinDir), 'args-budget');
+    runLauncher(
+      JSON.stringify({ prompt: 'x', workdir, budget: { max_turns: 40, timeout_sec: 900, max_budget_usd: 2.5 } }),
+      { ...baseEnv(stubBinDir), CLAUDE_ARGS_FILE: argsFile },
+    );
+    const args = readFileSync(argsFile, 'utf8').split('\n');
+    expect(args[args.indexOf('--max-budget-usd') + 1]).toBe('2.5');
+
+    const argsFile2 = join(dirname(stubBinDir), 'args-nobudget');
+    runLauncher(
+      JSON.stringify({ prompt: 'x', workdir, budget: { max_turns: 40, timeout_sec: 900 } }),
+      { ...baseEnv(stubBinDir), CLAUDE_ARGS_FILE: argsFile2 },
+    );
+    expect(readFileSync(argsFile2, 'utf8').split('\n')).not.toContain('--max-budget-usd');
+  });
+
   it('HALO_CLAUDE_ALLOWED_TOOLS overrides the allowlist', () => {
     const { stubBinDir, workdir } = setupStubBin();
     const argsFile = join(dirname(stubBinDir), 'args-allow');

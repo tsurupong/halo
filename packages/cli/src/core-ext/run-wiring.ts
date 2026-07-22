@@ -398,6 +398,8 @@ export function createRunHooks(seams: RunWiringSeams = nodeRunWiringSeams()): Ru
             ...(ctx.config.profileName != null ? { profileName: ctx.config.profileName } : {}),
             // executor のターン上限 (MAX_TURNS / --max-turns)。未指定は loop 既定 40。
             ...(ctx.config.maxTurns != null ? { maxTurns: ctx.config.maxTurns } : {}),
+            // ADR-0021: 1 実行あたり USD 上限を executor.in.budget へパススルー。
+            ...(ctx.config.maxBudgetUsd != null ? { maxBudgetUsd: ctx.config.maxBudgetUsd } : {}),
           },
           ports,
           runner: makeRunner(ctx, {

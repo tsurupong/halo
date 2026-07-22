@@ -30,6 +30,8 @@ export interface HaloConfig {
   profileName?: string;
   /** executor へ渡す 1 タスクあたりのターン上限。未指定時は loop 既定 (LOOP_DEFAULTS.maxTurns)。 */
   maxTurns?: number;
+  /** 1 実行あたりの USD 上限 (ADR-0021)。executor.in.budget.max_budget_usd へ伝播。 */
+  maxBudgetUsd?: number;
 }
 
 /**
@@ -143,6 +145,8 @@ export function resolveConfig(input: ResolveConfigInput = {}): HaloConfig {
   );
   const dailyCostRaw = firstDefined(profile.DAILY_MAX_COST_USD, defaults.DAILY_MAX_COST_USD);
   const maxTurnsRaw = firstDefined(asStr(cli.maxTurns), profile.MAX_TURNS, defaults.MAX_TURNS);
+  // ADR-0021: 1 実行あたりの USD 上限 (06 §: MAX_BUDGET_USD → executor.in.budget.max_budget_usd)。
+  const maxBudgetRaw = firstDefined(profile.MAX_BUDGET_USD, defaults.MAX_BUDGET_USD);
   const taskFilter = firstDefined(cli.taskFilter, profile.TASK_FILTER, defaults.TASK_FILTER);
   const kindFilter = firstDefined(cli.kindFilter, profile.KIND_FILTER, defaults.KIND_FILTER);
 
@@ -157,6 +161,9 @@ export function resolveConfig(input: ResolveConfigInput = {}): HaloConfig {
       ? { dailyMaxCostUsd: normalizePositiveNumber(dailyCostRaw, 'DAILY_MAX_COST_USD') }
       : {}),
     ...(maxTurnsRaw != null ? { maxTurns: normalizePositiveInt(maxTurnsRaw, 'MAX_TURNS') } : {}),
+    ...(maxBudgetRaw != null
+      ? { maxBudgetUsd: normalizePositiveNumber(maxBudgetRaw, 'MAX_BUDGET_USD') }
+      : {}),
     ...(taskFilter != null ? { taskFilter } : {}),
     ...(kindFilter != null ? { kindFilter } : {}),
     ...(input.profileName != null ? { profileName: input.profileName } : {}),

@@ -64,6 +64,11 @@ const budget =
     : undefined;
 const maxTurns = typeof budget?.['max_turns'] === 'number' ? budget['max_turns'] : 40;
 const timeoutSec = typeof budget?.['timeout_sec'] === 'number' ? budget['timeout_sec'] : 900;
+// ADR-0021: 任意の 1 実行あたりコスト上限。claude ランタイムの budget stop へパススルー。
+const maxBudgetUsd =
+  typeof budget?.['max_budget_usd'] === 'number' && budget['max_budget_usd'] > 0
+    ? budget['max_budget_usd']
+    : undefined;
 
 if (prompt === undefined || workdir === undefined) {
   emit('stuck', 'invalid executor input: prompt and workdir are required');
@@ -92,6 +97,8 @@ const r = spawnSync(
     // S3: cost を取得するため結果を JSON エンベロープで受け取る (DAILY_MAX_COST_USD の集計元)。
     '--output-format', 'json',
     '--max-turns', String(maxTurns),
+    // ADR-0021: ランタイム側のコスト上限停止(未指定なら付与しない)。
+    ...(maxBudgetUsd !== undefined ? ['--max-budget-usd', String(maxBudgetUsd)] : []),
   ],
   {
     cwd: workdir,

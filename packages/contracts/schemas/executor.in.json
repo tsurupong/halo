@@ -24,6 +24,10 @@
           "type": "integer",
           "description": "Timeout in seconds.",
           "default": 900
+        },
+        "max_budget_usd": {
+          "type": "number",
+          "description": "Per-run USD ceiling passed through to the executor runtime's budget stop (ADR-0021). Optional; absent = no per-run cost ceiling (MINOR addition)."
         }
       },
       "required": [
