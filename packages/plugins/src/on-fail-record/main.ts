@@ -47,4 +47,14 @@ try {
 } catch {
   diag(`on-fail-record: 追記失敗: ${catalog}`);
 }
+
+// 機械可読の JSONL も併記する (context-recent-failures の読み取り源)。MD は人間用に維持。
+const catalogJsonl = process.env['HALO_CATALOG_JSONL'] ?? '.halo/failure-catalog.jsonl';
+const record = { ts, task_id: taskId, gate, retry_count: retryCount, reason };
+try {
+  mkdirSync(dirname(catalogJsonl), { recursive: true });
+  appendFileSync(catalogJsonl, `${JSON.stringify(record)}\n`);
+} catch {
+  diag(`on-fail-record: JSONL 追記失敗: ${catalogJsonl}`);
+}
 process.exit(0);

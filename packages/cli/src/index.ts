@@ -13,6 +13,7 @@ import { initCommand } from './commands/init.js';
 import { triggerCommand } from './commands/trigger.js';
 import { stopCommand, resumeCommand } from './commands/stop.js';
 import { statusCommand } from './commands/status.js';
+import { historyCommand } from './commands/history.js';
 import { watchdogCommand } from './commands/watchdog.js';
 import { doctorCommand } from './commands/doctor.js';
 import { enableCommand } from './commands/enable.js';
@@ -34,6 +35,7 @@ const VALUE_FLAGS = [
   'daily-budget',
   'profiles-dir',
   'days',
+  'limit',
   'action',
 ];
 const REPEAT_FLAGS = ['kind'];
@@ -50,7 +52,8 @@ commands:
   trigger list                        登録トリガー一覧
   stop [--reason <text>]              キルスイッチ配置 (.halo/STOP)
   resume                              キルスイッチ除去
-  status [--days <n>]                 稼働状態・予算残・直近実績 (既定 7 日のサマリ集計付き)
+  status [--days <n>]                 稼働状態・予算残・直近実績 (既定 7 日のサマリ集計・コスト付き)
+  history [--days <n>] [--limit <n>]  実行履歴の時系列一覧 (既定 7 日 / 20 件)
   watchdog [--action <mode>]          停滞ループの検知/回収 (report|kill|skip, 既定 report)
   doctor [--fix]                      環境自己診断 (9 検査)
   enable <plugin-name>                同梱プラグインを絶対パスランチャーとして .halo/ に生成
@@ -108,6 +111,8 @@ export async function run(argv: readonly string[], deps: Deps): Promise<ExitCode
         return await resumeCommand(rest, io, { fs, now: deps.now });
       case 'status':
         return await statusCommand(rest, io, { fs, now: deps.now, spawn });
+      case 'history':
+        return await historyCommand(rest, io, { fs, now: deps.now });
       case 'watchdog':
         return await watchdogCommand(rest, io, {
           fs,

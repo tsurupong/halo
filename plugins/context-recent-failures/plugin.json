@@ -1,0 +1,7 @@
+{
+  "name": "@halo/plugin-context-recent-failures",
+  "version": "1.0.0",
+  "port": "context",
+  "entry": "../../packages/plugins/dist/context-recent-failures/main.js",
+  "order": 50
+}

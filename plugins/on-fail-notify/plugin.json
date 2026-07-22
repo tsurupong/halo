@@ -1,0 +1,7 @@
+{
+  "name": "@halo/plugin-on-fail-notify",
+  "version": "1.0.0",
+  "port": "on-fail",
+  "entry": "../../packages/plugins/dist/on-fail-notify/main.js",
+  "order": 30
+}
