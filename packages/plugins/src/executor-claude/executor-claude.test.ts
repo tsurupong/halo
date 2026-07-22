@@ -124,14 +124,80 @@ describe('executor-claude contract', () => {
     expect(typeof out.summary).toBe('string');
   });
 
-  it('default --permission-mode acceptEdits is passed to claude', () => {
+  it('default --permission-mode dontAsk + --allowedTools are passed to claude (ADR-0020)', () => {
     const { stubBinDir, workdir } = setupStubBin();
     const argsFile = join(dirname(stubBinDir), 'args');
     const input = JSON.stringify({ prompt: 'do the thing', workdir, budget: { max_turns: 40, timeout_sec: 900 } });
     runLauncher(input, { ...baseEnv(stubBinDir), CLAUDE_ARGS_FILE: argsFile });
     const args = readFileSync(argsFile, 'utf8').split('\n');
     expect(args).toContain('--permission-mode');
-    expect(args).toContain('acceptEdits');
+    expect(args).toContain('dontAsk');
+    const allowedIdx = args.indexOf('--allowedTools');
+    expect(allowedIdx).toBeGreaterThan(-1);
+    const allowed = args[allowedIdx + 1] ?? '';
+    // dontAsk はリスト外を即拒否するため、委譲(Agent)・スキル(Skill)・読み取り系の明示が必須。
+    for (const t of ['Read', 'Edit', 'Write', 'Bash', 'Agent', 'Skill']) {
+      expect(allowed.split(',')).toContain(t);
+    }
+  });
+
+  it('passes --max-budget-usd only when budget.max_budget_usd is set (ADR-0021)', () => {
+    const { stubBinDir, workdir } = setupStubBin();
+    const argsFile = join(dirname(stubBinDir), 'args-budget');
+    runLauncher(
+      JSON.stringify({ prompt: 'x', workdir, budget: { max_turns: 40, timeout_sec: 900, max_budget_usd: 2.5 } }),
+      { ...baseEnv(stubBinDir), CLAUDE_ARGS_FILE: argsFile },
+    );
+    const args = readFileSync(argsFile, 'utf8').split('\n');
+    expect(args[args.indexOf('--max-budget-usd') + 1]).toBe('2.5');
+
+    const argsFile2 = join(dirname(stubBinDir), 'args-nobudget');
+    runLauncher(
+      JSON.stringify({ prompt: 'x', workdir, budget: { max_turns: 40, timeout_sec: 900 } }),
+      { ...baseEnv(stubBinDir), CLAUDE_ARGS_FILE: argsFile2 },
+    );
+    expect(readFileSync(argsFile2, 'utf8').split('\n')).not.toContain('--max-budget-usd');
+  });
+
+  it('HALO_CLAUDE_ALLOWED_TOOLS overrides the allowlist', () => {
+    const { stubBinDir, workdir } = setupStubBin();
+    const argsFile = join(dirname(stubBinDir), 'args-allow');
+    const input = JSON.stringify({ prompt: 'x', workdir, budget: { max_turns: 40, timeout_sec: 900 } });
+    runLauncher(input, {
+      ...baseEnv(stubBinDir),
+      CLAUDE_ARGS_FILE: argsFile,
+      HALO_CLAUDE_ALLOWED_TOOLS: 'Read,Edit',
+    });
+    const args = readFileSync(argsFile, 'utf8').split('\n');
+    expect(args[args.indexOf('--allowedTools') + 1]).toBe('Read,Edit');
+  });
+
+  it('injects --settings when HALO_SETTINGS_FILE points to an existing file (ADR-0019)', () => {
+    const { stubBinDir, workdir } = setupStubBin();
+    const argsFile = join(dirname(stubBinDir), 'args-settings');
+    const settingsFile = join(dirname(stubBinDir), 'executor-settings.json');
+    writeFileSync(settingsFile, '{"permissions":{"deny":["Write(**/CLAUDE.md)"]}}');
+    const input = JSON.stringify({ prompt: 'x', workdir, budget: { max_turns: 40, timeout_sec: 900 } });
+    runLauncher(input, {
+      ...baseEnv(stubBinDir),
+      CLAUDE_ARGS_FILE: argsFile,
+      HALO_SETTINGS_FILE: settingsFile,
+    });
+    const args = readFileSync(argsFile, 'utf8').split('\n');
+    expect(args[args.indexOf('--settings') + 1]).toBe(settingsFile);
+  });
+
+  it('omits --settings when HALO_SETTINGS_FILE is unset or missing (ADR-0019 layer-2 fallback)', () => {
+    const { stubBinDir, workdir } = setupStubBin();
+    const argsFile = join(dirname(stubBinDir), 'args-nosettings');
+    const input = JSON.stringify({ prompt: 'x', workdir, budget: { max_turns: 40, timeout_sec: 900 } });
+    runLauncher(input, {
+      ...baseEnv(stubBinDir),
+      CLAUDE_ARGS_FILE: argsFile,
+      HALO_SETTINGS_FILE: join(dirname(stubBinDir), 'no-such-file.json'),
+    });
+    const args = readFileSync(argsFile, 'utf8').split('\n');
+    expect(args).not.toContain('--settings');
   });
 
   it('passes --setting-sources user and --output-format json (S2/S3)', () => {
@@ -174,7 +240,7 @@ describe('executor-claude contract', () => {
     });
     const args = readFileSync(argsFile, 'utf8').split('\n');
     expect(args).toContain('plan');
-    expect(args).not.toContain('acceptEdits');
+    expect(args).not.toContain('dontAsk');
   });
 
   it('non-zero exit propagates stderr detail into summary', () => {

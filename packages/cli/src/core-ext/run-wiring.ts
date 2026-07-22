@@ -113,6 +113,42 @@ function executorEnv(base: Record<string, string>): Record<string, string> {
   return out;
 }
 
+/**
+ * ADR-0019 層1(事前強制): ADR-0004 保護集合への書き込みを Claude Code の permission
+ * deny で spawn 時に拒否する HALO 管理 settings。worktree 外(haloDir 配下)に置き、
+ * リポジトリ側から書き換え不能にする。層2(事後検査)の gate-loop-audit は継続。
+ */
+const EXECUTOR_DENY_SETTINGS = {
+  permissions: {
+    deny: [
+      'Write(**/CLAUDE.md)',
+      'Edit(**/CLAUDE.md)',
+      'Write(**/PROMPT.md)',
+      'Edit(**/PROMPT.md)',
+      'Write(**/.harness.yml)',
+      'Edit(**/.harness.yml)',
+      'Write(**/.claude/settings.json)',
+      'Edit(**/.claude/settings.json)',
+    ],
+  },
+} as const;
+
+/** deny settings を haloDir 配下へ生成し、そのパスを返す(失敗時 undefined = 注入なし)。 */
+async function writeExecutorSettings(
+  haloDir: string,
+  fs: { mkdir: (p: string, o: { recursive: true }) => Promise<unknown>; writeFile: (p: string, d: string) => Promise<void> },
+): Promise<string | undefined> {
+  const dir = join(haloDir, 'settings');
+  const path = join(dir, 'executor-settings.json');
+  try {
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path, JSON.stringify(EXECUTOR_DENY_SETTINGS, null, 2) + '\n');
+    return path;
+  } catch {
+    return undefined; // 層1が作れなくても層2 (gate-loop-audit) は常に有効。
+  }
+}
+
 /** child_process.spawn を Promise 化して stdout/stderr/exit を集める最小ランナー。 */
 function spawnCapture(
   cmd: string,
@@ -266,12 +302,19 @@ async function isLockHeldByOther(
 
 // --- PortRunner ---------------------------------------------------------------
 
-export function makeRunner(ctx: RunContext): PortRunner {
+export function makeRunner(
+  ctx: RunContext,
+  runnerOpts?: { executorSettingsFile?: string },
+): PortRunner {
   // entry 契約 (ADR-0018): 自プロセスの Node で JS エントリを直接起動する。
   // PATH 解決・exec-bit・shebang に依存しない (旧 D10 §5 フォールバックは廃止)。
   return (plugin: DiscoveredPlugin, stdin: unknown, opts?: { timeoutSec?: number }) => {
     // S1: executor には秘匿トークンを渡さず PATH を洗浄する (要件 §6.1)。他ポートは従来どおり。
     const env = plugin.port === 'executor' ? executorEnv(baseEnv()) : baseEnv();
+    // ADR-0019 層1: HALO 管理 deny settings のパスを executor アダプタへ伝える。
+    if (plugin.port === 'executor' && runnerOpts?.executorSettingsFile !== undefined) {
+      env['HALO_SETTINGS_FILE'] = runnerOpts.executorSettingsFile;
+    }
     return runPort({
       execPath: process.execPath,
       args: [plugin.entryPath],
@@ -337,6 +380,8 @@ export function createRunHooks(seams: RunWiringSeams = nodeRunWiringSeams()): Ru
         // ADR-0016 の完了判定基準: worktree「作成時点」の HEAD を控える。完了時の
         // repo HEAD と比較すると、run 中にオペレータがコミットしただけで差分が出て
         // 成果ゼロの偽 complete が発火する (2026-07-16 に実際に発生)。
+        // ADR-0019 層1: executor 用 deny settings を生成 (worktree 外・HALO 管理)。
+        const executorSettingsFile = await writeExecutorSettings(ctx.haloDir, seams.logsFs);
         const worktreeBase = new Map<string, string>();
         const logger = createLogger({ logDir: logsDir(ctx.haloDir), fs: seams.logsFs });
         // ハング検知: 各工程境界で logs/current.json を上書き (task md: phase-boundary-log)。
@@ -353,9 +398,14 @@ export function createRunHooks(seams: RunWiringSeams = nodeRunWiringSeams()): Ru
             ...(ctx.config.profileName != null ? { profileName: ctx.config.profileName } : {}),
             // executor のターン上限 (MAX_TURNS / --max-turns)。未指定は loop 既定 40。
             ...(ctx.config.maxTurns != null ? { maxTurns: ctx.config.maxTurns } : {}),
+            // ADR-0021: 1 実行あたり USD 上限を executor.in.budget へパススルー。
+            ...(ctx.config.maxBudgetUsd != null ? { maxBudgetUsd: ctx.config.maxBudgetUsd } : {}),
           },
           ports,
-          runner: makeRunner(ctx),
+          runner: makeRunner(ctx, {
+            // ADR-0019 層1: 保護集合 deny の settings を run 毎に haloDir 下へ再生成。
+            ...(executorSettingsFile !== undefined ? { executorSettingsFile } : {}),
+          }),
           logger,
           phaseTracker,
           now: seams.now,

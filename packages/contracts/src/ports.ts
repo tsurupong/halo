@@ -89,6 +89,11 @@ export interface ExecutorBudget {
    * @default 900
    */
   timeout_sec: number;
+  /**
+   * Per-run USD ceiling passed through to the executor runtime's budget stop
+   * (ADR-0021). Optional; absent = no per-run cost ceiling (MINOR addition).
+   */
+  max_budget_usd?: number;
 }
 
 /** executor input (D1 §1.3). */

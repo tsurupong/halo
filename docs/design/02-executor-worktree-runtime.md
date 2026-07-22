@@ -41,7 +41,7 @@ bwrap --bind "$workdir" "$workdir" \
   claude -p "$PROMPT" \
     --mcp-config "$HARNESS_ROOT/mcp.json" \
     --strict-mcp-config \
-    --allowedTools "mcp__codegraph__*,mcp__knowledge__*,Edit,Write,Bash" \
+    --allowedTools "mcp__codegraph__*,mcp__knowledge__*,Read,Glob,Grep,Edit,Write,Bash,Agent,Skill,TodoWrite" \
     --max-turns "${budget_max_turns}"
 ```
 
@@ -51,7 +51,7 @@ Design intent of each flag:
 |---|---|---|
 | `--mcp-config` | `$HARNESS_ROOT/mcp.json` | Pass only the harness-managed generated artifact as the MCP configuration (see §1.3) |
 | `--strict-mcp-config` | (no argument) | Ignore the project's `.mcp.json` and the user's global settings, fixing the range of tool visibility. Required for reproducibility and security (so that unknown tools cannot be handed over via prompt injection) |
-| `--allowedTools` | 2 MCP kinds + `Edit,Write,Bash` | Minimization of tool permissions. Limited to the read-only MCPs codegraph/knowledge and the minimal editing/execution tools. Corresponds to the tool permission minimization in §6.1 of the Requirements Specification |
+| `--allowedTools` | 2 MCP kinds + `Read,Glob,Grep,Edit,Write,Bash,Agent,Skill,TodoWrite` | Minimization of tool permissions. Read/search tools, minimal editing/execution tools, plus `Agent`/`Skill`: under `dontAsk` unlisted tools are denied outright, so subagent delegation and skill invocation must be listed explicitly (ADR-0020). Corresponds to the tool permission minimization in §6.1 of the Requirements Specification |
 | `--max-turns` | `budget.max_turns` (initial 40) | Cutting off turn runaway (§6.2). Injected as budget at execution time, enabling profile substitution |
 
 - `timeout` enforces 15 minutes/iteration (initial value, §6.2) on the outside, and on exceeding it the executor returns `{"status":"timeout"}`.

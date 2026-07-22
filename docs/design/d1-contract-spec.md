@@ -255,7 +255,7 @@ claude -p "$PROMPT" \
   --strict-mcp-config \
   --settings "$HALO_SETTINGS_FILE" \
   --permission-mode dontAsk \
-  --allowedTools "mcp__codegraph__*,mcp__knowledge__*,Edit,Write,Bash" \
+  --allowedTools "mcp__codegraph__*,mcp__knowledge__*,Read,Glob,Grep,Edit,Write,Bash,Agent,Skill,TodoWrite" \
   --max-turns 40
 ```
 

@@ -1,7 +1,7 @@
 # ADR-0021: Cost-Based Stop Condition (max budget USD)
 
 **Date**: 2026-07-18
-**Status**: proposed
+**Status**: accepted (implemented 2026-07-22)
 **Deciders**: Owner
 
 ## Context
