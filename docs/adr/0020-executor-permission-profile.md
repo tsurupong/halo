@@ -1,7 +1,7 @@
 # ADR-0020: Executor Permission Profile (allowedTools + dontAsk)
 
 **Date**: 2026-07-18
-**Status**: proposed
+**Status**: accepted (implemented 2026-07-22)
 **Deciders**: Owner
 
 ## Context

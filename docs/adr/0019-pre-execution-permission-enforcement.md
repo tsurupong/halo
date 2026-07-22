@@ -1,7 +1,7 @@
 # ADR-0019: Pre-Execution Permission Enforcement (settings injection by executor)
 
 **Date**: 2026-07-18
-**Status**: proposed
+**Status**: accepted (implemented 2026-07-22)
 **Deciders**: Owner
 
 ## Context
