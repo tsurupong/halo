@@ -10,7 +10,7 @@ The docs never specify a Claude Code permission mode for the executor: D4 §6 an
 
 ## Decision
 
-Fix the executor's default permission profile to `--allowedTools <minimal set>` + `--permission-mode dontAsk`. The minimal set remains the D4 §6 list (`mcp__codegraph__*,mcp__knowledge__*,Edit,Write,Bash`). `HALO_CLAUDE_PERMISSION_MODE` remains as an explicit operator override (e.g., for interactive debugging), but the shipped default changes from `acceptEdits` to `dontAsk`. Deny rules (ADR-0019) keep top priority regardless of mode.
+Fix the executor's default permission profile to `--allowedTools <minimal set>` + `--permission-mode dontAsk`. The minimal set is the revised D4 §6 list (`mcp__codegraph__*,mcp__knowledge__*,Read,Glob,Grep,Edit,Write,Bash,Agent,Skill,TodoWrite`). Revision rationale (2026-07-22): under `dontAsk`, tools outside the allowlist are denied outright, so the original list (`Edit,Write,Bash` + 2 MCPs) would have blocked read/search tools, subagent delegation (`Agent`), and skill invocation (`Skill`) entirely — official Agent SDK docs confirm Agent calls are denied in `dontAsk` mode unless `Agent` is allowlisted. Note that a skill's `allowed-tools` frontmatter has no effect in headless/SDK execution; the query-side `--allowedTools` is the only enforcement point. `HALO_CLAUDE_PERMISSION_MODE` remains as an explicit operator override (e.g., for interactive debugging), but the shipped default changes from `acceptEdits` to `dontAsk`. Deny rules (ADR-0019) keep top priority regardless of mode.
 
 ## Alternatives Considered
 
