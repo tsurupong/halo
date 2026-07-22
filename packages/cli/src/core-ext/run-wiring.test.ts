@@ -65,4 +65,17 @@ describe('makeRunner (entry contract, ADR-0018)', () => {
     const env = call.options['env'] as Record<string, string>;
     expect(env['HALO_PLUGIN_DIR']).toBe(p.dir);
   });
+
+  it('injects HALO_SETTINGS_FILE only for the executor port (ADR-0019)', async () => {
+    spawnCalls.length = 0;
+    const runner = makeRunner(ctx(), { executorSettingsFile: '/repo/.halo/settings/executor-settings.json' });
+    await runner(plugin({ port: 'executor' }), {});
+    await runner(plugin({ port: 'gate' }), {});
+
+    expect(spawnCalls).toHaveLength(2);
+    const execEnv = spawnCalls[0]!.options['env'] as Record<string, string>;
+    const gateEnv = spawnCalls[1]!.options['env'] as Record<string, string>;
+    expect(execEnv['HALO_SETTINGS_FILE']).toBe('/repo/.halo/settings/executor-settings.json');
+    expect(gateEnv['HALO_SETTINGS_FILE']).toBeUndefined();
+  });
 });

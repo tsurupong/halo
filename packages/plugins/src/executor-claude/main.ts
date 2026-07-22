@@ -12,9 +12,18 @@ import { spawnSync } from 'node:child_process';
 import { readStdinJson, writeStdoutJson, str } from '../lib/io.js';
 
 const stuckMarker = process.env['HALO_STUCK_MARKER'] ?? '[HALO:STUCK]';
-// 無人実行の編集権限。既定 acceptEdits がないと headless claude はファイルを
-// 変更できず、無変更のまま status:done を返して偽グリーンになる。
-const permissionMode = process.env['HALO_CLAUDE_PERMISSION_MODE'] ?? 'acceptEdits';
+// ADR-0020: 既定 dontAsk + allowedTools。dontAsk はリスト外ツールを即拒否する
+// 硬い境界(acceptEdits はリスト外がモード処理へフォールスルーし境界にならない)。
+// リスト内の Edit/Write/Bash は無確認で通るため無人編集は成立する。
+const permissionMode = process.env['HALO_CLAUDE_PERMISSION_MODE'] ?? 'dontAsk';
+// ADR-0020(改訂版 D4 §6): dontAsk では Read/検索系・Agent(サブエージェント委譲)・
+// Skill も明示許可が必要(リスト外は即拒否)。env で運用上書き可。
+const allowedTools =
+  process.env['HALO_CLAUDE_ALLOWED_TOOLS'] ??
+  'mcp__codegraph__*,mcp__knowledge__*,Read,Glob,Grep,Edit,Write,Bash,Agent,Skill,TodoWrite';
+// ADR-0019: HALO 管理の deny 集合(保護ファイル)を worktree 外の settings で事前強制。
+// 生成はコア/CLI 側の責務。未設定なら注入しない(層2の gate-loop-audit は常に有効)。
+const settingsFile = process.env['HALO_SETTINGS_FILE'];
 
 function emit(status: string, summary: string, costUsd?: number): never {
   writeStdoutJson(
@@ -73,7 +82,13 @@ const r = spawnSync(
     // S2: 対象リポジトリの project/local 設定 (.claude/settings.json の allow/hooks) を
     // 無視し、無人ループの実効権限をリポジトリ側ファイルに拡張させない (要件 §6.1 / D4 §2)。
     '--setting-sources', 'user',
+    // ADR-0019 層1: HALO 管理 settings(deny 集合)を spawn 時に注入(存在時のみ)。
+    ...(settingsFile !== undefined && settingsFile !== '' && existsSync(settingsFile)
+      ? ['--settings', settingsFile]
+      : []),
     '--permission-mode', permissionMode,
+    // ADR-0020: dontAsk 下の許可リスト = 可視ツール境界。
+    '--allowedTools', allowedTools,
     // S3: cost を取得するため結果を JSON エンベロープで受け取る (DAILY_MAX_COST_USD の集計元)。
     '--output-format', 'json',
     '--max-turns', String(maxTurns),
