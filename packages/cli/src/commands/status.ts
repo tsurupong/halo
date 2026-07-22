@@ -115,8 +115,8 @@ export interface RunSummary {
   windowDays: number;
 }
 
-/** 1 件の失敗 iter を理由分類へ写像する (D9 §3.2 判定順)。純粋。 */
-function classifyFailure(entry: IterationLog): string {
+/** 1 件の失敗 iter を理由分類へ写像する (D9 §3.2 判定順)。純粋。history でも利用。 */
+export function classifyFailure(entry: IterationLog): string {
   const status = entry.executor?.status;
   if (status === 'timeout' || status === 'stuck') return status;
   const failedGates = (entry.gates ?? []).filter((g) => g.result === 'fail');
@@ -153,6 +153,35 @@ export function aggregateRuns(
     }
   }
   return { total, byOutcome, failureCategories, windowDays: options.windowDays };
+}
+
+/** 期間内 executor コストの合算。 */
+export interface CostSummary {
+  input_tokens: number;
+  output_tokens: number;
+  usd: number;
+}
+
+/**
+ * iter_N.json 群から期間内の executor コストを合算する。純粋 (now は引数)。
+ * cost 欠損 (旧ログ) は 0 扱い。RunSummary とは分離 (既存 summary 形状の互換維持)。
+ */
+export function aggregateCost(
+  entries: readonly IterationLog[],
+  options: { windowDays: number; now: number },
+): CostSummary {
+  const cutoff = options.now - options.windowDays * 24 * 60 * 60 * 1000;
+  const total: CostSummary = { input_tokens: 0, output_tokens: 0, usd: 0 };
+  for (const entry of entries) {
+    const startedMs = Date.parse(entry.started_at);
+    if (Number.isNaN(startedMs) || startedMs < cutoff || startedMs > options.now) continue;
+    const cost = entry.executor?.cost;
+    if (cost === undefined) continue;
+    total.input_tokens += cost.input_tokens ?? 0;
+    total.output_tokens += cost.output_tokens ?? 0;
+    total.usd += cost.usd_estimate ?? 0;
+  }
+  return total;
 }
 
 /** logs/ の全 iter_N.json を読む (壊れた/非オブジェクトのログは黙って除外)。 */
@@ -200,10 +229,9 @@ export async function statusCommand(
   const daysRaw = Number(stringFlag(parsed, 'days'));
   const windowDays =
     Number.isFinite(daysRaw) && daysRaw > 0 ? daysRaw : DEFAULT_SUMMARY_WINDOW_DAYS;
-  const summary = aggregateRuns(await loadRuns(logDir, deps.fs), {
-    windowDays,
-    now: deps.now,
-  });
+  const runs = await loadRuns(logDir, deps.fs);
+  const summary = aggregateRuns(runs, { windowDays, now: deps.now });
+  const cost = aggregateCost(runs, { windowDays, now: deps.now });
   const stopPresent = await deps.fs.exists(join(haloDir, 'STOP'));
   const triggers = await listTriggers({
     haloDir,
@@ -219,6 +247,7 @@ export async function statusCommand(
       budget,
       lastRun: lastRun ? { iter: lastRun.iter, outcome: lastRun.outcome } : null,
       summary,
+      cost,
       triggers: triggers.map((t) => ({ name: t.name, alive: t.alive })),
     });
     return EXIT.OK;
@@ -239,6 +268,9 @@ export async function statusCommand(
   io.print(
     `直近${summary.windowDays}日の実績: ${summary.total} 件` +
       (outcomeText === '' ? '' : ` (${outcomeText})`),
+  );
+  io.print(
+    `直近${summary.windowDays}日のコスト: $${cost.usd.toFixed(2)} (in ${cost.input_tokens} / out ${cost.output_tokens} tokens)`,
   );
   const failureText = Object.entries(summary.failureCategories)
     .map(([k, v]) => `${k} ${v}`)

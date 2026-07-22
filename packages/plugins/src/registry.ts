@@ -22,6 +22,17 @@ export interface BundledPlugin {
 
 export const BUNDLED_PLUGINS: BundledPlugin[] = [
   {
+    name: 'context-recent-failures',
+    port: 'context',
+    manifest: {
+      name: '@halo/plugin-context-recent-failures',
+      version: '1.0.0',
+      port: 'context',
+      entry: './context-recent-failures/main.js',
+      order: 50,
+    },
+  },
+  {
     name: 'executor-claude',
     port: 'executor',
     manifest: {
@@ -76,6 +87,17 @@ export const BUNDLED_PLUGINS: BundledPlugin[] = [
       port: 'on-fail',
       entry: './on-fail-record/main.js',
       order: 10,
+    },
+  },
+  {
+    name: 'on-fail-notify',
+    port: 'on-fail',
+    manifest: {
+      name: '@halo/plugin-on-fail-notify',
+      version: '1.0.0',
+      port: 'on-fail',
+      entry: './on-fail-notify/main.js',
+      order: 30,
     },
   },
   {

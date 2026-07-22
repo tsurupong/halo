@@ -1,0 +1,31 @@
+{
+  "description": "context-recent-failures documented I/O (D8 §3.2). Input is the task-source op=next output; output is ContextOut fragments.",
+  "cases": [
+    {
+      "schema": "task-source.out.json",
+      "expect": "valid",
+      "data": { "task_id": "42", "title": "Fix bug", "body": "do it", "kind": "code" }
+    },
+    { "schema": "task-source.out.json", "expect": "valid", "data": { "task_id": null } },
+    {
+      "schema": "context.out.json",
+      "expect": "valid",
+      "data": {
+        "fragments": [
+          {
+            "source": "recent-failures",
+            "content": "- [2026-07-22T00:00:00Z] gate=30-test retry=2: coverage 87% < 90%",
+            "priority": 50
+          }
+        ]
+      }
+    },
+    { "schema": "context.out.json", "expect": "valid", "data": { "fragments": [] } },
+    {
+      "schema": "context.out.json",
+      "expect": "invalid",
+      "data": { "fragments": [{ "source": "recent-failures", "content": "x" }] }
+    },
+    { "schema": "context.out.json", "expect": "invalid", "data": {} }
+  ]
+}
