@@ -19,6 +19,8 @@ import type {
 } from '@tsurupong/halo-core';
 import {
   discoverPort,
+  checkSinglePortPopulated,
+  portDir,
   findHarnessYml,
   loadHarnessYml,
   readKindPrompt,
@@ -247,20 +249,57 @@ function seamTmpdir(): string {
 
 // --- discovery: 6 ポートを LoopPorts へ ---------------------------------------
 
-/** haloDir 下の全 loop ポートを走査して LoopPorts を組む (D2 §6)。 */
-export async function discoverLoopPorts(haloDir: string, fs: DiscoveryFs): Promise<LoopPorts> {
-  const [taskSource, context, executor, gate, sink, onFail] = await Promise.all(
+/** 走査で弾かれたプラグイン。ポート名を添えて呼び出し元が原因を特定できるようにする。 */
+export interface LoopPortIssue {
+  port: string;
+  dir: string;
+  message: string;
+}
+
+/** ポート走査の結果一式。issues が空でない run は起動させない (下の runLoop 参照)。 */
+export interface LoopPortDiscovery {
+  ports: LoopPorts;
+  issues: LoopPortIssue[];
+}
+
+/**
+ * haloDir 下の全 loop ポートを走査して LoopPorts を組む (D2 §6)。
+ *
+ * discoverPort は manifest 不正・entry 不在のプラグインを issues に積んで plugins から
+ * 除外する。ここでそれを捨てると、たとえば gate-loop-audit が 1 枚欠けたまま残りの
+ * ゲートだけで pass 判定が続く — 誰にも気づかれずに安全網が薄くなる。呼び出し元が
+ * 判断できるよう、除外理由をそのまま返す (D1 §6.2、ADR-0004)。
+ * 単一ポート (task-source / executor) の 0 件も core の判定関数で同じ器に載せる。
+ */
+export async function discoverLoopPorts(
+  haloDir: string,
+  fs: DiscoveryFs,
+): Promise<LoopPortDiscovery> {
+  const discoveries = await Promise.all(
     LOOP_PORT_ORDER.map((port) =>
       discoverPort({ haloRoot: haloDir, port, fs, requireEntry: true }),
     ),
   );
+  const issues: LoopPortIssue[] = discoveries.flatMap((d) =>
+    d.issues.map((i) => ({ port: d.port, dir: i.dir, message: i.message })),
+  );
+  for (const d of discoveries) {
+    const populated = checkSinglePortPopulated(d);
+    if (!populated.ok) {
+      issues.push({ port: d.port, dir: portDir(haloDir, d.port), message: populated.reason });
+    }
+  }
+  const [taskSource, context, executor, gate, sink, onFail] = discoveries;
   return {
-    taskSource: taskSource!.plugins,
-    context: context!.plugins,
-    executor: executor!.plugins,
-    gate: gate!.plugins,
-    sink: sink!.plugins,
-    onFail: onFail!.plugins,
+    ports: {
+      taskSource: taskSource!.plugins,
+      context: context!.plugins,
+      executor: executor!.plugins,
+      gate: gate!.plugins,
+      sink: sink!.plugins,
+      onFail: onFail!.plugins,
+    },
+    issues,
   };
 }
 
@@ -364,7 +403,18 @@ export function createRunHooks(seams: RunWiringSeams = nodeRunWiringSeams()): Ru
       if (!acq.acquired) return { endReason: 'STOP', iterations: [] };
 
       try {
-        const ports = await discoverLoopPorts(ctx.haloDir, seams.discoveryFs);
+        const discovered = await discoverLoopPorts(ctx.haloDir, seams.discoveryFs);
+        if (discovered.issues.length > 0) {
+          // ADR-0004 は代替案「検知のみ・警告して継続」を『無人運用では警告は誰も
+          // 読まない』として却下している。ゲートが 1 枚黙って欠けたまま pass 判定を
+          // 続ける方が、起動を止めるより危険なので、ここで落とす。
+          throw new Error(
+            `plugin discovery rejected ${discovered.issues.length} plugin(s); refusing to run ` +
+              `with a silently reduced port set:\n` +
+              discovered.issues.map((i) => `  - [${i.port}] ${i.dir}: ${i.message}`).join('\n'),
+          );
+        }
+        const ports = discovered.ports;
         // C3 (要件 §4.2③ / D2 §8.2): worktree 作成後に採用 runtime の setup(依存実体化)を
         // 走らせるため runtime ポートを発見する。Phase 1 は単一 runtime 前提で先頭を採用。
         // 未配備・発見失敗なら setup はスキップ(依存不足は gate が検出する)。

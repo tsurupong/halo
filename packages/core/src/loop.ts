@@ -28,7 +28,14 @@ import type { HeavyDecision } from './preflight.js';
 import type { KindPrompt } from './harness.js';
 import { shouldRunSink } from './autonomy.js';
 import { classifyExit, parseJsonStdout, type ExitClass, type RunPortResult } from './runPort.js';
-import type { ExecutorRecord, GateResult, IterationInput, Logger, Outcome } from './logger.js';
+import type {
+  ExecutorRecord,
+  GateResult,
+  IterationInput,
+  Logger,
+  Outcome,
+  PluginDiagnostic,
+} from './logger.js';
 import type { LoopPhase, PhaseTracker } from './phase.js';
 
 /** Adjustable initial values (要件 §11.2). The loop hardcodes none of these. */
@@ -267,6 +274,9 @@ export type PortRunner = (
   opts?: { timeoutSec?: number },
 ) => Promise<RunPortResult>;
 
+/** Sink for one plugin's captured stderr during an iteration (D1 §3.3). */
+type DiagnosticCollector = (port: string, plugin: string, result: RunPortResult) => void;
+
 /** Discovered plugins by port (single-port lists carry only their order-first entry). */
 export interface LoopPorts {
   taskSource: readonly DiscoveredPlugin[];
@@ -435,6 +445,15 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
 
     const startedAt = new Date(deps.now()).toISOString();
 
+    // Plugin stderr captured during this iteration (D1 §3.3, D2 §3.4). Sinks and
+    // on-fail plugins are best-effort — without this their failures leave no trace
+    // anywhere, which is precisely what an unattended run cannot afford.
+    const diagnostics: PluginDiagnostic[] = [];
+    const collect: DiagnosticCollector = (port, plugin, result) => {
+      const text = result.stderr.trim();
+      if (text !== '') diagnostics.push({ port, plugin, stderr: text });
+    };
+
     // PreflightHeavy (D2 §4.2): a failure here (dirty worktree, low disk, stale
     // graph) is a *global* environment fault, not a fault of this task — running on
     // through every ready task would mislabel them all as `escalated`. Record this
@@ -451,6 +470,7 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
         task,
         outcome: 'aborted_env',
         retryCount: state.retryCount,
+        diagnostics,
       });
       iterations.push({ iter, taskId, outcome: 'aborted_env', retryCount: state.retryCount });
       return finish('ABORTED_ENV', `preflight: ${heavy.reason}`);
@@ -473,6 +493,7 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
           deps.ports.onFail,
           deps.runner,
           onFailInput(taskId, resolved.reason, state.retryCount),
+          (plugin, result) => collect('on-fail', plugin, result),
         );
         await runTaskSourceFail(deps, taskId, resolved.reason, state.retryCount);
         await record(deps, {
@@ -482,6 +503,7 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
           task,
           outcome: 'escalated',
           retryCount: state.retryCount,
+          diagnostics,
         });
         iterations.push({
           iter,
@@ -499,7 +521,7 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
     try {
       // Context (merge strategy, D2 §2.6 / §3.6).
       await markPhase(taskId, 'context');
-      const ctxOuts = await runContext(deps, task);
+      const ctxOuts = await runContext(deps, task, collect);
       const fragments = mergeFragments(ctxOuts, tokenLimit, estimate);
 
       // BuildPrompt with the previous failure re-injected (D2 §2.4).
@@ -522,6 +544,7 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
       let exec: ExecClassification;
       try {
         const execResult = await deps.runner(executor, execIn, { timeoutSec: execProcessTimeout });
+        collect('executor', executor.name, execResult);
         exec = classifyExecutor(execResult);
       } catch {
         exec = { outcome: 'error' };
@@ -539,6 +562,7 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
           deps.ports.onFail,
           deps.runner,
           onFailInput(taskId, exec.outcome, state.retryCount, { gate: exec.outcome, workdir }),
+          (plugin, result) => collect('on-fail', plugin, result),
         );
         // Report to the task-source so it records the failure and escalates at its
         // threshold (needs-human) — the infinite-loop breaker (要件 §4.2① / §11.2).
@@ -552,6 +576,7 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
           outcome,
           executor: toExecutorRecord(exec),
           retryCount: state.retryCount,
+          diagnostics,
         });
         iterations.push({
           iter,
@@ -579,13 +604,17 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
           ? { protected_paths: [...cfg.protectedPaths] }
           : {}),
       };
-      const gateRuns = await runGates(deps, gateIn);
+      const gateRuns = await runGates(deps, gateIn, collect);
       const verdict = evaluateGates(gateRuns);
 
       if (verdict.passed) {
         // Sink (best-effort, autonomy-filtered, D2 §2.5 / §3.6) then Complete.
         await markPhase(taskId, 'sink');
-        await runSinks(deps, { task_id: taskId, workdir, summary: exec.out?.summary ?? '' });
+        await runSinks(
+          deps,
+          { task_id: taskId, workdir, summary: exec.out?.summary ?? '' },
+          collect,
+        );
         // Only report completion when a delivery reference was actually produced
         // (D1 §1.5, ADR-0016): a PR URL, or `commit:<sha>` from a local commit sink.
         // '' means nothing durable was delivered → the task is left in-progress for
@@ -602,6 +631,7 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
           executor: toExecutorRecord(exec),
           gates: verdict.results,
           retryCount: state.retryCount,
+          diagnostics,
         });
         iterations.push({
           iter,
@@ -622,6 +652,7 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
           deps.ports.onFail,
           deps.runner,
           onFailInput(taskId, failure.reason, state.retryCount, { gate: failure.gate, workdir }),
+          (plugin, result) => collect('on-fail', plugin, result),
         );
         // Report to the task-source so it records the failure and escalates at its
         // threshold (needs-human) — the infinite-loop breaker (要件 §4.2① / §11.2).
@@ -636,6 +667,7 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
           executor: toExecutorRecord(exec),
           gates: verdict.results,
           retryCount: state.retryCount,
+          diagnostics,
         });
         iterations.push({
           iter,
@@ -722,11 +754,16 @@ async function runTaskSourceFail(
   }
 }
 
-async function runContext(deps: LoopDeps, task: TaskSourceOut): Promise<ContextOut[]> {
+async function runContext(
+  deps: LoopDeps,
+  task: TaskSourceOut,
+  collect: DiagnosticCollector,
+): Promise<ContextOut[]> {
   const outs: ContextOut[] = [];
   for (const plugin of deps.ports.context) {
     try {
       const res = await deps.runner(plugin, task, portOpts(plugin));
+      collect('context', plugin.name, res);
       const parsed = parseJsonStdout<ContextOut>(res.stdout);
       if (parsed.ok && Array.isArray(parsed.value.fragments)) outs.push(parsed.value);
     } catch {
@@ -736,13 +773,19 @@ async function runContext(deps: LoopDeps, task: TaskSourceOut): Promise<ContextO
   return outs;
 }
 
-async function runGates(deps: LoopDeps, gateIn: GateIn): Promise<GateRun[]> {
+async function runGates(
+  deps: LoopDeps,
+  gateIn: GateIn,
+  collect: DiagnosticCollector,
+): Promise<GateRun[]> {
   const runs: GateRun[] = [];
   for (const plugin of deps.ports.gate) {
     // A gate spawn failure must not escape and crash the loop — fold it to a
     // safe-side failing GateRun so the logical-AND fails closed (H1, D2 §3.1).
     try {
-      runs.push({ name: plugin.name, result: await deps.runner(plugin, gateIn, portOpts(plugin)) });
+      const result = await deps.runner(plugin, gateIn, portOpts(plugin));
+      collect('gate', plugin.name, result);
+      runs.push({ name: plugin.name, result });
     } catch (err) {
       runs.push({
         name: plugin.name,
@@ -753,21 +796,29 @@ async function runGates(deps: LoopDeps, gateIn: GateIn): Promise<GateRun[]> {
   return runs;
 }
 
-async function runSinks(deps: LoopDeps, sinkIn: SinkIn): Promise<void> {
+async function runSinks(
+  deps: LoopDeps,
+  sinkIn: SinkIn,
+  collect: DiagnosticCollector,
+): Promise<void> {
   const enabled = deps.ports.sink.filter((s) =>
     shouldRunSink(s.manifest.minAutonomy, deps.config.autonomy),
   );
-  await runBestEffort(enabled, deps.runner, sinkIn);
+  await runBestEffort(enabled, deps.runner, sinkIn, (plugin, result) =>
+    collect('sink', plugin, result),
+  );
 }
 
 async function runBestEffort(
   plugins: readonly DiscoveredPlugin[],
   runner: PortRunner,
   stdin: unknown,
+  onResult?: (plugin: string, result: RunPortResult) => void,
 ): Promise<void> {
   for (const plugin of plugins) {
     try {
-      await runner(plugin, stdin, portOpts(plugin));
+      const result = await runner(plugin, stdin, portOpts(plugin));
+      onResult?.(plugin.name, result);
     } catch {
       /* best-effort: one plugin's failure must not affect the others (D2 §3.6) */
     }
@@ -861,6 +912,7 @@ interface RecordArgs {
   executor?: ExecutorRecord;
   gates?: GateResult[];
   retryCount?: number;
+  diagnostics?: PluginDiagnostic[];
 }
 
 async function record(deps: LoopDeps, args: RecordArgs): Promise<void> {
@@ -878,6 +930,7 @@ async function record(deps: LoopDeps, args: RecordArgs): Promise<void> {
     },
     ...(args.executor ? { executor: args.executor } : {}),
     ...(args.gates ? { gates: args.gates } : {}),
+    ...(args.diagnostics && args.diagnostics.length > 0 ? { diagnostics: args.diagnostics } : {}),
     outcome: args.outcome,
   };
   await deps.logger.writeIteration(input);
