@@ -31,8 +31,14 @@ function runLauncher(input: string, env: Record<string, string> = {}) {
   return { code: r.status ?? 1, stdout: r.stdout, stderr: r.stderr };
 }
 
+// GH_FAIL_ON="issue list" などで、その gh サブコマンドだけを認証エラー相当で失敗させる。
+// 実運用の認証切れ・レート制限は「非0終了 + stdout 空」なので、その形を再現する。
 const ghStub = `#!/usr/bin/env bash
 echo "gh $*" >> "$GH_LOG"
+if [ -n "\${GH_FAIL_ON:-}" ] && [ "$1 $2" = "\${GH_FAIL_ON}" ]; then
+  echo "gh: authentication failed" >&2
+  exit 1
+fi
 case "$1 $2" in
   "issue list") printf '%s' "\${GH_ISSUE_JSON:-[]}" ;;
   "issue edit"|"issue comment") : ;;
@@ -113,6 +119,45 @@ describe('task-source-github contract', () => {
     expect(code).toBe(0);
     const out = JSON.parse(stdout) as { task_id: null };
     expect(out.task_id).toBeNull();
+  });
+
+  // H3: gh の失敗を握り潰すと {"task_id":null} + exit 0 になり、コアは NO_TASK で
+  // クリーン終了する = 認証切れの夜が「正常終了」として記録される。非0で落とすことで
+  // コアが TASK_SOURCE_ERROR として区別できるようにする。
+  it('next: gh issue list fails -> exit 2, never reports an empty queue', () => {
+    const { stubBinDir, ghLog } = setupStubBin();
+    const { code, stdout, stderr } = runLauncher(JSON.stringify({ op: 'next' }), {
+      ...baseEnv(stubBinDir, ghLog),
+      GH_FAIL_ON: 'issue list',
+    });
+    expect(code).toBe(2);
+    expect(stdout).toBe('');
+    expect(stderr).toContain('ready Issue の取得');
+  });
+
+  it('next: gh issue list emits non-JSON -> exit 2, not treated as an empty queue', () => {
+    const { stubBinDir, ghLog } = setupStubBin();
+    const { code, stdout } = runLauncher(JSON.stringify({ op: 'next' }), {
+      ...baseEnv(stubBinDir, ghLog),
+      GH_ISSUE_JSON: 'not json at all',
+    });
+    expect(code).toBe(2);
+    expect(stdout).toBe('');
+  });
+
+  // N5: ロック(ready→in-progress)に失敗したまま払い出すと、次イテレーションで同じ
+  // Issue を取り続ける。ロックできないならタスクを渡さない。
+  it('next: label lock fails -> exit 2, task is not handed out', () => {
+    const { stubBinDir, ghLog } = setupStubBin();
+    const issueJson = JSON.stringify([{ number: 42, title: 't', body: 'b', labels: [] }]);
+    const { code, stdout, stderr } = runLauncher(JSON.stringify({ op: 'next' }), {
+      ...baseEnv(stubBinDir, ghLog),
+      GH_ISSUE_JSON: issueJson,
+      GH_FAIL_ON: 'issue edit',
+    });
+    expect(code).toBe(2);
+    expect(stdout).toBe('');
+    expect(stderr).toContain('ロック');
   });
 
   it('complete: side effect only, stdout empty, exit 0', () => {

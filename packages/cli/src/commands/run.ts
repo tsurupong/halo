@@ -76,11 +76,20 @@ export function buildOverrides(parsed: ParsedArgs): CliOverrides {
   return overrides;
 }
 
+/**
+ * 「正当な非実行」ではない終了理由 (D3 §5.1 の exit 1 側)。task-source の故障と
+ * 重量プリフライト不通過は、監視が非0だけをアラート対象にできるよう exit 1 に写す。
+ * これらを 0 に丸めると、ポーリング運用で夜通し失敗し続けても外形は「正常」に見える。
+ */
+const ABNORMAL_END_REASONS: ReadonlySet<LoopResult['endReason']> = new Set([
+  'TASK_SOURCE_ERROR',
+  'ABORTED_ENV',
+]);
+
 /** LoopResult.endReason → 終了コード。正当な停止は 0、真の異常のみ 1 (D3 §5.1)。 */
 export function loopReasonToExit(reason: LoopResult['endReason']): ExitCode {
   // MAX_ITER / NO_TASK / STOP / BUDGET_EXCEEDED / TIMEOUT はいずれも正当な終了 → 0。
-  void reason;
-  return EXIT.OK;
+  return ABNORMAL_END_REASONS.has(reason) ? EXIT.RUNTIME : EXIT.OK;
 }
 
 export async function runCommand(parsed: ParsedArgs, io: Io, deps: RunDeps): Promise<ExitCode> {
@@ -177,6 +186,15 @@ export async function runCommand(parsed: ParsedArgs, io: Io, deps: RunDeps): Pro
     throw runtimeError(`loop error: ${(err as Error).message}`);
   }
 
+  const exit = loopReasonToExit(result.endReason);
+  if (exit !== EXIT.OK) {
+    // 異常終了は endDetail (task-source の stderr 抜粋など) ごと error 行へ出す。
+    // ここを warn + exit 0 にしていると、監視から見て正常終了と区別が付かない。
+    throw runtimeError(
+      `loop ended abnormally (${result.endReason})` +
+        (result.endDetail != null && result.endDetail !== '' ? `: ${result.endDetail}` : ''),
+    );
+  }
   io.warn(`loop: 終了 (${result.endReason}, iterations=${result.iterations.length})`);
-  return loopReasonToExit(result.endReason);
+  return exit;
 }

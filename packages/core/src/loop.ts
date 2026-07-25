@@ -670,13 +670,20 @@ async function runTaskSourceNext(deps: LoopDeps): Promise<NextResult> {
   }
   // A non-pass exit or unparseable stdout is a fault, distinct from a valid
   // `{task_id:null}` idle — end with TASK_SOURCE_ERROR rather than silent NO_TASK.
+  // The adapter's stderr rides along: on a broken task source it is the only
+  // human-readable clue that reaches the operator (D1 §3.3), and the NO_TASK path
+  // writes no iteration log at all.
   if (classifyExit(res) !== 'pass')
     return {
       kind: 'error',
-      reason: `task-source exited non-pass (exit ${res.exitCode ?? 'signal'})`,
+      reason: `task-source exited non-pass (exit ${res.exitCode ?? 'signal'})${stderrTail(res.stderr)}`,
     };
   const parsed = parseJsonStdout<TaskSourceOut>(res.stdout);
-  if (!parsed.ok) return { kind: 'error', reason: `task-source stdout invalid: ${parsed.error}` };
+  if (!parsed.ok)
+    return {
+      kind: 'error',
+      reason: `task-source stdout invalid: ${parsed.error}${stderrTail(res.stderr)}`,
+    };
   if (parsed.value.task_id == null) return { kind: 'none' };
   return { kind: 'task', task: parsed.value };
 }
@@ -769,6 +776,17 @@ async function runBestEffort(
 
 function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Trailing slice of a plugin's stderr, appended to a failure reason. stderr carries no
+ * contractual meaning (D1 §3.3) but it is the diagnostic channel, so a fault reason
+ * that drops it leaves the operator with an exit code and nothing else. Pure.
+ */
+function stderrTail(stderr: string, maxChars = 400): string {
+  const text = stderr.trim();
+  if (text === '') return '';
+  return `: ${text.length > maxChars ? `…${text.slice(-maxChars)}` : text}`;
 }
 
 /** Runner opts carrying the plugin's manifest `timeoutSec` when set (M1). Pure. */

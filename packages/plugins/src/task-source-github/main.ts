@@ -15,11 +15,19 @@ function die(msg: string, code = 2): never {
   process.exit(code);
 }
 
-/** gh を実行し、stderr は診断チャネルへ流す。 */
-function gh(args: string[]): { code: number; stdout: string } {
+/**
+ * gh を実行し、stderr は診断チャネルへ流す。**非0終了は必ず致命扱いにする**。
+ *
+ * 握り潰すと認証切れ・レート制限・ネットワーク断で stdout が空になり、`op=next` が
+ * `{"task_id":null}` + exit 0 を返してしまう。コアはそれを健全なアイドルと解釈して
+ * NO_TASK でクリーン終了するため、一晩中何もせず「正常」と記録される(H3)。
+ * exit 2 で落とせばコアは TASK_SOURCE_ERROR として区別できる (D1 §3.1 / D2 §2.7)。
+ */
+function gh(args: string[], what: string): { code: number; stdout: string } {
   const r = run('gh', args);
   if (r.stderr !== '') process.stderr.write(r.stderr);
   if (r.code === 127) die('依存コマンド欠落: gh');
+  if (r.code !== 0) die(`${what} に失敗 (gh exit ${r.code}): gh ${args.join(' ')}`);
   return { code: r.code, stdout: r.stdout };
 }
 
@@ -28,23 +36,28 @@ const op = str(input, 'op');
 
 switch (op) {
   case 'next': {
-    const list = gh([
-      'issue',
-      'list',
-      '--label',
-      'ready',
-      '--state',
-      'open',
-      '--limit',
-      '1',
-      '--json',
-      'number,title,body,labels',
-    ]);
+    const list = gh(
+      [
+        'issue',
+        'list',
+        '--label',
+        'ready',
+        '--state',
+        'open',
+        '--limit',
+        '1',
+        '--json',
+        'number,title,body,labels',
+      ],
+      'ready Issue の取得',
+    );
+    // ここに来る時点で gh は exit 0。したがってパース失敗は「ready 0 件」ではなく
+    // 出力形式の異常なので、null を返さず障害として落とす(H3 と同じ理由)。
     let issues: unknown;
     try {
       issues = JSON.parse(list.stdout);
     } catch {
-      issues = [];
+      die(`gh issue list の出力が JSON ではありません: ${list.stdout.slice(0, 200)}`);
     }
     const issue = Array.isArray(issues)
       ? (issues[0] as Record<string, unknown> | undefined)
@@ -63,8 +76,12 @@ switch (op) {
       .map((l) => (typeof l['name'] === 'string' ? l['name'] : ''))
       .find((n) => n.startsWith('kind:'));
     const kind = (kindLabel ?? 'kind:code').replace(/^kind:/, '');
-    // 多重取得防止のロック(ready→in-progress)。診断は stderr へ。
-    gh(['issue', 'edit', String(num), '--add-label', 'in-progress', '--remove-label', 'ready']);
+    // 多重取得防止のロック(ready→in-progress)。ここが失敗したまま払い出すと同じ Issue を
+    // 何度も取得し続けるので、ロックできなければタスクを渡さず落とす(N5)。
+    gh(
+      ['issue', 'edit', String(num), '--add-label', 'in-progress', '--remove-label', 'ready'],
+      `Issue #${num} のロック (ready→in-progress)`,
+    );
     writeStdoutJson({
       task_id: `T-${num}`,
       title: typeof issue['title'] === 'string' ? issue['title'] : '',
@@ -79,8 +96,11 @@ switch (op) {
     if (taskId === undefined || prUrl === undefined) die('complete requires task_id and pr_url');
     const num = taskId.replace(/^T-/, '');
     // PR 本文の Closes #num でマージ時に自動クローズされる前提。ここでは記録のみ。
-    gh(['issue', 'comment', num, '--body', `completed via PR: ${prUrl}`]);
-    gh(['issue', 'edit', num, '--add-label', 'done', '--remove-label', 'in-progress']);
+    gh(['issue', 'comment', num, '--body', `completed via PR: ${prUrl}`], '完了コメントの投稿');
+    gh(
+      ['issue', 'edit', num, '--add-label', 'done', '--remove-label', 'in-progress'],
+      `Issue #${num} の完了ラベル付与`,
+    );
     break;
   }
   case 'fail': {
@@ -93,10 +113,13 @@ switch (op) {
     const rc = typeof rcRaw === 'number' ? rcRaw : 0;
     if (taskId === undefined) die('fail requires task_id');
     const num = taskId.replace(/^T-/, '');
-    gh(['issue', 'comment', num, '--body', `fail #${rc}: ${reason}`]);
+    gh(['issue', 'comment', num, '--body', `fail #${rc}: ${reason}`], '失敗コメントの投稿');
     // 同一 Issue で THRESHOLD 回失敗 → needs-human でエスカレーション(無限ループ遮断)。
     if (rc >= failThreshold) {
-      gh(['issue', 'edit', num, '--add-label', 'needs-human', '--remove-label', 'in-progress']);
+      gh(
+        ['issue', 'edit', num, '--add-label', 'needs-human', '--remove-label', 'in-progress'],
+        `Issue #${num} の needs-human エスカレーション`,
+      );
     }
     break;
   }
