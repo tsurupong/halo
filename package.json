@@ -13,7 +13,7 @@
     "test:contract": "vitest run plugin-contract",
     "test:watch": "vitest",
     "coverage": "vitest run --coverage",
-    "lint": "eslint packages",
+    "lint": "eslint packages scripts eslint.config.js",
     "format": "prettier --check .",
     "format:write": "prettier --write ."
   },

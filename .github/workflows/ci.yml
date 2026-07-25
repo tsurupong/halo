@@ -1,5 +1,6 @@
-# HALO CI (T38, D8 §5). PR-required jobs are the three zero-billing / deterministic
-# layers (D8 §5.1 table): unit, loop-regression, contract (+ schema-drift, §3.3).
+# HALO CI (T38, D8 §5). PR-required jobs are the zero-billing / deterministic
+# layers (D8 §5.1 table): static (lint/format), unit, loop-regression, contract
+# (+ schema-drift, §3.3).
 # The paid, non-deterministic E2E dry-run (D8 §4/§5.1 row 4) is NOT run here — it is
 # a manual / pre-release smoke (see test/e2e/smoke.md, scripts/e2e-dry-run.mjs).
 name: CI
@@ -15,6 +16,27 @@ env:
   PNPM_VERSION: '10.14.0'
 
 jobs:
+  # ── ⓪ static checks. Cheapest layer, so it runs first and fails fast. `pnpm lint`
+  #      covers packages/ + scripts/ + the eslint config itself; formatting is checked
+  #      repo-wide by Prettier. Neither needs a build, so this job skips one. ──
+  static:
+    name: static
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: lint
+        run: pnpm lint
+      - name: format check
+        run: pnpm format
+
   # ── ① core unit tests + coverage (coverage is WARN, never blocks — D8 §5.2/§11.2) ──
   unit:
     name: unit
