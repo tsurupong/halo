@@ -9,6 +9,34 @@ versioned and released together.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-25
+
+### Upgrading from 0.3.0 — read this first
+
+`.harness.yml` is now actually read, and that changes behaviour for an existing
+repository. Up to 0.3.0 the `kinds.<kind>.prompt` field was validated but never loaded, so
+a declaration pointing at a file that did not exist was harmless. From 0.4.0 a task whose
+kind cannot be resolved — undeclared kind, or a prompt template that cannot be read — is
+escalated to a human instead of running.
+
+Because `halo project init` writes the prompt under `.halo/`, and `.halo/` is gitignored, a
+freshly cloned repository typically has the declaration but not the template. **Before
+upgrading, confirm the file every kind points at exists:**
+
+```sh
+grep -h 'prompt:' .harness.yml    # then check each path resolves
+```
+
+If a template is missing, regenerate it with one `--kind` per kind your `.harness.yml`
+declares — existing files, including `.harness.yml` itself, are preserved:
+
+```sh
+npx halo project init --kind code --kind docs
+```
+
+`halo project init` does not read your existing declaration, so a kind you omit gets no
+template. Everything else in this release is additive.
+
 ### Added
 
 - `context-recent-failures`: the first bundled context plugin. Re-injects the most recent
@@ -44,6 +72,10 @@ versioned and released together.
   agent; those are now stripped, and `.claude/settings*.json` in the target repository is
   both ignored at spawn and protected by the audit gate.
 - Daily cost budgeting silently counted zero because the executor never reported cost.
+- **`halo project init --kind <name>` was silently ignored.** `kind` was registered as a
+  repeatable flag but not as a value-taking one, so `--kind docs` parsed as a boolean and
+  `docs` fell through to the positional arguments — `init` always scaffolded `code` alone.
+  Found while verifying this release's upgrade instructions.
 - **`.harness.yml` is now actually read.** `kinds.<kind>.prompt` was validated but never
   loaded — the declared prompt template never reached the executor, and `resolveKind` had
   no callers outside tests. Each task's `kind` now resolves to its template, whose body is
@@ -106,7 +138,8 @@ Initial public release line. Core loop, contracts, and CLI.
   quality gates, sinks, triggers, and runtime.
 - Zero-billing CI: unit, loop-regression, and contract layers, all deterministic.
 
-[Unreleased]: https://github.com/tsurupong/halo/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/tsurupong/halo/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/tsurupong/halo/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/tsurupong/halo/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/tsurupong/halo/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/tsurupong/halo/releases/tag/v0.1.2
