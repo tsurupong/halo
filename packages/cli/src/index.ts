@@ -23,7 +23,8 @@ import { nodeSpawnAdapter, nodeDoctorProbes, defaultRunHooks } from './deps.js';
 export const CLI_VERSION = HALO_CORE_VERSION;
 
 // 全コマンドの値/反復フラグの和集合 (パーサに単一のスペックで渡す)。
-const VALUE_FLAGS = [
+/** 値を取るフラグ。反復フラグもここに含める必要がある (下の不変条件テスト参照)。 */
+export const VALUE_FLAGS = [
   'cwd',
   'runtime',
   'reason',
@@ -37,8 +38,12 @@ const VALUE_FLAGS = [
   'days',
   'limit',
   'action',
+  // 反復フラグも「値を取る」側に登録しなければ bool 扱いになり、値が positional へ
+  // 落ちて黙って無視される。REPEAT_FLAGS への登録だけでは足りない。
+  'kind',
 ];
-const REPEAT_FLAGS = ['kind'];
+/** 複数回指定できるフラグ (`--kind a --kind b`)。VALUE_FLAGS にも入っていること。 */
+export const REPEAT_FLAGS = ['kind'];
 
 const HELP = `halo — 無人実行ハーネス CLI
 
