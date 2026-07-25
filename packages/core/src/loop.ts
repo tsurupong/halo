@@ -406,6 +406,10 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
   const iterations: IterationSummary[] = [];
   const taskStates = new Map<string, TaskState>();
   let iter = 0;
+  // ADR-0021 決定(2): この launch で executor が報告した cost.usd の累計。
+  // `max_budget_usd` は契約上「任意」フィールドなので、ランタイムがそれを無視しても
+  // ここが最後の砦になる。イテレーション数はコストの代理指標にならない。
+  let accumulatedCostUsd = 0;
 
   // Phase boundary marker for hang detection (`current.json`). Guarded so an
   // injected tracker that throws still cannot abort the loop (best-effort like sinks).
@@ -431,6 +435,14 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
     // PreflightLight (D2 §4.1): STOP then budget (lock is a startup-only concern).
     if (await deps.isStopPresent()) return finish('STOP');
     if (!(await deps.isBudgetOk())) return finish('BUDGET_EXCEEDED');
+    // ADR-0021: 累積コストがこの launch のドル上限に達したら、イテレーション境界で
+    // 正当な非実行として終了する (exit 0)。日次の DAILY_MAX_COST_USD とはスコープが
+    // 違う (あちらは暦日、こちらは 1 launch) ので、互いの代替にはならない。
+    if (cfg.maxBudgetUsd !== undefined && accumulatedCostUsd >= cfg.maxBudgetUsd)
+      return finish(
+        'BUDGET_EXCEEDED',
+        `accumulated executor cost ${accumulatedCostUsd.toFixed(4)} USD >= max_budget_usd ${cfg.maxBudgetUsd}`,
+      );
 
     // Next (single strategy, D2 §3.6): the ready check of §4.1 #4. A broken
     // task-source (non-pass exit / garbage stdout / spawn failure) is a distinct
@@ -549,6 +561,8 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
       } catch {
         exec = { outcome: 'error' };
       }
+      // 失敗した実行でも課金は発生しているので、status を問わず加算する (ADR-0021)。
+      accumulatedCostUsd += Math.max(0, readCostUsd(exec.out?.cost) ?? 0);
 
       if (exec.outcome !== 'done') {
         // Executor failure path (stuck / timeout / crash) → OnFail, retry (D2 §2.3).
@@ -888,15 +902,22 @@ function executorFailureReason(exec: ExecClassification): string {
   return summary ? `executor ${exec.outcome}: ${summary}` : `executor ${exec.outcome}`;
 }
 
+/**
+ * Read the dollar amount out of an executor's optional `cost` object (D1 §1.3).
+ * Accepts both `usd_estimate` (what the bundled adapter emits) and `usd` (the shape
+ * D1's example uses). Returns undefined when nothing usable was reported — a
+ * non-reporting executor degrades to count/time budgets, as ADR-0021 accepts. Pure.
+ */
+function readCostUsd(cost: unknown): number | undefined {
+  if (cost === undefined || cost === null || typeof cost !== 'object') return undefined;
+  const record = cost as Record<string, unknown>;
+  const raw = record['usd_estimate'] ?? record['usd'];
+  return typeof raw === 'number' && Number.isFinite(raw) ? raw : undefined;
+}
+
 function toExecutorRecord(exec: ExecClassification): ExecutorRecord {
   const status = exec.outcome === 'error' ? undefined : exec.outcome;
-  const cost = exec.out?.cost;
-  let usd: number | undefined;
-  if (cost && typeof cost === 'object') {
-    const raw =
-      (cost as Record<string, unknown>).usd_estimate ?? (cost as Record<string, unknown>).usd;
-    if (typeof raw === 'number' && Number.isFinite(raw)) usd = raw;
-  }
+  const usd = readCostUsd(exec.out?.cost);
   return {
     ...(status != null ? { status } : {}),
     ...(usd != null ? { cost: { usdEstimate: usd } } : {}),

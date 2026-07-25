@@ -119,6 +119,8 @@ export interface CliOverrides {
   taskFilter?: string;
   kindFilter?: string;
   maxTurns?: string | number;
+  /** `--max-budget-usd` (ADR-0021 / D3 §2.1)。プロファイルの MAX_BUDGET_USD を一時上書き。 */
+  maxBudgetUsd?: string | number;
 }
 
 export interface ResolveConfigInput {
@@ -157,8 +159,13 @@ export function resolveConfig(input: ResolveConfigInput = {}): HaloConfig {
   );
   const dailyCostRaw = firstDefined(profile.DAILY_MAX_COST_USD, defaults.DAILY_MAX_COST_USD);
   const maxTurnsRaw = firstDefined(asStr(cli.maxTurns), profile.MAX_TURNS, defaults.MAX_TURNS);
-  // ADR-0021: 1 実行あたりの USD 上限 (06 §: MAX_BUDGET_USD → executor.in.budget.max_budget_usd)。
-  const maxBudgetRaw = firstDefined(profile.MAX_BUDGET_USD, defaults.MAX_BUDGET_USD);
+  // ADR-0021: 1 実行あたりの USD 上限 (06 §5: MAX_BUDGET_USD → executor.in.budget.max_budget_usd
+  // + core 側の累積判定)。他項目と同じく CLI > profile > defaults の三層で解決する。
+  const maxBudgetRaw = firstDefined(
+    asStr(cli.maxBudgetUsd),
+    profile.MAX_BUDGET_USD,
+    defaults.MAX_BUDGET_USD,
+  );
   const taskFilter = firstDefined(cli.taskFilter, profile.TASK_FILTER, defaults.TASK_FILTER);
   const kindFilter = firstDefined(cli.kindFilter, profile.KIND_FILTER, defaults.KIND_FILTER);
 

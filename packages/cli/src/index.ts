@@ -34,6 +34,7 @@ export const VALUE_FLAGS = [
   'autonomy',
   'timeout',
   'daily-budget',
+  'max-budget-usd',
   'profiles-dir',
   'days',
   'limit',

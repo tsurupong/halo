@@ -23,6 +23,7 @@ export const RUN_VALUE_FLAGS = [
   'autonomy',
   'timeout',
   'daily-budget',
+  'max-budget-usd',
   'profiles-dir',
   'max-turns',
 ] as const;
@@ -66,12 +67,14 @@ export function buildOverrides(parsed: ParsedArgs): CliOverrides {
   const autonomy = stringFlag(parsed, 'autonomy');
   const timeout = stringFlag(parsed, 'timeout');
   const dailyBudget = stringFlag(parsed, 'daily-budget');
+  const maxBudgetUsd = stringFlag(parsed, 'max-budget-usd');
   const maxTurns = stringFlag(parsed, 'max-turns');
   if (boolFlag(parsed, 'dry-run')) overrides.maxIter = 1;
   else if (maxIter !== undefined) overrides.maxIter = maxIter;
   if (autonomy !== undefined) overrides.autonomy = autonomy;
   if (timeout !== undefined) overrides.timeout = timeout;
   if (dailyBudget !== undefined) overrides.dailyBudget = dailyBudget;
+  if (maxBudgetUsd !== undefined) overrides.maxBudgetUsd = maxBudgetUsd;
   if (maxTurns !== undefined) overrides.maxTurns = maxTurns;
   return overrides;
 }
@@ -97,7 +100,7 @@ export async function runCommand(parsed: ParsedArgs, io: Io, deps: RunDeps): Pro
   if (profile === undefined) {
     throw usageError('missing <profile>', {
       usage:
-        'usage: halo run <profile> [--max-iter n] [--max-turns n] [--autonomy L1|L2|L3] [--timeout d] [--daily-budget n] [--dry-run]',
+        'usage: halo run <profile> [--max-iter n] [--max-turns n] [--autonomy L1|L2|L3] [--timeout d] [--daily-budget n] [--max-budget-usd n] [--dry-run]',
     });
   }
 
