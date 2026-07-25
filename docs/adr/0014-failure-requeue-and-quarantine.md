@@ -1,7 +1,7 @@
 # ADR-0014: Transient-Failure Requeue and Quarantine
 
 **Date**: 2026-07-15
-**Status**: proposed
+**Status**: accepted (implemented 2026-07-15, shipped in v0.2.0)
 **Deciders**: Owner
 
 ## Context

@@ -1,9 +1,18 @@
-// doctor の 10 検査 (D3 §4)。判定は各検査を純粋関数化し、環境事実 (バイナリ存在・
+// doctor の環境自己診断 (D3 §4)。判定は各検査を純粋関数化し、環境事実 (バイナリ存在・
 // 認証・パス整合) は Probes シームから注入してテスト可能にする。CLI は集計結果を
 // 終了コードへ写像するだけ (D3 §5.2: FAIL あり=1 / WARN のみ=0)。
+//
+// 検査は常時実行の c1-c9 / c12 / c13 に加え、probe を注入した場合のみ走る c10 (必須
+// コマンド, D10 §4) と c11 (スケジューラバックエンド, D10 §3.2) がある。既定の CLI 配線
+// (deps.ts) は両方を注入するので、実運用では 13 検査になる。
 import type { CliFs } from './fs.js';
 import { PORT_DIRS } from './scaffold.js';
 import { resolveBinPath, listTriggers, type TriggerContext } from './triggers.js';
+import {
+  checkExecutorSettingsDrift,
+  executorSettingsPath,
+  type ExecutorSettingsDrift,
+} from './executor-settings.js';
 
 export type CheckStatus = 'OK' | 'WARN' | 'FAIL';
 
@@ -241,6 +250,50 @@ export function checkLegacyLauncherConfig(offenders: string[]): CheckResult {
   };
 }
 
+/** c13 に渡す事実: 注入 settings が存在するか、存在するなら権威リストとの差分。 */
+export type ExecutorSettingsState =
+  { present: false } | { present: true; drift: ExecutorSettingsDrift };
+
+/**
+ * c13: 注入 deny settings のドリフト検査 (ADR-0019 §Risks の緩和策)。層1(deny) と
+ * 層2(gate) は同じ権威リストから生成されるが、実際に書かれたファイルが古い版のまま
+ * 残っていると事前強制だけが静かに縮退する — それを検知できるのはここだけ。
+ * 未生成 (初回 run 前) は WARN、内容の欠落・破損は FAIL。
+ */
+export function checkExecutorSettings(state: ExecutorSettingsState): CheckResult {
+  const id = 13;
+  const title = '注入 deny 設定';
+  if (!state.present) {
+    return {
+      id,
+      title,
+      status: 'WARN',
+      detail: '未生成 — `halo run` の起動時に生成されます (ADR-0019 層1)',
+    };
+  }
+  if (state.drift.status === 'unreadable') {
+    return {
+      id,
+      title,
+      status: 'FAIL',
+      detail: `解析不能 (${state.drift.reason}) — 次回 run で再生成されますが、事前強制が効いていません`,
+    };
+  }
+  if (state.drift.status === 'drift') {
+    const missing = [
+      ...state.drift.missingDeny,
+      ...state.drift.missingSandboxDenyRead.map((p) => `sandbox.denyRead:${p}`),
+    ];
+    return {
+      id,
+      title,
+      status: 'FAIL',
+      detail: `D4 §2.2 の deny が欠落 (${missing.length} 件): ${missing.join(', ')}`,
+    };
+  }
+  return { id, title, status: 'OK', detail: 'D4 §2.2 の deny 標準集合を充足' };
+}
+
 export function checkSchedulerBackend(backend: SchedulerBackend): CheckResult {
   if (backend === 'none')
     return {
@@ -266,13 +319,27 @@ export function aggregate(checks: CheckResult[]): DoctorReport {
   return { checks, ok, warn, fail, exitCode: fail > 0 ? 1 : 0 };
 }
 
+/** c13 の事実収集: 注入 settings を読んで権威リストと突き合わせる (I/O のみ)。 */
+async function readExecutorSettingsState(
+  haloDir: string,
+  fs: CliFs,
+): Promise<ExecutorSettingsState> {
+  const path = executorSettingsPath(haloDir);
+  if (!(await fs.exists(path))) return { present: false };
+  try {
+    return { present: true, drift: checkExecutorSettingsDrift(await fs.readFile(path)) };
+  } catch (err) {
+    return { present: true, drift: { status: 'unreadable', reason: (err as Error).message } };
+  }
+}
+
 function join(...parts: string[]): string {
   return parts
     .map((p, i) => (i === 0 ? p.replace(/\/$/, '') : p.replace(/^\/|\/$/g, '')))
     .join('/');
 }
 
-/** §4 の全 10 検査を実行して集計する。事実収集は Probes に委譲、判定は上の純粋関数。 */
+/** §4 の全検査を実行して集計する。事実収集は Probes に委譲、判定は上の純粋関数。 */
 export async function runAll(probes: DoctorProbes): Promise<DoctorReport> {
   const { haloDir, cwd, fs, command } = probes;
 
@@ -347,8 +414,9 @@ export async function runAll(probes: DoctorProbes): Promise<DoctorReport> {
     }
   }
   const c12 = checkLegacyLauncherConfig(legacyOffenders);
+  const c13 = checkExecutorSettings(await readExecutorSettingsState(haloDir, fs));
 
-  const checks = [c1, c2, c3, c4, c5, c6, c7, c8, c9, c12];
+  const checks = [c1, c2, c3, c4, c5, c6, c7, c8, c9, c12, c13];
 
   if (probes.commandExists) {
     const absent: string[] = [];

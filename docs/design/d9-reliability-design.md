@@ -57,6 +57,8 @@ Retry semantics: the watchdog never restarts the run itself; the next scheduled 
 
 Profile env keys, resolved in `packages/core/src/config.ts` alongside existing keys (CLI > profile env > defaults):
 
+> **Not implemented as specified.** `halo watchdog` is a standalone one-shot command and does not load a profile, so it reads these keys from the **process environment only** — `config.ts` has no `WATCHDOG_*` resolution and a value written into `.halo/profiles/<name>.env` has no effect. Export them in the scheduled command until this is wired.
+
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `WATCHDOG_TIMEOUT_SEC` | 1800 | default per-phase staleness limit |
@@ -90,11 +92,11 @@ function aggregateRuns(entries: IterationLog[]): RunAggregate;
 
 ## 4. Feature 3 — on-fail-requeue plugin
 
-Directory `plugins/on-fail-requeue/` following the standard layout (`plugin.json` + `requeue.sh` + `test.contract.sh` + `contract.fixtures.json`), mirroring `on-fail-record`.
+Directory `plugins/on-fail-requeue/` following the standard layout (`plugin.json` + `contract.fixtures.json`), mirroring `on-fail-record`. The implementation is TypeScript in `packages/plugins/src/on-fail-requeue/` with a co-located Vitest file (ADR-0017/0018 — the original `requeue.sh` + `test.contract.sh` layout is superseded).
 
 - `plugin.json`: `port: "on-fail"`, ordered **after** `on-fail-record` (record first so the catalog entry always exists even if requeue fails).
 - Input (stdin JSON, existing `OnFailIn`): `{task_id, reason, retry_count, gate?, workdir?}`.
-- Logic (`requeue.sh`):
+- Logic (`main.ts`):
   1. Classify `reason` against transient patterns: `rate.?limit|429|flaky|ECONNRESET|ETIMEDOUT|ENETUNREACH|timed?.?out|temporar`. Non-transient → exit 0 (record-only path).
   2. Counter: `count=$(cat .halo/requeue/<task_id>.count 2>/dev/null || echo 0)`; increment and write back.
   3. `count < REQUEUE_MAX_ATTEMPTS` (default 3) → `mv` the task file from wherever the loop moved it after failure back to `.halo/tasks/queue/`; else `mv` to `.halo/tasks/quarantine/` and remove the counter.
@@ -103,13 +105,13 @@ Directory `plugins/on-fail-requeue/` following the standard layout (`plugin.json
 - Env: `HALO_TASKS_DIR` (default `.halo/tasks`), `HALO_REQUEUE_DIR` (default `.halo/requeue`), `REQUEUE_MAX_ATTEMPTS` (default 3) — resolved by the shell with defaults, overridable via profile env.
 - Contract fixtures: transient-below-limit (task returns to queue, counter=1), transient-at-limit (task in quarantine, counter removed), non-transient (no fs change), missing task file (exit 0).
 
-Open dependency to verify during implementation: where the local task source moves a failed task file (queue → in-progress → failed?). The `mv` source path in step 3 must match `task-source-local`'s actual layout; the contract test pins this.
+**Resolved during implementation**: `task-source-local` leaves a failed task in `queue/` (it only moves it to `needs-human/` on reaching its own threshold), so the file is normally already at the destination and step 3 is a no-op move. The plugin therefore searches every `$HALO_TASKS_DIR/*/` subdirectory before giving up. Note that the escalation threshold is now evaluated by `task-source-local` against a **persisted** count (`.halo/tasks/retry/<id>.count`), not the per-run `retry_count`; `on-fail-requeue`'s own counter under `.halo/requeue/` is independent and bounds only the transient-requeue path.
 
 ## 5. Test strategy
 
 - `packages/core`: `watchdog.test.ts` — staleness boundaries (exact limit, idle phase, missing file), per-phase overrides, verdict fields. No processes involved.
 - `packages/cli`: `watchdog.command.test.ts` — injected fake fs/pid-check/kill; asserts kill called only when lock pid alive AND stale; `skip` moves the right file. `status.test.ts` — `aggregateRuns` over fixture `iter_N.json` sets (counts, categories, `--days` filter).
-- `plugins/on-fail-requeue`: `test.contract.sh` over the four fixtures; runs under `pnpm test:contract`.
+- `on-fail-requeue`: a Vitest file over the four fixtures, spawning the built entry exactly as `runPort` does; runs under `pnpm test:contract`.
 - E2E (manual): `report` mode against a live selfhost run to tune timeouts before enabling `kill`.
 
 ## 6. Rollout and rollback

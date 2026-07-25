@@ -1,7 +1,7 @@
 # ADR-0015: POSIX Portability Target and Scheduler Backend Abstraction
 
 **Date**: 2026-07-16
-**Status**: proposed
+**Status**: accepted (amended by [ADR-0017](0017-typescript-plugins.md) — the POSIX shell-hardening workstream is superseded by the TypeScript rewrite; the scheduler backend abstraction and the fire/doctor fixes are retained and implemented)
 **Deciders**: Owner
 
 ## Context

@@ -159,6 +159,39 @@ describe('task-source-local contract', () => {
     expect(existsSync(join(tasksDir, 'needs-human', 'task-4.md'))).toBe(true);
   });
 
+  // N4: 通算リトライ回数はファイルで持つ。コアの retry_count は runLoop 内の in-memory
+  // 値なので、trigger が run を都度起動する運用では毎回 1 で届き、閾値に到達しない。
+  it('fail: persists the running total across processes and escalates on the third one', () => {
+    const { tasksDir, queueDir } = setupTasksDir();
+    writeFileSync(join(queueDir, 'task-9.md'), '# T\nbody');
+    const env = baseEnv(tasksDir);
+    // 別プロセスの3回の失敗を再現。毎回 retry_count=1 で届く。
+    for (const reason of ['first', 'second', 'third']) {
+      runLauncher(JSON.stringify({ op: 'fail', task_id: 'task-9', reason, retry_count: 1 }), env);
+    }
+    const log = readFileSync(join(tasksDir, 'failures.log'), 'utf8');
+    expect(log).toContain('fail #1: first');
+    expect(log).toContain('fail #2: second');
+    expect(log).toContain('fail #3: third');
+    expect(existsSync(join(tasksDir, 'needs-human', 'task-9.md'))).toBe(true);
+    expect(existsSync(join(queueDir, 'task-9.md'))).toBe(false);
+    // 隔離まで進んだら計数は片付ける。
+    expect(existsSync(join(tasksDir, 'retry', 'task-9.count'))).toBe(false);
+  });
+
+  it('complete: clears the persisted retry count so a re-submitted id starts at zero', () => {
+    const { tasksDir, queueDir } = setupTasksDir();
+    writeFileSync(join(queueDir, 'task-10.md'), '# T\nbody');
+    const env = baseEnv(tasksDir);
+    runLauncher(
+      JSON.stringify({ op: 'fail', task_id: 'task-10', reason: 'flaky', retry_count: 1 }),
+      env,
+    );
+    expect(readFileSync(join(tasksDir, 'retry', 'task-10.count'), 'utf8').trim()).toBe('1');
+    runLauncher(JSON.stringify({ op: 'complete', task_id: 'task-10', pr_url: 'commit:abc' }), env);
+    expect(existsSync(join(tasksDir, 'retry', 'task-10.count'))).toBe(false);
+  });
+
   it('unknown op -> exit 2, stdout empty', () => {
     const { tasksDir } = setupTasksDir();
     const { code, stdout } = runLauncher(JSON.stringify({ op: 'bogus' }), baseEnv(tasksDir));

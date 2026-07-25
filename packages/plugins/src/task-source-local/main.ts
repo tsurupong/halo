@@ -13,6 +13,7 @@ import {
   appendFileSync,
   writeFileSync,
   existsSync,
+  rmSync,
 } from 'node:fs';
 import { join, basename } from 'node:path';
 import { readStdinJson, writeStdoutJson, diag, str } from '../lib/io.js';
@@ -22,6 +23,9 @@ const failThreshold = Number(process.env['HALO_FAIL_THRESHOLD'] ?? '3');
 const queueDir = join(tasksDir, 'queue');
 const doneDir = join(tasksDir, 'done');
 const needsHumanDir = join(tasksDir, 'needs-human');
+// 通算リトライ回数の置き場 (N4)。コアの retry_count は runLoop 内の in-memory 値なので、
+// trigger が run を都度起動する運用では毎回 0 起点になり閾値に到達しない。
+const retryDir = join(tasksDir, 'retry');
 mkdirSync(queueDir, { recursive: true });
 mkdirSync(doneDir, { recursive: true });
 mkdirSync(needsHumanDir, { recursive: true });
@@ -46,6 +50,35 @@ function extractTitle(body: string, fallback: string): string {
     }
   }
   return fallback;
+}
+
+/** task_id をファイル名として使う前の最低限の検証 (パス区切り等の混入を拒否)。 */
+function safeTaskId(taskId: string): string {
+  if (!/^[A-Za-z0-9._-]+$/.test(taskId) || taskId.startsWith('.')) {
+    die(`unsafe task_id: '${taskId}'`);
+  }
+  return taskId;
+}
+
+function retryCountPath(taskId: string): string {
+  return join(retryDir, `${safeTaskId(taskId)}.count`);
+}
+
+/** 通算リトライ回数を読む。欠損・破損は 0 (安全側: エスカレーションが遅れるだけ)。 */
+function readRetryCount(taskId: string): number {
+  const path = retryCountPath(taskId);
+  if (!existsSync(path)) return 0;
+  const raw = readFileSync(path, 'utf8').trim();
+  return /^[0-9]+$/.test(raw) ? Number(raw) : 0;
+}
+
+function writeRetryCount(taskId: string, count: number): void {
+  mkdirSync(retryDir, { recursive: true });
+  writeFileSync(retryCountPath(taskId), `${count}\n`);
+}
+
+function clearRetryCount(taskId: string): void {
+  rmSync(retryCountPath(taskId), { force: true });
 }
 
 const input = await readStdinJson().catch(() => undefined);
@@ -79,6 +112,9 @@ switch (op) {
       join(doneDir, `${taskId}.result`),
       `completed_at=${timestamp()}\npr_url=${prUrl}\n`,
     );
+    // 完了したタスクの計数は残さない。残すと同名 task_id を再投入したときに
+    // 前回の回数を引き継いでしまう。
+    clearRetryCount(taskId);
     break;
   }
   case 'fail': {
@@ -90,10 +126,15 @@ switch (op) {
         : undefined;
     const rc = typeof rcRaw === 'number' ? rcRaw : 0;
     if (taskId === undefined) die('fail requires task_id');
-    appendFileSync(join(tasksDir, 'failures.log'), `${timestamp()} fail #${rc}: ${reason}\n`);
-    if (rc >= failThreshold) {
+    // 通算回数はファイルに持つ (N4)。コアの retry_count はプロセス内の値なので、
+    // run を都度起動する trigger 運用では毎回 0 起点になり閾値に到達しない。
+    const attempts = Math.max(readRetryCount(taskId) + 1, rc);
+    writeRetryCount(taskId, attempts);
+    appendFileSync(join(tasksDir, 'failures.log'), `${timestamp()} fail #${attempts}: ${reason}\n`);
+    if (attempts >= failThreshold) {
       const src = join(queueDir, `${taskId}.md`);
       if (existsSync(src)) renameSync(src, join(needsHumanDir, `${taskId}.md`));
+      clearRetryCount(taskId);
     }
     break;
   }

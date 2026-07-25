@@ -1,7 +1,7 @@
 # ADR-0016: Local Commit Sink and Generalized Completion Reference
 
 **Date**: 2026-07-16
-**Status**: proposed
+**Status**: accepted (implemented 2026-07-16, shipped in v0.2.0)
 **Deciders**: Owner
 
 ## Context

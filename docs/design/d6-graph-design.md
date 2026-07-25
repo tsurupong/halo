@@ -311,7 +311,7 @@ Issuing is via the task-source adapter (GitHub Issues). Issuing itself is done r
 
 ### 5.1 Positioning
 
-The dynamic verification borne by the `test.sh` of the `docs-md` runtime (D1 §1.7). It references the `DomainTerm` nodes of the knowledge graph and inspects whether the changed document is consistent with the ubiquitous language. A concrete example of using the graph as the foundation of a quality gate (ADR-0005: because there are types, you can write automatic gates).
+The dynamic verification borne by the `test` role of the `docs-md` runtime (D1 §1.7). It references the `DomainTerm` nodes of the knowledge graph and inspects whether the changed document is consistent with the ubiquitous language. A concrete example of using the graph as the foundation of a quality gate (ADR-0005: because there are types, you can write automatic gates).
 
 ### 5.2 Check kinds and severity
 

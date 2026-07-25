@@ -1,7 +1,7 @@
 # ADR-0017: Rewrite Shell Plugins in TypeScript
 
 **Date**: 2026-07-16
-**Status**: proposed
+**Status**: accepted (implemented 2026-07-16, shipped in v0.2.0; §Decision item 3 superseded by ADR-0018)
 **Deciders**: Owner
 
 **Superseded-by**: ADR-0018 (Decision item 3, "Thin POSIX `sh` launchers", is

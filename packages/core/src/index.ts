@@ -9,6 +9,7 @@ export * from './config.js';
 export * from './lock.js';
 export * from './discovery.js';
 export * from './harness.js';
+export * from './executor-settings.js';
 export * from './runPort.js';
 export * from './budget.js';
 export * from './autonomy.js';

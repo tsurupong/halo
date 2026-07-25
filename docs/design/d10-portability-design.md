@@ -2,12 +2,18 @@
 
 Related: ADR-0015 (POSIX target + scheduler abstraction), 04 (trigger/profiles/preflight), D3 (CLI spec), D5 (plugin dev guide), D7 (ops runbook), D9 (reliability design).
 
-> **Partially superseded by ADR-0017 / D11 (2026-07-16).** Workstreams 4 (shell-idiom
+> **Partially superseded by ADR-0017 / ADR-0018 / D11.** Workstreams 4 (shell-idiom
 > hardening, `require.sh` preflight) and 5 (ubuntu+macos CI matrix) are superseded by the
-> TypeScript plugin rewrite: bundled plugins are now TypeScript behind thin POSIX `sh`
-> launchers, the scheduler abstraction (WS2) lives in `packages/plugins/src/lib/scheduler.ts`
-> with the same identity keys, and CI runs on a single ubuntu runner. WS1 (fire correctness)
-> and WS3 (doctor checks) survive, with doctor c10 now requiring `node/git/claude`.
+> TypeScript plugin rewrite, and CI runs on a single ubuntu runner. The scheduler
+> abstraction (WS2) lives in `packages/plugins/src/lib/scheduler.ts` with the same identity
+> keys. WS1 (fire correctness) and WS3 (doctor checks) survive, with doctor c10 requiring
+> `node/git/claude`.
+>
+> **Read every `install.sh` / `uninstall.sh` / `fire` below as a role, not a filename.**
+> ADR-0018 removed the `sh` launchers entirely: the three trigger roles are now JS modules
+> declared in `plugin.json` as `entry` (fire) plus `aux.install` / `aux.uninstall`, spawned
+> as `node <entry>`. The backend-detection logic and the argument contract described here
+> are unchanged; only the spawn target is.
 
 ## 1. Scope and goals
 

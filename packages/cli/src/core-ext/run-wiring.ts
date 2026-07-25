@@ -19,11 +19,17 @@ import type {
 } from '@tsurupong/halo-core';
 import {
   discoverPort,
+  checkSinglePortPopulated,
+  portDir,
   findHarnessYml,
   loadHarnessYml,
   readKindPrompt,
   createNodeDiscoveryFs,
   runPort,
+  buildExecutorSettings,
+  serializeExecutorSettings,
+  executorSettingsPath,
+  EXECUTOR_SETTINGS_DIRNAME,
   runPreflightLight,
   runPreflightHeavy,
   isStopFilePresent,
@@ -116,41 +122,34 @@ function executorEnv(base: Record<string, string>): Record<string, string> {
 }
 
 /**
- * ADR-0019 層1(事前強制): ADR-0004 保護集合への書き込みを Claude Code の permission
- * deny で spawn 時に拒否する HALO 管理 settings。worktree 外(haloDir 配下)に置き、
- * リポジトリ側から書き換え不能にする。層2(事後検査)の gate-loop-audit は継続。
+ * ADR-0019 層1(事前強制): D4 §2.2 の deny 標準集合と `.harness.yml` の protectedPaths を
+ * spawn 時に注入する HALO 管理 settings を生成し、そのパスを返す。worktree 外(haloDir 配下)
+ * に置くことでリポジトリ側から書き換え不能にする(D4 §2.4 #4)。パターンの権威は core の
+ * executor-settings 側にあり、`halo doctor` のドリフト検査も同じ定数を参照する — ADR-0019
+ * §Risks が挙げる「deny と gate の乖離」を単一リスト化で構造的に防ぐ。
+ *
+ * 生成に失敗したら例外を投げる。ADR-0019 は二層を **mandatory** と規定しており、事前層を
+ * 欠いたまま無人実行に入るのは ADR が防ごうとした状態そのものなので、黙って層2だけで
+ * 走るより起動を止める方が安全側。
  */
-const EXECUTOR_DENY_SETTINGS = {
-  permissions: {
-    deny: [
-      'Write(**/CLAUDE.md)',
-      'Edit(**/CLAUDE.md)',
-      'Write(**/PROMPT.md)',
-      'Edit(**/PROMPT.md)',
-      'Write(**/.harness.yml)',
-      'Edit(**/.harness.yml)',
-      'Write(**/.claude/settings.json)',
-      'Edit(**/.claude/settings.json)',
-    ],
-  },
-} as const;
-
-/** deny settings を haloDir 配下へ生成し、そのパスを返す(失敗時 undefined = 注入なし)。 */
 async function writeExecutorSettings(
   haloDir: string,
+  protectedPaths: readonly string[],
   fs: {
     mkdir: (p: string, o: { recursive: true }) => Promise<unknown>;
     writeFile: (p: string, d: string) => Promise<void>;
   },
-): Promise<string | undefined> {
-  const dir = join(haloDir, 'settings');
-  const path = join(dir, 'executor-settings.json');
+): Promise<string> {
+  const path = executorSettingsPath(haloDir);
   try {
-    await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(path, JSON.stringify(EXECUTOR_DENY_SETTINGS, null, 2) + '\n');
+    await fs.mkdir(join(haloDir, EXECUTOR_SETTINGS_DIRNAME), { recursive: true });
+    await fs.writeFile(path, serializeExecutorSettings(buildExecutorSettings({ protectedPaths })));
     return path;
-  } catch {
-    return undefined; // 層1が作れなくても層2 (gate-loop-audit) は常に有効。
+  } catch (err) {
+    throw new Error(
+      `failed to write the executor permission settings (${path}): ${(err as Error).message}. ` +
+        'ADR-0019 requires the ex-ante deny layer; refusing to run without it.',
+    );
   }
 }
 
@@ -250,20 +249,57 @@ function seamTmpdir(): string {
 
 // --- discovery: 6 ポートを LoopPorts へ ---------------------------------------
 
-/** haloDir 下の全 loop ポートを走査して LoopPorts を組む (D2 §6)。 */
-export async function discoverLoopPorts(haloDir: string, fs: DiscoveryFs): Promise<LoopPorts> {
-  const [taskSource, context, executor, gate, sink, onFail] = await Promise.all(
+/** 走査で弾かれたプラグイン。ポート名を添えて呼び出し元が原因を特定できるようにする。 */
+export interface LoopPortIssue {
+  port: string;
+  dir: string;
+  message: string;
+}
+
+/** ポート走査の結果一式。issues が空でない run は起動させない (下の runLoop 参照)。 */
+export interface LoopPortDiscovery {
+  ports: LoopPorts;
+  issues: LoopPortIssue[];
+}
+
+/**
+ * haloDir 下の全 loop ポートを走査して LoopPorts を組む (D2 §6)。
+ *
+ * discoverPort は manifest 不正・entry 不在のプラグインを issues に積んで plugins から
+ * 除外する。ここでそれを捨てると、たとえば gate-loop-audit が 1 枚欠けたまま残りの
+ * ゲートだけで pass 判定が続く — 誰にも気づかれずに安全網が薄くなる。呼び出し元が
+ * 判断できるよう、除外理由をそのまま返す (D1 §6.2、ADR-0004)。
+ * 単一ポート (task-source / executor) の 0 件も core の判定関数で同じ器に載せる。
+ */
+export async function discoverLoopPorts(
+  haloDir: string,
+  fs: DiscoveryFs,
+): Promise<LoopPortDiscovery> {
+  const discoveries = await Promise.all(
     LOOP_PORT_ORDER.map((port) =>
       discoverPort({ haloRoot: haloDir, port, fs, requireEntry: true }),
     ),
   );
+  const issues: LoopPortIssue[] = discoveries.flatMap((d) =>
+    d.issues.map((i) => ({ port: d.port, dir: i.dir, message: i.message })),
+  );
+  for (const d of discoveries) {
+    const populated = checkSinglePortPopulated(d);
+    if (!populated.ok) {
+      issues.push({ port: d.port, dir: portDir(haloDir, d.port), message: populated.reason });
+    }
+  }
+  const [taskSource, context, executor, gate, sink, onFail] = discoveries;
   return {
-    taskSource: taskSource!.plugins,
-    context: context!.plugins,
-    executor: executor!.plugins,
-    gate: gate!.plugins,
-    sink: sink!.plugins,
-    onFail: onFail!.plugins,
+    ports: {
+      taskSource: taskSource!.plugins,
+      context: context!.plugins,
+      executor: executor!.plugins,
+      gate: gate!.plugins,
+      sink: sink!.plugins,
+      onFail: onFail!.plugins,
+    },
+    issues,
   };
 }
 
@@ -367,7 +403,18 @@ export function createRunHooks(seams: RunWiringSeams = nodeRunWiringSeams()): Ru
       if (!acq.acquired) return { endReason: 'STOP', iterations: [] };
 
       try {
-        const ports = await discoverLoopPorts(ctx.haloDir, seams.discoveryFs);
+        const discovered = await discoverLoopPorts(ctx.haloDir, seams.discoveryFs);
+        if (discovered.issues.length > 0) {
+          // ADR-0004 は代替案「検知のみ・警告して継続」を『無人運用では警告は誰も
+          // 読まない』として却下している。ゲートが 1 枚黙って欠けたまま pass 判定を
+          // 続ける方が、起動を止めるより危険なので、ここで落とす。
+          throw new Error(
+            `plugin discovery rejected ${discovered.issues.length} plugin(s); refusing to run ` +
+              `with a silently reduced port set:\n` +
+              discovered.issues.map((i) => `  - [${i.port}] ${i.dir}: ${i.message}`).join('\n'),
+          );
+        }
+        const ports = discovered.ports;
         // C3 (要件 §4.2③ / D2 §8.2): worktree 作成後に採用 runtime の setup(依存実体化)を
         // 走らせるため runtime ポートを発見する。Phase 1 は単一 runtime 前提で先頭を採用。
         // 未配備・発見失敗なら setup はスキップ(依存不足は gate が検出する)。
@@ -383,15 +430,20 @@ export function createRunHooks(seams: RunWiringSeams = nodeRunWiringSeams()): Ru
         } catch {
           runtimePlugin = undefined;
         }
-        // ADR-0016 の完了判定基準: worktree「作成時点」の HEAD を控える。完了時の
-        // repo HEAD と比較すると、run 中にオペレータがコミットしただけで差分が出て
-        // 成果ゼロの偽 complete が発火する (2026-07-16 に実際に発生)。
-        // ADR-0019 層1: executor 用 deny settings を生成 (worktree 外・HALO 管理)。
-        const executorSettingsFile = await writeExecutorSettings(ctx.haloDir, seams.logsFs);
         // kind 解決 (D2 §7.2): 宣言は run 中不変なので 1 回だけ読む。読めない/壊れている
         // 場合は kindPrompt を配線しない — .harness.yml 不在は preflightHeavy が
         // NO_HARNESS_YML で既に止めており、ここで二重に落とす必要はない。
         const loadedHarness = await loadHarnessYml(ctx.cwd, seams.discoveryFs).catch(() => null);
+        // ADR-0019 層1: executor 用 deny settings を生成 (worktree 外・HALO 管理)。
+        // protectedPaths を渡すので、層1(deny) と層2(gate) が同一の保護集合を見る。
+        const executorSettingsFile = await writeExecutorSettings(
+          ctx.haloDir,
+          loadedHarness?.harness.protectedPaths ?? [],
+          seams.logsFs,
+        );
+        // ADR-0016 の完了判定基準: worktree「作成時点」の HEAD を控える。完了時の
+        // repo HEAD と比較すると、run 中にオペレータがコミットしただけで差分が出て
+        // 成果ゼロの偽 complete が発火する (2026-07-16 に実際に発生)。
         const worktreeBase = new Map<string, string>();
         const logger = createLogger({ logDir: logsDir(ctx.haloDir), fs: seams.logsFs });
         // ハング検知: 各工程境界で logs/current.json を上書き (task md: phase-boundary-log)。
@@ -416,10 +468,8 @@ export function createRunHooks(seams: RunWiringSeams = nodeRunWiringSeams()): Ru
               : {}),
           },
           ports,
-          runner: makeRunner(ctx, {
-            // ADR-0019 層1: 保護集合 deny の settings を run 毎に haloDir 下へ再生成。
-            ...(executorSettingsFile !== undefined ? { executorSettingsFile } : {}),
-          }),
+          // ADR-0019 層1: 保護集合 deny の settings を run 毎に haloDir 下へ再生成。
+          runner: makeRunner(ctx, { executorSettingsFile }),
           logger,
           phaseTracker,
           now: seams.now,

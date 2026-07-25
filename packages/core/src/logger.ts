@@ -43,6 +43,21 @@ export interface TaskRecord {
 
 export type Outcome = 'passed' | 'failed' | 'escalated' | 'no_task' | 'stopped' | 'aborted_env';
 
+/**
+ * One plugin's captured stderr for this iteration (D1 §3.3, D2 §3.4). stderr has no
+ * contractual meaning, but it is the *only* human-readable diagnostic channel a plugin
+ * has — dropping it leaves an unattended failure with nothing but an exit code. Sinks
+ * and on-fail plugins are best-effort, so without this their failures are fully silent.
+ */
+export interface PluginDiagnostic {
+  /** Port the plugin belongs to (`gate` / `sink` / `executor` …). */
+  port: string;
+  /** Plugin name as discovered. */
+  plugin: string;
+  /** Captured stderr; the logger redacts secrets and keeps the tail. */
+  stderr: string;
+}
+
 /** Structured input the loop hands to the logger for one iteration. */
 export interface IterationInput {
   iter: number;
@@ -54,6 +69,8 @@ export interface IterationInput {
   task?: Partial<TaskRecord>;
   executor?: ExecutorRecord;
   gates?: GateResult[];
+  /** Captured plugin stderr for this iteration (D1 §3.3). */
+  diagnostics?: PluginDiagnostic[];
   outcome: Outcome;
 }
 
@@ -86,6 +103,8 @@ export interface IterationLog {
     duration_sec?: number;
   }>;
   gate_pass_rate: number | null;
+  /** Captured plugin stderr, redacted and tail-truncated (D1 §3.3). Omitted when empty. */
+  diagnostics?: Array<{ port: string; plugin: string; stderr: string }>;
   outcome: Outcome;
 }
 
@@ -110,6 +129,11 @@ export const LOGGER_DEFAULTS = {
     /(?:GH_TOKEN|GITHUB_TOKEN|API_KEY|SECRET|PASSWORD)\s*=\s*\S+/gi,
   ] as RegExp[],
   redactionMask: '***REDACTED***',
+  /**
+   * Per-plugin stderr kept in `iter_N.json`. The tail is what matters (the error is at
+   * the end), and an unbounded executor stderr would otherwise dominate the log file.
+   */
+  maxDiagnosticChars: 2000,
 } as const;
 
 export interface RedactionOptions {
@@ -150,6 +174,18 @@ export function computeGatePassRate(gates: readonly GateResult[]): number | null
 
 export interface FormatOptions extends RedactionOptions {
   defaultKind?: string;
+  /** Cap per diagnostic entry; defaults to {@link LOGGER_DEFAULTS.maxDiagnosticChars}. */
+  maxDiagnosticChars?: number;
+}
+
+/**
+ * Redact + keep the tail of one captured stderr (D8 §1.2 機微情報の非混入). Truncation
+ * keeps the end because that is where the failure message lands. Pure.
+ */
+export function formatDiagnosticText(text: string, options: FormatOptions = {}): string {
+  const max = options.maxDiagnosticChars ?? LOGGER_DEFAULTS.maxDiagnosticChars;
+  const redacted = redactSecrets(text.trim(), options);
+  return redacted.length > max ? `…${redacted.slice(-max)}` : redacted;
 }
 
 /**
@@ -170,6 +206,14 @@ export function formatIterationLog(
     ...(g.durationSec != null ? { duration_sec: g.durationSec } : {}),
   }));
 
+  const diagnostics = (input.diagnostics ?? [])
+    .map((d) => ({
+      port: d.port,
+      plugin: d.plugin,
+      stderr: formatDiagnosticText(d.stderr, options),
+    }))
+    .filter((d) => d.stderr !== '');
+
   const task = input.task ?? {};
   const log: IterationLog = {
     iter: input.iter,
@@ -188,6 +232,7 @@ export function formatIterationLog(
     ...(input.executor ? { executor: formatExecutor(input.executor) } : {}),
     gates,
     gate_pass_rate: computeGatePassRate(input.gates ?? []),
+    ...(diagnostics.length > 0 ? { diagnostics } : {}),
     outcome: input.outcome,
   };
   return log;

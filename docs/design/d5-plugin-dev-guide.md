@@ -2,8 +2,8 @@
 
 | Item | Content |
 |---|---|
-| Document version | 1.0 |
-| Prerequisites | HALO Requirements Specification v1.8 / D1 Contract Specification v1.0 are the governing upper-level documents |
+| Document version | 1.1 (2026-07-25: `exec`→`entry`/`aux` per ADR-0018 across the manifest, runtime/trigger bundles and samples; sink autonomy table per ADR-0016) |
+| Prerequisites | HALO Requirements Specification v1.8 / D1 Contract Specification v1.1 are the governing upper-level documents |
 | Positioning | **Public — the linchpin of ecosystem formation**. A public tutorial for third-party developers |
 | Public/Private | Public (OSS) |
 | Authoring timing | Before OSS release (Phase 3 as a guideline). Can begin once D1 is finalized |
@@ -22,13 +22,18 @@ The only point of contact between plugins and the core is the **process boundary
 2. Receives a single JSON object from **stdout** (only for ports that require output)
 3. Determines pass/fail and success/failure via the **exit code** (`0` = pass, `2` = fail, others = error)
 
-Because these three points are the entire contract, **plugins can be written in any language**. Even though the core is TypeScript, your plugin can be bash, Python, or Go. This guide shows examples in two languages, TypeScript (Node) and bash.
+Because these three points are the entire contract, the *boundary* is language-agnostic: nothing in the JSON or the exit-code convention assumes a language.
 
-> **Note (ADR-0017 / D11, 2026-07-16):** all bundled plugins are now TypeScript in
-> `packages/plugins`, spawned through thin POSIX `sh` launchers kept in `plugins/<name>/`
-> (the `plugin.json` contract below is unchanged). Their behavior tests are Vitest files
-> next to the sources (`packages/plugins/src/<name>/<name>.test.ts`); the bash examples in
-> this guide remain valid for third-party plugins.
+> **What actually gets spawned (ADR-0017 / ADR-0018).** All bundled plugins are TypeScript
+> in `packages/plugins`, and since v0.3.0 the core spawns a plugin as
+> `process.execPath <entry>` — the POSIX `sh` launchers of ADR-0017 were removed, and with
+> them the exec-bit / shebang / `PATH` dependencies. **So a plugin activated through
+> `ports/<port>.d/` must today be a JS module**, and `plugin.json` declares it in `entry`
+> (the old `exec` field is rejected). A plugin written in another language is still
+> perfectly expressible against the contract — you just need a small JS entry that spawns
+> it, until a manifest field for an explicit interpreter is added (ADR-0018 §Risks).
+> Bundled plugins' behavior tests are Vitest files next to the sources
+> (`packages/plugins/src/<name>/<name>.test.ts`).
 
 ```
       ┌─────────────┐   stdin(JSON)   ┌──────────────────┐
@@ -49,8 +54,12 @@ A plugin can be constituted from a minimum of 2 files.
 ```
 my-plugin/
 ├── plugin.json   ← manifest (the core reads its metadata)
-└── <executable>  ← the file that plugin.json's exec points to
+└── main.js       ← the JS module that plugin.json's `entry` points to
 ```
+
+> **Since ADR-0018 the entry is always a JS module.** The core spawns it as
+> `process.execPath <entry>` — no shell, no exec bit, no shebang. The `exec` field of
+> ≤ v0.2.0 was removed in v0.3.0 and is now **rejected** by discovery.
 
 ### 1.1 Required fields of plugin.json
 
@@ -61,9 +70,9 @@ my-plugin/
 | `name` | ✓ | Plugin identifier (e.g. `@halo/plugin-*`) |
 | `version` | ✓ | The plugin's own semver (`^\d+\.\d+\.\d+...`) |
 | `port` | ✓ | The port it belongs to (one of `task-source`/`context`/`executor`/`gate`/`sink`/`on-fail`/`runtime`/`trigger`) |
-| `exec` | ✓ | Relative path to the executable (bash/node/python all acceptable) |
+| `entry` | ✓ | Relative (or absolute) path to the plugin's main JS entry module (ADR-0018) |
 
-Optional fields are `order` (execution order), `minAutonomy` (autonomy filter for sink etc.), `timeoutSec` (timeout), and `env` (environment variables to inject). See D1 §2 for details.
+Optional fields are `aux` (named auxiliary JS entries — used by runtime `check`/`test` and trigger `install`/`uninstall`), `order` (execution order), `minAutonomy` (autonomy filter for sink etc.), `timeoutSec` (timeout), and `env` (environment variables to inject). See D1 §2 for details.
 
 > It is `additionalProperties: false`. Adding a key not in the D1 schema will fail validation.
 
@@ -78,7 +87,7 @@ Let's build a gate that inspects "whether `console.log` remains in changed files
   "name": "@example/plugin-gate-no-console",
   "version": "1.0.0",
   "port": "gate",
-  "exec": "./check.mjs",
+  "entry": "./check.mjs",
   "order": 25,
   "timeoutSec": 30
 }
@@ -139,6 +148,18 @@ echo "exit=$?"
 
 Writing the same gate in bash looks like the following. In bash, using `jq` for JSON parsing is the concise approach.
 
+> **This example shows the contract, not a spawnable layout.** Since ADR-0018 `entry` is
+> always a JS module, so a shell implementation needs a one-line JS entry that spawns it:
+>
+> ```javascript
+> // my-gate-sh/main.js — entry; hands stdin/stdout/exit code straight through
+> import { spawnSync } from 'node:child_process';
+> const r = spawnSync('bash', [new URL('./check.sh', import.meta.url).pathname], {
+>   stdio: 'inherit',
+> });
+> process.exit(r.status ?? 1);
+> ```
+
 `my-gate-sh/plugin.json`:
 
 ```json
@@ -146,7 +167,7 @@ Writing the same gate in bash looks like the following. In bash, using `jq` for 
   "name": "@example/plugin-gate-no-console-sh",
   "version": "1.0.0",
   "port": "gate",
-  "exec": "./check.sh",
+  "entry": "./main.js",
   "order": 25,
   "timeoutSec": 30
 }
@@ -262,7 +283,7 @@ The core that runs the prompt. The initial adapter is `claude -p` (headless).
 - `exit 0` = pass, `exit 2` = fail (same convention as Claude Code hooks). **Abnormal termination other than exit 2 is also treated as fail, erring on the safe side.**
 - Only on fail does it write `{ reason, hint?, gate? }` to stdout. On pass it writes nothing to stdout.
 - gate.d is run in full in numeric order, and **if even one fails, the whole thing fails** (logical AND). The `reason` of a failure is re-injected into the next iteration's prompt.
-- The idiom is to make `10-typecheck`/`20-lint`/`30-test` thin wrappers that hold no actual commands and delegate to the adopted runtime's `check.sh`/`test.sh` (§2.7).
+- The idiom is to make `10-typecheck`/`30-test` thin wrappers that hold no actual commands and delegate to the adopted runtime's `check`/`test` roles (§2.7). Lint is folded into the runtime `check`, so there is no separate `20-lint` gate.
 
 ### 2.5 ⑤ sink
 
@@ -272,11 +293,11 @@ Side effects after passing (commit / PR creation / log recording). No output.
 
   | AUTONOMY | Effective sinks (initial configuration) |
   |---|---|
-  | L1 | `20-progress-log` only |
-  | L2 | `20-progress-log` / `10-git-commit` / `15-create-pr` (**draft PR**) |
-  | L3 | All L2 sinks + `15-create-pr` (**normal PR**) |
+  | L1 | `sink-git-commit` + `sink-progress-log` (both declare `minAutonomy: L1`) |
+  | L2 | the L1 set + any `minAutonomy: L2` sink (no bundled sink declares L2 yet — D1 §1.5) |
+  | L3 | the L2 set + any `minAutonomy: L3` sink, and every sink that declares no `minAutonomy` |
 
-  `15-create-pr` is enabled with `minAutonomy: "L2"` and reads the `AUTONOMY` env to differentiate: a draft PR at L2 and a normal PR at L3 (branching within a single sink). Autonomy is cumulative (L3 ⊇ L2 ⊇ L1).
+  Autonomy is cumulative (L3 ⊇ L2 ⊇ L1). The bundled set declares `L1` for both `sink-git-commit` (ADR-0016: a local commit is evidence, not publication) and `sink-progress-log`, so nothing extra runs above L1 yet. A future `create-pr` sink declares `L2` and reads the `AUTONOMY` env to differentiate a draft PR at L2 from a normal PR at L3 (branching within a single sink) — D1 §1.5.
 
 - If `minAutonomy` is **left undeclared, it errs to the safest side (equivalent to L3)** and is skipped at L1/L2 (D1 §2). If you want a reporting sink to run even at L1, explicitly write `"minAutonomy": "L1"`.
 - Best-effort. If one sink fails, the other sinks continue. Do not give a sink side effects that drag in other sinks.
@@ -292,18 +313,19 @@ Run in full in numeric order on gate fail or executor stuck/timeout. No output.
 
 ### 2.7 ⑦ runtime
 
-Absorbs not the "language" but the "**kind of artifact**." Unlike other ports, it is a directory bundle.
+Absorbs not the "language" but the "**kind of artifact**." Unlike other ports it carries three roles, declared in `plugin.json` rather than by fixed filenames (ADR-0018):
 
-```
-ports/runtime.d/<name>/
-├── setup.sh   # env injection + dependency materialization + cache externalization
-├── check.sh   # static check (exit 2 = fail)
-└── test.sh    # dynamic verification (exit 2 = fail)
+```jsonc
+{
+  "port": "runtime",
+  "entry": "./setup.js",                                 // setup: dependency materialisation
+  "aux": { "check": "./check.js", "test": "./test.js" }  // static check / dynamic verification
+}
 ```
 
-- All 3 scripts share the common input `{ workdir, changed_files? }`, and the decision is **exit 0=pass / exit 2=fail**.
-- Selection is by the `runtimes` declaration in `.harness.yml`. **It has no `detect.sh`** (no implicit auto-detection).
-- `setup.sh` materializes dependencies quickly (pnpm hardlinks / uv links / rust's shared `CARGO_TARGET_DIR`).
+- All 3 roles share the common input `{ workdir, changed_files? }`, and the decision is **exit 0=pass / exit 2=fail**.
+- Selection is by the `runtimes` declaration in `.harness.yml`. **There is no auto-detection.**
+- `setup` materializes dependencies quickly (pnpm hardlinks / uv links / rust's shared `CARGO_TARGET_DIR`).
 - **WSL2 placement constraint**: link-based sharing is effective only within the same file system. Place worktree, store, and cache on the ext4 side (under `/home`). Placement under `/mnt/c/` is forbidden (D1 §1.7).
 
 ### 2.8 ⑧ kind
@@ -324,13 +346,14 @@ A repository without `.harness.yml` does not run tasks and gets `needs-human` (n
 
 ### 2.9 ⑨ trigger
 
-The core's launch mouth. **It has no stdin JSON contract** (the only argument is the profile name). A bundle of 3 scripts.
+The core's launch mouth. **It has no stdin JSON contract** (the only argument is the profile name). Three roles, declared in `plugin.json` (ADR-0018):
 
-```
-ports/trigger.d/<name>/
-├── install.sh    # register the trigger (scheduler/timer, etc.)
-├── uninstall.sh  # unregister
-└── fire          # launch entry the OS invokes = absolute path to node_modules/.bin/halo run <profile>
+```jsonc
+{
+  "port": "trigger",
+  "entry": "./fire.js",                                    // fire: the entry the OS invokes
+  "aux": { "fire": "./fire.js", "install": "./install.js", "uninstall": "./uninstall.js" }
+}
 ```
 
 - `fire` is the **only entry point** that launches the halo CLI. In unattended execution, it invokes the absolute path to `.bin` directly without going through `npx` (version-pinned, network-independent).
@@ -390,23 +413,27 @@ esac
 
 A runtime bundle that handles Node/TypeScript artifacts. 3 scripts.
 
-- `setup.sh`: `pnpm install --offline` (fast materialization from the store via hardlink sharing). Place `store-dir` on the ext4 side.
-- `check.sh`: `tsc --noEmit` and `eslint`. If either fails, **exit 2**.
-- `test.sh`: `vitest run`. If it fails, **exit 2**.
+- `setup` (`entry`): `pnpm install --offline` (fast materialization from the store via hardlink sharing). Place `store-dir` on the ext4 side.
+- `check` (`aux.check`): `tsc --noEmit` and `eslint`. If either fails, **exit 2**. Lint lives here, which is why there is no separate `20-lint` gate.
+- `test` (`aux.test`): `vitest run`. If it fails, **exit 2**.
 
-Skeleton of `check.sh`:
+Skeleton of `check`:
 
-```bash
-#!/usr/bin/env bash
-set -uo pipefail
-workdir="$(jq -r '.workdir' < /dev/stdin)"
-cd "$workdir"
-pnpm exec tsc --noEmit    >&2 2>&1 || exit 2   # diagnostics to stderr, fail is exit 2
-pnpm exec eslint .        >&2 2>&1 || exit 2
-exit 0
+```javascript
+// runtime-node-pnpm/check.js — static inspection. exit 0 = pass / exit 2 = fail.
+import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+
+const { workdir } = JSON.parse(readFileSync(0, 'utf8'));
+for (const args of [['exec', 'tsc', '--noEmit'], ['exec', 'eslint', '.']]) {
+  // stdio: 'inherit' keeps diagnostics on stderr — stdout is a JSON-only channel (D1 §3.2).
+  const r = spawnSync('pnpm', args, { cwd: workdir, stdio: ['ignore', 2, 2] });
+  if (r.status !== 0) process.exit(2);
+}
+process.exit(0);
 ```
 
-> gate.d's `10-typecheck`/`30-test` become thin wrappers that merely call this runtime's `check.sh`/`test.sh`. Do not duplicate the commands on the gate side (DRY).
+> gate.d's `10-typecheck`/`30-test` become thin wrappers that merely call this runtime's `check`/`test` roles. Do not duplicate the commands on the gate side (DRY).
 
 ### 3.3 gate-loop-audit (④ gate)
 
@@ -424,9 +451,9 @@ Since it is a gate, the input is `{ task_id, workdir, changed_files }`, and only
 
 A trigger that picks up ready tasks via high-frequency scheduled launches. It is the initial implementation paired with `schedule/` (scheduled launch).
 
-- `install.sh`: registers a high-frequency periodic run in the OS scheduler (Windows Task Scheduler etc.), having each run invoke `fire`.
-- `uninstall.sh`: unregisters.
-- `fire`: launches the absolute path of `node_modules/.bin/halo run <profile>`.
+- `install` (`aux.install`): registers a high-frequency periodic run in the OS scheduler, having each run invoke `fire`. The backend (`schtasks` / `systemd` / `cron` / `launchd`) is auto-detected and overridable with `HALO_SCHEDULER` (ADR-0015).
+- `uninstall` (`aux.uninstall`): unregisters.
+- `fire` (`entry`): launches the absolute path of `node_modules/.bin/halo run <profile>`.
 - The point is "**exit immediately if 0 tasks are ready**." If task-source returns `{"task_id":null}`, the core exits 0 immediately, so the cost of a miss is small even under high-frequency polling.
 
 ---
@@ -537,18 +564,18 @@ Small project-specific plugins (such as a bash gate of a few dozen lines) are pl
         ├── context.d/
         │   └── 30-recent-failures/…
         ├── gate.d/
-        │   ├── 10-typecheck/…   # thin wrapper around runtime check.sh
+        │   ├── 10-typecheck/…   # thin wrapper around the runtime `check` role
         │   ├── 30-test/…
         │   ├── 25-no-console/…  # custom gate built in §1
         │   └── 50-loop-audit/…  # gate-loop-audit (safety invariant)
         ├── sink.d/
-        │   ├── 15-create-pr/…   # minAutonomy: L2 (branch draft/normal by AUTONOMY)
-        │   └── 20-progress-log/…# minAutonomy: L1
+        │   ├── sink-git-commit/…  # minAutonomy: L1 (ADR-0016)
+        │   └── sink-progress-log/…# minAutonomy: L1
         ├── on-fail.d/…
         ├── runtime.d/
-        │   └── node-pnpm/…      # setup.sh / check.sh / test.sh
+        │   └── node-pnpm/…      # entry=setup, aux.check / aux.test
         ├── trigger.d/
-        │   └── polling/…        # install.sh / uninstall.sh / fire
+        │   └── polling/…        # entry=fire, aux.install / aux.uninstall
         └── mcp.d/*.json
 ```
 
@@ -590,7 +617,7 @@ The distributed package is referenced from `.halo/ports/` to activate it (wired 
 
 Confirm before releasing/PRing a plugin.
 
-- [ ] The 4 required fields of `plugin.json` (`name`/`version`/`port`/`exec`) are present and it conforms to the `plugin.json` schema (mind `additionalProperties: false`).
+- [ ] The 4 required fields of `plugin.json` (`name`/`version`/`port`/`entry`) are present and it conforms to the `plugin.json` schema (mind `additionalProperties: false`).
 - [ ] It reads a single JSON from stdin, keeps **stdout JSON-only**, and emits diagnostics to stderr.
 - [ ] It honors the exit-code contract (gate/runtime: 0=pass / **2=fail**, others treated as fail / for task-source next, no task is `{"task_id":null}`+exit 0).
 - [ ] For a sink, it explicitly declares `minAutonomy` (undeclared errs to L3-equivalent).
