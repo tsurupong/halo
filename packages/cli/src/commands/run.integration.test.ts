@@ -236,7 +236,9 @@ process.exit(0);
       const cap = captureStreams();
       const code = await runCommand(parseArgs(['p'], RUN_FLAGS), io(cap), deps());
       expect(code).toBe(EXIT.OK);
-      expect(readFileSync(join(state, 'wt-path'), 'utf8').trim()).toBe(join(wtBase, 'halo-wt-issue-7'));
+      expect(readFileSync(join(state, 'wt-path'), 'utf8').trim()).toBe(
+        join(wtBase, 'halo-wt-issue-7'),
+      );
     } finally {
       delete process.env['HALO_WORKTREE_DIR'];
       rmSync(wtBase, { recursive: true, force: true });

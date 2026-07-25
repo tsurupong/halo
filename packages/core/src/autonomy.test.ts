@@ -24,7 +24,8 @@ describe('isAutonomyLevel', () => {
   });
 
   it('rejects anything else', () => {
-    for (const v of ['l1', 'L4', '', undefined, null, 1, {}]) expect(isAutonomyLevel(v)).toBe(false);
+    for (const v of ['l1', 'L4', '', undefined, null, 1, {}])
+      expect(isAutonomyLevel(v)).toBe(false);
   });
 });
 

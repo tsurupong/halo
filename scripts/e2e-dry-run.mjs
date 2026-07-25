@@ -10,7 +10,15 @@
 // Exit:   0 = one dry-run iteration completed and iter_1.json was written.
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  chmodSync,
+  readFileSync,
+  rmSync,
+  existsSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -40,7 +48,11 @@ if (!commandExists('git')) fail('git is required');
 if (!existsSync(CLI)) {
   log(`CLI not built at ${CLI} — building…`);
   if (commandExists('pnpm')) {
-    execFileSync('pnpm', ['-r', 'build'], { cwd: ROOT, stdio: 'ignore', shell: process.platform === 'win32' });
+    execFileSync('pnpm', ['-r', 'build'], {
+      cwd: ROOT,
+      stdio: 'ignore',
+      shell: process.platform === 'win32',
+    });
   } else {
     fail(`pnpm not found and ${CLI} missing`);
   }
@@ -140,9 +152,13 @@ execFileSync('git', ['-C', REPO, 'commit', '-q', '-m', 'e2e fixtures']);
 
 // --- run one dry-run iteration ---
 log(`halo run e2e --dry-run --cwd ${REPO}`);
-const run = spawnSync(process.execPath, [CLI, 'run', 'e2e', '--dry-run', '--cwd', REPO, '--quiet'], {
-  stdio: 'inherit',
-});
+const run = spawnSync(
+  process.execPath,
+  [CLI, 'run', 'e2e', '--dry-run', '--cwd', REPO, '--quiet'],
+  {
+    stdio: 'inherit',
+  },
+);
 if (run.status !== 0) fail(`halo run exited ${run.status} (expected 0)`);
 
 // --- assert the iteration log was produced (D8 §4.2 #7) ---

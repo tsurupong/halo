@@ -105,13 +105,22 @@ describe('validatePluginManifest', () => {
   });
 
   it('accepts all optional fields', () => {
-    const m = validManifest({ order: 15, minAutonomy: 'L2', timeoutSec: 120, env: { GH_TOKEN: '${X}' } });
+    const m = validManifest({
+      order: 15,
+      minAutonomy: 'L2',
+      timeoutSec: 120,
+      env: { GH_TOKEN: '${X}' },
+    });
     expect(validatePluginManifest(m)).toEqual(m);
   });
 
   it('rejects missing required fields', () => {
-    expect(() => validatePluginManifest({ version: '1.0.0', port: 'sink', entry: './x' })).toThrow(DiscoveryError);
-    expect(() => validatePluginManifest({ name: 'x', port: 'sink', entry: './x' })).toThrow(/version/);
+    expect(() => validatePluginManifest({ version: '1.0.0', port: 'sink', entry: './x' })).toThrow(
+      DiscoveryError,
+    );
+    expect(() => validatePluginManifest({ name: 'x', port: 'sink', entry: './x' })).toThrow(
+      /version/,
+    );
   });
 
   it('rejects a bad semver', () => {
@@ -123,11 +132,15 @@ describe('validatePluginManifest', () => {
   });
 
   it('rejects a port that does not match the discovered directory', () => {
-    expect(() => validatePluginManifest(validManifest({ port: 'gate' }), 'sink')).toThrow(/found under 'sink.d\//);
+    expect(() => validatePluginManifest(validManifest({ port: 'gate' }), 'sink')).toThrow(
+      /found under 'sink.d\//,
+    );
   });
 
   it('rejects a bad minAutonomy / non-integer order / timeoutSec < 1', () => {
-    expect(() => validatePluginManifest(validManifest({ minAutonomy: 'L9' as never }))).toThrow(/minAutonomy/);
+    expect(() => validatePluginManifest(validManifest({ minAutonomy: 'L9' as never }))).toThrow(
+      /minAutonomy/,
+    );
     expect(() => validatePluginManifest({ ...validManifest(), order: 1.5 })).toThrow(/order/);
     expect(() => validatePluginManifest(validManifest({ timeoutSec: 0 }))).toThrow(/timeoutSec/);
   });
@@ -200,8 +213,12 @@ describe('discoverPort', () => {
     const tree: FakeTree = {
       dirs: { [base]: [dir('20-progress-log'), dir('10-git-commit')] },
       files: {
-        [`${base}/20-progress-log/plugin.json`]: JSON.stringify(validManifest({ name: 'progress', order: 20 })),
-        [`${base}/10-git-commit/plugin.json`]: JSON.stringify(validManifest({ name: 'commit', order: 10 })),
+        [`${base}/20-progress-log/plugin.json`]: JSON.stringify(
+          validManifest({ name: 'progress', order: 20 }),
+        ),
+        [`${base}/10-git-commit/plugin.json`]: JSON.stringify(
+          validManifest({ name: 'commit', order: 10 }),
+        ),
       },
     };
     const r = await discoverPort({ haloRoot, port: 'sink', fs: fakeFs(tree) });
@@ -257,7 +274,15 @@ describe('discoverPort', () => {
 
   it('skips *.disabled dirs, .disabled markers, non-dirs, and dirs without a manifest', async () => {
     const tree: FakeTree = {
-      dirs: { [base]: [dir('10-on'), dir('20-off.disabled'), dir('30-marked'), dir('40-nomanifest'), file('README.md')] },
+      dirs: {
+        [base]: [
+          dir('10-on'),
+          dir('20-off.disabled'),
+          dir('30-marked'),
+          dir('40-nomanifest'),
+          file('README.md'),
+        ],
+      },
       files: {
         [`${base}/10-on/plugin.json`]: JSON.stringify(validManifest({ name: 'on' })),
         [`${base}/30-marked/plugin.json`]: JSON.stringify(validManifest({ name: 'marked' })),
@@ -285,7 +310,11 @@ describe('discoverPort', () => {
   it('records an issue when requireEntry is set and the entry is missing', async () => {
     const tree: FakeTree = {
       dirs: { [base]: [dir('10-x')] },
-      files: { [`${base}/10-x/plugin.json`]: JSON.stringify(validManifest({ name: 'x', entry: './missing.sh' })) },
+      files: {
+        [`${base}/10-x/plugin.json`]: JSON.stringify(
+          validManifest({ name: 'x', entry: './missing.sh' }),
+        ),
+      },
     };
     const r = await discoverPort({ haloRoot, port: 'sink', fs: fakeFs(tree), requireEntry: true });
     expect(r.plugins).toEqual([]);

@@ -30,7 +30,9 @@ describe('runPreflightLight', () => {
   it('stops on STOP first, before lock or budget (order)', async () => {
     const lock = vi.fn(() => true);
     const budget = vi.fn(() => true);
-    const decision = await runPreflightLight(lightChecks({ stopFilePresent: () => true, lockHeldByOther: lock, budgetExhausted: budget }));
+    const decision = await runPreflightLight(
+      lightChecks({ stopFilePresent: () => true, lockHeldByOther: lock, budgetExhausted: budget }),
+    );
     expect(decision).toEqual({ proceed: false, reason: 'STOP' });
     // Short-circuit: later checks never run.
     expect(lock).not.toHaveBeenCalled();
@@ -39,7 +41,9 @@ describe('runPreflightLight', () => {
 
   it('checks lock before budget', async () => {
     const budget = vi.fn(() => true);
-    const decision = await runPreflightLight(lightChecks({ lockHeldByOther: () => true, budgetExhausted: budget }));
+    const decision = await runPreflightLight(
+      lightChecks({ lockHeldByOther: () => true, budgetExhausted: budget }),
+    );
     expect(decision).toEqual({ proceed: false, reason: 'LOCK_HELD' });
     expect(budget).not.toHaveBeenCalled();
   });
@@ -79,7 +83,13 @@ describe('runPreflightHeavy', () => {
   });
 
   it('aborts on stale graph last', async () => {
-    expect(await runPreflightHeavy({ worktreeClean: () => true, diskOk: () => true, graphFresh: () => false })).toEqual({
+    expect(
+      await runPreflightHeavy({
+        worktreeClean: () => true,
+        diskOk: () => true,
+        graphFresh: () => false,
+      }),
+    ).toEqual({
       proceed: false,
       reason: 'GRAPH_STALE',
     });

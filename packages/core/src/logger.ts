@@ -65,7 +65,13 @@ export interface IterationLog {
   profile: string;
   autonomy: MinAutonomy;
   trigger?: 'schedule' | 'polling' | 'manual';
-  task: { task_id: string | null; kind: string; title?: string; runtimes?: string[]; retry_count?: number };
+  task: {
+    task_id: string | null;
+    kind: string;
+    title?: string;
+    runtimes?: string[];
+    retry_count?: number;
+  };
   executor?: {
     status?: 'done' | 'stuck' | 'timeout';
     turns_used?: number;
@@ -151,7 +157,10 @@ export interface FormatOptions extends RedactionOptions {
  * omitted fields (task/kind, empty gates) and redacts secrets from any gate
  * `reason`/`hint` so nothing sensitive is persisted (D8 §1.2 欄欠落既定 + 機微非混入).
  */
-export function formatIterationLog(input: IterationInput, options: FormatOptions = {}): IterationLog {
+export function formatIterationLog(
+  input: IterationInput,
+  options: FormatOptions = {},
+): IterationLog {
   const defaultKind = options.defaultKind ?? LOGGER_DEFAULTS.defaultKind;
   const gates = (input.gates ?? []).map((g) => ({
     name: g.name,

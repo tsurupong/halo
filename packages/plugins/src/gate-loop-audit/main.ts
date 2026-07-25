@@ -18,7 +18,9 @@ const GATE = '50-loop-audit';
 const maxDiffLines = Number(process.env['HALO_MAX_DIFF_LINES'] ?? '1500');
 
 function fail(reason: string, hint?: string): never {
-  writeStdoutJson(hint === undefined || hint === '' ? { reason, gate: GATE } : { reason, hint, gate: GATE });
+  writeStdoutJson(
+    hint === undefined || hint === '' ? { reason, gate: GATE } : { reason, hint, gate: GATE },
+  );
   process.exit(2);
 }
 
@@ -76,11 +78,17 @@ for (const line of namestatus.split('\n')) {
   // ⑤ 自己改変(ルール類)の禁止 — 変更種別を問わず fail
   if (isProtectedFile(path)) {
     const base = path.split('/').pop() ?? path;
-    fail(`${base} への自己改変が検出された（変更: ${path}）`, 'ハーネスのルール類は L2 上限・人間承認が必要');
+    fail(
+      `${base} への自己改変が検出された（変更: ${path}）`,
+      'ハーネスのルール類は L2 上限・人間承認が必要',
+    );
   }
   // ② テストファイルの削除・変更は fail(新規追加 A は許可)
   if (isTestFile(path) && status !== 'A') {
-    fail(`テストファイル ${path} が変更/削除された（status=${status}）`, 'テストの改変は禁止（新規追加のみ許可）');
+    fail(
+      `テストファイル ${path} が変更/削除された（status=${status}）`,
+      'テストの改変は禁止（新規追加のみ許可）',
+    );
   }
 }
 

@@ -73,7 +73,13 @@ function buildCoreBin(root: string): string {
 function runIsolated(
   script: string,
   args: string[],
-  opts: { stubDir: string; coreBin: string; home: string; procFile?: string; extraEnv?: Record<string, string> },
+  opts: {
+    stubDir: string;
+    coreBin: string;
+    home: string;
+    procFile?: string;
+    extraEnv?: Record<string, string>;
+  },
 ): { code: number; stdout: string; stderr: string } {
   const env: Record<string, string> = {
     PATH: `${opts.stubDir}:${opts.coreBin}`,
@@ -88,7 +94,13 @@ function runIsolated(
 /** install.js を HALO_PLUGIN_DIR=pluginRoot 付きで隔離環境実行する(install.sh 経由をやめた分の薄いラッパー)。 */
 function runInstallIsolated(
   args: string[],
-  opts: { stubDir: string; coreBin: string; home: string; procFile?: string; extraEnv?: Record<string, string> },
+  opts: {
+    stubDir: string;
+    coreBin: string;
+    home: string;
+    procFile?: string;
+    extraEnv?: Record<string, string>;
+  },
 ): { code: number; stdout: string; stderr: string } {
   return runIsolated(process.execPath, [installJsPath, ...args], {
     ...opts,
@@ -118,7 +130,10 @@ describe('trigger-polling: fire (contract)', () => {
 
   it('fire without profile -> nonzero', () => {
     const root = mkTmp();
-    const r = spawnSync(process.execPath, [firePath], { env: { ...process.env, HALO_HOME: root }, encoding: 'utf8' });
+    const r = spawnSync(process.execPath, [firePath], {
+      env: { ...process.env, HALO_HOME: root },
+      encoding: 'utf8',
+    });
     expect(r.status).not.toBe(0);
   });
 
@@ -196,7 +211,11 @@ describe('trigger-polling: install/uninstall (schtasks, HALO_SCHEDULER 強制指
     expect(createArgs).toContain(`HALO_BIN="${installBin}"`);
 
     const r2 = spawnSync(process.execPath, [uninstallPath, 'continuous'], {
-      env: { ...process.env, PATH: `${stubDir}:${process.env['PATH'] ?? ''}`, HALO_SCHEDULER: 'schtasks' },
+      env: {
+        ...process.env,
+        PATH: `${stubDir}:${process.env['PATH'] ?? ''}`,
+        HALO_SCHEDULER: 'schtasks',
+      },
       encoding: 'utf8',
     });
     expect(r2.status).toBe(0);
@@ -276,7 +295,12 @@ describe('trigger-polling: install/uninstall backends (自動検出, 隔離環�
     writeFileSync(join(wslBin, 'schtasks.exe'), '#!/usr/bin/env bash\nexit 0\n');
     chmodSync(join(wslBin, 'schtasks.exe'), 0o755);
 
-    const r = runInstallIsolated(['bad name'], { stubDir: wslBin, coreBin, home, procFile: procWsl });
+    const r = runInstallIsolated(['bad name'], {
+      stubDir: wslBin,
+      coreBin,
+      home,
+      procFile: procWsl,
+    });
     expect(r.code).not.toBe(0);
   });
 
@@ -331,7 +355,12 @@ describe('trigger-polling: install/uninstall backends (自動検出, 隔離環�
     chmodSync(join(cronBin, 'crontab'), 0o755);
     writeFileSync(state, `0 0 * * * /keep/me\n*/15 * * * * ${firePath} p1 # HALO:polling:p1\n`);
 
-    const r = runIsolated(process.execPath, [uninstallPath, 'p1'], { stubDir: cronBin, coreBin, home, procFile: procPlain });
+    const r = runIsolated(process.execPath, [uninstallPath, 'p1'], {
+      stubDir: cronBin,
+      coreBin,
+      home,
+      procFile: procPlain,
+    });
     expect(r.code).toBe(0);
     const stateContent = readFileSync(state, 'utf8');
     expect(stateContent).toContain('/keep/me');
@@ -354,7 +383,12 @@ describe('trigger-polling: install/uninstall backends (自動検出, 隔離環�
     );
     chmodSync(join(wslBin, 'schtasks.exe'), 0o755);
 
-    const r = runIsolated(process.execPath, [uninstallPath, 'p1'], { stubDir: wslBin, coreBin, home, procFile: procWsl });
+    const r = runIsolated(process.execPath, [uninstallPath, 'p1'], {
+      stubDir: wslBin,
+      coreBin,
+      home,
+      procFile: procWsl,
+    });
     expect(r.code).toBe(0);
     expect(readFileSync(log, 'utf8')).toContain('/Delete /TN HALO_p1 /F');
   });

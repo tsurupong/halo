@@ -394,7 +394,8 @@ describe('runLoop', () => {
           return tsNext++ < 1 ? jsonRes({ task_id: '1' }) : jsonRes({ task_id: null });
         }
         if (name === 'ex') return jsonRes({ status: 'done', summary: 'ok' });
-        if (name === 'g') return jsonRes({ reason: 'coverage low', gate: '30-test' }, { exitCode: 2 });
+        if (name === 'g')
+          return jsonRes({ reason: 'coverage low', gate: '30-test' }, { exitCode: 2 });
         return res();
       },
     });

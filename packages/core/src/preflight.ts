@@ -19,11 +19,7 @@ import type { BudgetStatus } from './budget.js';
 export type LightStopReason = 'STOP' | 'LOCK_HELD' | 'BUDGET_EXCEEDED';
 
 /** A heavy-stage abort — the loop skips executing this task and records it (D2 §4.2). */
-export type HeavyStopReason =
-  | 'DIRTY_WORKTREE'
-  | 'DISK_LOW'
-  | 'GRAPH_STALE'
-  | 'NO_HARNESS_YML';
+export type HeavyStopReason = 'DIRTY_WORKTREE' | 'DISK_LOW' | 'GRAPH_STALE' | 'NO_HARNESS_YML';
 
 export type LightDecision = { proceed: true } | { proceed: false; reason: LightStopReason };
 export type HeavyDecision = { proceed: true } | { proceed: false; reason: HeavyStopReason };
@@ -90,7 +86,8 @@ export async function runPreflightHeavy(checks: HeavyChecks): Promise<HeavyDecis
     return { proceed: false, reason: 'NO_HARNESS_YML' };
   if (!(await checks.worktreeClean())) return { proceed: false, reason: 'DIRTY_WORKTREE' };
   if (checks.diskOk && !(await checks.diskOk())) return { proceed: false, reason: 'DISK_LOW' };
-  if (checks.graphFresh && !(await checks.graphFresh())) return { proceed: false, reason: 'GRAPH_STALE' };
+  if (checks.graphFresh && !(await checks.graphFresh()))
+    return { proceed: false, reason: 'GRAPH_STALE' };
   return { proceed: true };
 }
 

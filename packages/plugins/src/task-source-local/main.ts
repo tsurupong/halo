@@ -90,10 +90,7 @@ switch (op) {
         : undefined;
     const rc = typeof rcRaw === 'number' ? rcRaw : 0;
     if (taskId === undefined) die('fail requires task_id');
-    appendFileSync(
-      join(tasksDir, 'failures.log'),
-      `${timestamp()} fail #${rc}: ${reason}\n`,
-    );
+    appendFileSync(join(tasksDir, 'failures.log'), `${timestamp()} fail #${rc}: ${reason}\n`);
     if (rc >= failThreshold) {
       const src = join(queueDir, `${taskId}.md`);
       if (existsSync(src)) renameSync(src, join(needsHumanDir, `${taskId}.md`));

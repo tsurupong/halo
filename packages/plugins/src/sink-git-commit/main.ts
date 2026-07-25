@@ -37,10 +37,17 @@ if (run('git', ['-C', workdir, 'diff', '--cached', '--quiet']).code === 0) {
 }
 
 const commit = run('git', [
-  '-C', workdir,
-  '-c', `user.name=${gitName}`,
-  '-c', `user.email=${gitEmail}`,
-  'commit', '-m', `feat: complete task ${taskId} (halo)`, '-m', summary,
+  '-C',
+  workdir,
+  '-c',
+  `user.name=${gitName}`,
+  '-c',
+  `user.email=${gitEmail}`,
+  'commit',
+  '-m',
+  `feat: complete task ${taskId} (halo)`,
+  '-m',
+  summary,
 ]);
 if (commit.code !== 0) diag(`sink-git-commit: コミット失敗: ${taskId}`);
 process.exit(0);

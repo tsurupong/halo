@@ -14,14 +14,7 @@ export type KgUri = string;
 
 /** The eight executable ports a plugin can belong to (D1 §2). */
 export type Port =
-  | 'task-source'
-  | 'context'
-  | 'executor'
-  | 'gate'
-  | 'sink'
-  | 'on-fail'
-  | 'runtime'
-  | 'trigger';
+  'task-source' | 'context' | 'executor' | 'gate' | 'sink' | 'on-fail' | 'runtime' | 'trigger';
 
 /**
  * Minimum autonomy level a plugin (typically a sink) requires to run (D1 §1.5).

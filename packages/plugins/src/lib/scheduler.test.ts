@@ -40,7 +40,10 @@ describe('schedulerInstall: fireArgv quoting', () => {
     process.env['PATH'] = `${stubDir}:${originalPath ?? ''}`;
     process.env['HALO_SCHEDULER'] = 'cron';
     try {
-      schedulerInstall('polling', 'p1', 'interval:15', ['/usr/bin/node', '/opt/plugins/trigger-polling/fire.js']);
+      schedulerInstall('polling', 'p1', 'interval:15', [
+        '/usr/bin/node',
+        '/opt/plugins/trigger-polling/fire.js',
+      ]);
     } finally {
       process.env['PATH'] = originalPath;
       if (originalScheduler === undefined) delete process.env['HALO_SCHEDULER'];
@@ -92,7 +95,10 @@ describe('schedulerInstall: fireArgv quoting', () => {
     process.env['HALO_SCHEDULER'] = 'cron';
     try {
       expect(() =>
-        schedulerInstall('polling', 'p1', 'interval:15', ['/usr/bin/node', '/opt/plugins with space/fire.js']),
+        schedulerInstall('polling', 'p1', 'interval:15', [
+          '/usr/bin/node',
+          '/opt/plugins with space/fire.js',
+        ]),
       ).not.toThrow();
     } finally {
       process.env['PATH'] = originalPath;

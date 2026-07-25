@@ -145,10 +145,14 @@ export function validatePluginManifest(value: unknown, expectedPort?: Port): Plu
   }
   const port = requireString(obj, 'port');
   if (!(PORT_VALUES as readonly string[]).includes(port)) {
-    throw new DiscoveryError(`plugin.json: 'port' must be one of ${PORT_VALUES.join(', ')} (got '${port}')`);
+    throw new DiscoveryError(
+      `plugin.json: 'port' must be one of ${PORT_VALUES.join(', ')} (got '${port}')`,
+    );
   }
   if (expectedPort && port !== expectedPort) {
-    throw new DiscoveryError(`plugin.json: 'port' is '${port}' but was found under '${expectedPort}.d/'`);
+    throw new DiscoveryError(
+      `plugin.json: 'port' is '${port}' but was found under '${expectedPort}.d/'`,
+    );
   }
   if ('exec' in obj) {
     throw new DiscoveryError(
@@ -160,13 +164,16 @@ export function validatePluginManifest(value: unknown, expectedPort?: Port): Plu
   const manifest: PluginManifest = { name, version, port: port as Port, entry };
 
   if ('order' in obj && obj.order !== undefined) {
-    if (!Number.isInteger(obj.order)) throw new DiscoveryError("plugin.json: 'order' must be an integer");
+    if (!Number.isInteger(obj.order))
+      throw new DiscoveryError("plugin.json: 'order' must be an integer");
     manifest.order = obj.order as number;
   }
   if ('minAutonomy' in obj && obj.minAutonomy !== undefined) {
     const a = obj.minAutonomy;
     if (typeof a !== 'string' || !(AUTONOMY_VALUES as readonly string[]).includes(a)) {
-      throw new DiscoveryError(`plugin.json: 'minAutonomy' must be one of ${AUTONOMY_VALUES.join(', ')}`);
+      throw new DiscoveryError(
+        `plugin.json: 'minAutonomy' must be one of ${AUTONOMY_VALUES.join(', ')}`,
+      );
     }
     manifest.minAutonomy = a as MinAutonomy;
   }
@@ -183,7 +190,8 @@ export function validatePluginManifest(value: unknown, expectedPort?: Port): Plu
       throw new DiscoveryError("plugin.json: 'env' must be an object");
     }
     for (const [k, v] of Object.entries(env as Record<string, unknown>)) {
-      if (typeof v !== 'string') throw new DiscoveryError(`plugin.json: env['${k}'] must be a string`);
+      if (typeof v !== 'string')
+        throw new DiscoveryError(`plugin.json: env['${k}'] must be a string`);
     }
     manifest.env = env as Record<string, string>;
   }
@@ -193,21 +201,34 @@ export function validatePluginManifest(value: unknown, expectedPort?: Port): Plu
       throw new DiscoveryError("plugin.json: 'aux' must be an object");
     }
     for (const [k, v] of Object.entries(aux as Record<string, unknown>)) {
-      if (typeof v !== 'string') throw new DiscoveryError(`plugin.json: aux['${k}'] must be a string`);
+      if (typeof v !== 'string')
+        throw new DiscoveryError(`plugin.json: aux['${k}'] must be a string`);
     }
     manifest.aux = aux as Record<string, string>;
   }
 
-  const known = new Set(['name', 'version', 'port', 'entry', 'aux', 'order', 'minAutonomy', 'timeoutSec', 'env']);
+  const known = new Set([
+    'name',
+    'version',
+    'port',
+    'entry',
+    'aux',
+    'order',
+    'minAutonomy',
+    'timeoutSec',
+    'env',
+  ]);
   for (const key of Object.keys(obj)) {
-    if (!known.has(key)) throw new DiscoveryError(`plugin.json: unknown field '${key}' (additionalProperties: false)`);
+    if (!known.has(key))
+      throw new DiscoveryError(`plugin.json: unknown field '${key}' (additionalProperties: false)`);
   }
   return manifest;
 }
 
 function requireString(obj: Record<string, unknown>, key: string): string {
   const v = obj[key];
-  if (typeof v !== 'string' || v === '') throw new DiscoveryError(`plugin.json: '${key}' is required and must be a non-empty string`);
+  if (typeof v !== 'string' || v === '')
+    throw new DiscoveryError(`plugin.json: '${key}' is required and must be a non-empty string`);
   return v;
 }
 
@@ -287,7 +308,10 @@ export async function discoverPort(options: DiscoverPortOptions): Promise<PortDi
 
     let manifest: PluginManifest;
     try {
-      manifest = validatePluginManifest(parseJson(await fs.readFile(manifestPath), manifestPath), port);
+      manifest = validatePluginManifest(
+        parseJson(await fs.readFile(manifestPath), manifestPath),
+        port,
+      );
     } catch (err) {
       issues.push({ dir, message: err instanceof Error ? err.message : String(err) });
       continue;
@@ -332,7 +356,11 @@ export const HARNESS_FILENAME = '.harness.yml';
  * the directory that contains a `.git` entry (repository root) or once the root
  * is reached. Uses the injected {@link DiscoveryFs} so it stays testable.
  */
-export async function findUpwards(startDir: string, filename: string, fs: DiscoveryFs): Promise<string | null> {
+export async function findUpwards(
+  startDir: string,
+  filename: string,
+  fs: DiscoveryFs,
+): Promise<string | null> {
   let dir = startDir;
   for (;;) {
     const candidate = join(dir, filename);
@@ -362,7 +390,11 @@ export function createNodeDiscoveryFs(): DiscoveryFs {
       const { readdir } = await import('node:fs/promises');
       try {
         const dirents = await readdir(path, { withFileTypes: true });
-        return dirents.map((d) => ({ name: d.name, isDirectory: d.isDirectory(), isFile: d.isFile() }));
+        return dirents.map((d) => ({
+          name: d.name,
+          isDirectory: d.isDirectory(),
+          isFile: d.isFile(),
+        }));
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
         throw err;

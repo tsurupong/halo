@@ -136,7 +136,10 @@ const EXECUTOR_DENY_SETTINGS = {
 /** deny settings を haloDir 配下へ生成し、そのパスを返す(失敗時 undefined = 注入なし)。 */
 async function writeExecutorSettings(
   haloDir: string,
-  fs: { mkdir: (p: string, o: { recursive: true }) => Promise<unknown>; writeFile: (p: string, d: string) => Promise<void> },
+  fs: {
+    mkdir: (p: string, o: { recursive: true }) => Promise<unknown>;
+    writeFile: (p: string, d: string) => Promise<void>;
+  },
 ): Promise<string | undefined> {
   const dir = join(haloDir, 'settings');
   const path = join(dir, 'executor-settings.json');
@@ -248,7 +251,9 @@ function seamTmpdir(): string {
 /** haloDir 下の全 loop ポートを走査して LoopPorts を組む (D2 §6)。 */
 export async function discoverLoopPorts(haloDir: string, fs: DiscoveryFs): Promise<LoopPorts> {
   const [taskSource, context, executor, gate, sink, onFail] = await Promise.all(
-    LOOP_PORT_ORDER.map((port) => discoverPort({ haloRoot: haloDir, port, fs, requireEntry: true })),
+    LOOP_PORT_ORDER.map((port) =>
+      discoverPort({ haloRoot: haloDir, port, fs, requireEntry: true }),
+    ),
   );
   return {
     taskSource: taskSource!.plugins,
@@ -343,8 +348,7 @@ export function createRunHooks(seams: RunWiringSeams = nodeRunWiringSeams()): Ru
       // 重量段: .harness.yml 必須チェック (要件 §4.2③) + worktree clean。
       // disk/graph は D2 §4.2 の後続フェーズ。
       return runPreflightHeavy({
-        harnessYmlPresent: async () =>
-          (await findHarnessYml(ctx.cwd, seams.discoveryFs)) !== null,
+        harnessYmlPresent: async () => (await findHarnessYml(ctx.cwd, seams.discoveryFs)) !== null,
         worktreeClean: () => isWorktreeClean(seams.git(ctx.cwd)),
       });
     },

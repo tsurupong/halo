@@ -29,8 +29,16 @@ const op = str(input, 'op');
 switch (op) {
   case 'next': {
     const list = gh([
-      'issue', 'list', '--label', 'ready', '--state', 'open', '--limit', '1',
-      '--json', 'number,title,body,labels',
+      'issue',
+      'list',
+      '--label',
+      'ready',
+      '--state',
+      'open',
+      '--limit',
+      '1',
+      '--json',
+      'number,title,body,labels',
     ]);
     let issues: unknown;
     try {
@@ -38,7 +46,9 @@ switch (op) {
     } catch {
       issues = [];
     }
-    const issue = Array.isArray(issues) ? (issues[0] as Record<string, unknown> | undefined) : undefined;
+    const issue = Array.isArray(issues)
+      ? (issues[0] as Record<string, unknown> | undefined)
+      : undefined;
     if (issue === undefined) {
       writeStdoutJson({ task_id: null }); // ready 0 件 → コアは即 exit 0
       process.exit(0);
@@ -46,7 +56,9 @@ switch (op) {
     const num = issue['number'];
     if (typeof num !== 'number' || !Number.isInteger(num)) die('invalid issue number from gh');
     // kind:<name> ラベル由来。無指定時は code(D5 §3.1)。
-    const labels = Array.isArray(issue['labels']) ? (issue['labels'] as Record<string, unknown>[]) : [];
+    const labels = Array.isArray(issue['labels'])
+      ? (issue['labels'] as Record<string, unknown>[])
+      : [];
     const kindLabel = labels
       .map((l) => (typeof l['name'] === 'string' ? l['name'] : ''))
       .find((n) => n.startsWith('kind:'));

@@ -29,17 +29,26 @@ describe('aggregateCost', () => {
       [
         entry({
           iter: 1,
-          executor: { status: 'done', cost: { input_tokens: 100, output_tokens: 50, usd_estimate: 0.25 } },
+          executor: {
+            status: 'done',
+            cost: { input_tokens: 100, output_tokens: 50, usd_estimate: 0.25 },
+          },
         }),
         entry({
           iter: 2,
-          executor: { status: 'done', cost: { input_tokens: 200, output_tokens: 10, usd_estimate: 0.5 } },
+          executor: {
+            status: 'done',
+            cost: { input_tokens: 200, output_tokens: 10, usd_estimate: 0.5 },
+          },
         }),
         entry({ iter: 3 }), // cost 無し (旧ログ)
         entry({
           iter: 4,
           started_at: '2026-07-01T00:00:00Z', // 期間外
-          executor: { status: 'done', cost: { input_tokens: 999, output_tokens: 999, usd_estimate: 9 } },
+          executor: {
+            status: 'done',
+            cost: { input_tokens: 999, output_tokens: 999, usd_estimate: 9 },
+          },
         }),
       ],
       { windowDays: 7, now: NOW },
@@ -49,7 +58,12 @@ describe('aggregateCost', () => {
 
   test('usd_estimate が null でも合算は壊れない', () => {
     const cost = aggregateCost(
-      [entry({ iter: 1, executor: { status: 'done', cost: { input_tokens: 1, usd_estimate: null } } })],
+      [
+        entry({
+          iter: 1,
+          executor: { status: 'done', cost: { input_tokens: 1, usd_estimate: null } },
+        }),
+      ],
       { windowDays: 7, now: NOW },
     );
     expect(cost).toEqual({ input_tokens: 1, output_tokens: 0, usd: 0 });

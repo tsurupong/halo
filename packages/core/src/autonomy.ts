@@ -60,6 +60,9 @@ export interface AutonomyFilterable {
  * already ordered them, D2 §6.2). Pure — returns a new array, never mutates input
  * (immutability, coding-style). Undeclared `minAutonomy` → skipped below L3.
  */
-export function filterSinksByAutonomy<T extends AutonomyFilterable>(sinks: readonly T[], current: MinAutonomy): T[] {
+export function filterSinksByAutonomy<T extends AutonomyFilterable>(
+  sinks: readonly T[],
+  current: MinAutonomy,
+): T[] {
   return sinks.filter((s) => shouldRunSink(s.minAutonomy, current));
 }

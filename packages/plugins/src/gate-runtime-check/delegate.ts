@@ -15,10 +15,14 @@ function emitFail(reason: string, gate: string): never {
 }
 
 /** gate 名と runtime ロール('check'|'test'|'setup')を受け、runtime へ委譲して gate 規約で終了する。 */
-export async function delegate(gate: string, runtimeRole: 'check' | 'test' | 'setup'): Promise<never> {
+export async function delegate(
+  gate: string,
+  runtimeRole: 'check' | 'test' | 'setup',
+): Promise<never> {
   const pluginDir = process.env['HALO_PLUGIN_DIR'] ?? '.';
   const runtimeDir =
-    process.env['HALO_RUNTIME_DIR'] ?? join(pluginDir, '..', '..', 'runtime.d', 'runtime-node-pnpm');
+    process.env['HALO_RUNTIME_DIR'] ??
+    join(pluginDir, '..', '..', 'runtime.d', 'runtime-node-pnpm');
 
   const input = await readStdinJson().catch(() => undefined);
   const workdir = str(input, 'workdir');
@@ -31,7 +35,8 @@ export async function delegate(gate: string, runtimeRole: 'check' | 'test' | 'se
     aux?: Record<string, string>;
   };
   const rel = runtimeRole === 'setup' ? manifest.entry : manifest.aux?.[runtimeRole];
-  if (rel === undefined) emitFail(`runtime entry '${runtimeRole}' not declared: ${manifestPath}`, gate);
+  if (rel === undefined)
+    emitFail(`runtime entry '${runtimeRole}' not declared: ${manifestPath}`, gate);
   const scriptPath = isAbsolute(rel) ? rel : join(runtimeDir, rel);
   if (!existsSync(scriptPath)) emitFail(`runtime script not found: ${scriptPath}`, gate);
 

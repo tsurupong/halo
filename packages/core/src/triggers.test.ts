@@ -134,10 +134,7 @@ describe('installTrigger/uninstallTrigger (entry契約化)', () => {
     expect(spawn).toHaveBeenCalledTimes(1);
     const [script, args] = spawn.mock.calls[0]!;
     expect(script).toBe(process.execPath);
-    expect(args).toEqual([
-      '/repo/.halo/ports/trigger.d/trigger-polling/install.js',
-      'smoke',
-    ]);
+    expect(args).toEqual(['/repo/.halo/ports/trigger.d/trigger-polling/install.js', 'smoke']);
   });
 
   test('install: env に HALO_PLUGIN_DIR がアダプタディレクトリの絶対パスで入る', async () => {
@@ -176,10 +173,7 @@ describe('installTrigger/uninstallTrigger (entry契約化)', () => {
 
     const [script, args] = spawn.mock.calls[0]!;
     expect(script).toBe(process.execPath);
-    expect(args).toEqual([
-      '/repo/.halo/ports/trigger.d/trigger-polling/uninstall.js',
-      'smoke',
-    ]);
+    expect(args).toEqual(['/repo/.halo/ports/trigger.d/trigger-polling/uninstall.js', 'smoke']);
   });
 
   test('install: plugin.json に aux.install が無ければ fail-fast', async () => {
@@ -244,9 +238,6 @@ describe('installTrigger/uninstallTrigger (entry契約化)', () => {
     expect(result).toEqual({ exitCode: 0, stdout: '', stderr: '' });
     const [script, args] = spawn.mock.calls[0]!;
     expect(script).toBe(process.execPath);
-    expect(args).toEqual([
-      '/opt/halo/packages/plugins/dist/trigger-polling/install.js',
-      'smoke',
-    ]);
+    expect(args).toEqual(['/opt/halo/packages/plugins/dist/trigger-polling/install.js', 'smoke']);
   });
 });

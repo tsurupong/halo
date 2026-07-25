@@ -62,7 +62,12 @@ describe('task-source-local contract', () => {
     writeFileSync(join(queueDir, 'a-task.md'), '# A Task\nbody a');
     const { code, stdout } = runLauncher(JSON.stringify({ op: 'next' }), baseEnv(tasksDir));
     expect(code).toBe(0);
-    const out = JSON.parse(stdout) as { task_id: string; title: string; body: string; kind: string };
+    const out = JSON.parse(stdout) as {
+      task_id: string;
+      title: string;
+      body: string;
+      kind: string;
+    };
     expect(out.task_id).toBe('a-task');
     expect(out.title).toBe('A Task');
     expect(out.body).toBe('# A Task\nbody a');
@@ -91,7 +96,11 @@ describe('task-source-local contract', () => {
     const { tasksDir, queueDir } = setupTasksDir();
     writeFileSync(join(queueDir, 'task-1.md'), '# T1\nbody');
     const { code, stdout } = runLauncher(
-      JSON.stringify({ op: 'complete', task_id: 'task-1', pr_url: 'https://github.com/o/r/pull/1' }),
+      JSON.stringify({
+        op: 'complete',
+        task_id: 'task-1',
+        pr_url: 'https://github.com/o/r/pull/1',
+      }),
       baseEnv(tasksDir),
     );
     expect(code).toBe(0);

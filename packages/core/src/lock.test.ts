@@ -53,7 +53,9 @@ describe('isStaleLock', () => {
   });
 
   it('is stale when the timestamp is unparseable', () => {
-    expect(isStaleLock({ info: { pid: 1, startedAt: 'garbage' }, now, ownerAlive: true })).toBe(true);
+    expect(isStaleLock({ info: { pid: 1, startedAt: 'garbage' }, now, ownerAlive: true })).toBe(
+      true,
+    );
   });
 });
 
@@ -132,7 +134,9 @@ describe('releaseLock', () => {
 
   it('is idempotent when the file is already gone', async () => {
     const sys = makeSys();
-    await expect(releaseLock({ path: '/tmp/halo.lock', info: { pid: 1, startedAt: 'x' } }, sys)).resolves.toBeUndefined();
+    await expect(
+      releaseLock({ path: '/tmp/halo.lock', info: { pid: 1, startedAt: 'x' } }, sys),
+    ).resolves.toBeUndefined();
   });
 
   it('does not remove a lock reclaimed by another process', async () => {

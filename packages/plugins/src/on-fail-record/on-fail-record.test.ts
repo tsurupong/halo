@@ -9,7 +9,11 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const distPath = join(__dirname, '..', '..', 'dist', 'on-fail-record', 'main.js');
 
 function runLauncher(input: string, env: Record<string, string> = {}) {
-  const r = spawnSync(process.execPath, [distPath], { input, env: { ...process.env, ...env }, encoding: 'utf8' });
+  const r = spawnSync(process.execPath, [distPath], {
+    input,
+    env: { ...process.env, ...env },
+    encoding: 'utf8',
+  });
   return { code: r.status ?? 1, stdout: r.stdout, stderr: r.stderr };
 }
 
@@ -93,7 +97,9 @@ describe('on-fail-record 正常系', () => {
   it('task_id 欠落は exit 0・stdout 空でスキップ', () => {
     const tmp = makeTmpDir();
     const catalog = join(tmp, '.halo', 'failure-catalog.md');
-    const result = runLauncher(JSON.stringify({ reason: 'x', retry_count: 0 }), { HALO_CATALOG: catalog });
+    const result = runLauncher(JSON.stringify({ reason: 'x', retry_count: 0 }), {
+      HALO_CATALOG: catalog,
+    });
     expect(result.code).toBe(0);
     expect(result.stdout).toBe('');
     expect(existsSync(catalog)).toBe(false);
