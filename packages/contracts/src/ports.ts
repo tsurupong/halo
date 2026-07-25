@@ -132,6 +132,14 @@ export interface GateIn {
    * and an executor that commits its work would escape inspection.
    */
   base?: string;
+  /**
+   * Extra repo-relative glob patterns the audit gate must treat as protected from
+   * self-modification, from `.harness.yml` `protectedPaths` (ADR-0004). The core
+   * reads the declaration at the repository root and passes the list in, so the
+   * list a gate enforces cannot be weakened by editing the copy inside the worktree.
+   * A single star matches within one path segment, a double star across segments.
+   */
+  protected_paths?: string[];
 }
 
 /** gate output, emitted on fail only (D1 §1.4). */

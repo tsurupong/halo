@@ -149,3 +149,60 @@ describe('resolveKind', () => {
     expect(harness.kinds.code?.runtimes).toEqual(['node-pnpm']);
   });
 });
+
+describe('validateHarnessYml — safety fields', () => {
+  const base = { kinds: { code: { runtimes: ['node-pnpm'], prompt: 'p.md' } } };
+
+  it('accepts an omitted maxAutonomy / protectedPaths', () => {
+    expect(validateHarnessYml(base)).toMatchObject({ kinds: { code: {} } });
+  });
+
+  it('accepts a valid maxAutonomy and protectedPaths', () => {
+    const parsed = validateHarnessYml({ ...base, maxAutonomy: 'L2', protectedPaths: ['a/**'] });
+    expect(parsed.maxAutonomy).toBe('L2');
+    expect(parsed.protectedPaths).toEqual(['a/**']);
+  });
+
+  it('rejects an unknown maxAutonomy level', () => {
+    expect(() => validateHarnessYml({ ...base, maxAutonomy: 'L9' })).toThrow(/maxAutonomy/);
+  });
+
+  it('rejects a non-string[] protectedPaths', () => {
+    expect(() => validateHarnessYml({ ...base, protectedPaths: 'a/**' })).toThrow(/protectedPaths/);
+    expect(() => validateHarnessYml({ ...base, protectedPaths: [1] })).toThrow(/protectedPaths/);
+  });
+});
+
+describe('resolveConfig — repository autonomy ceiling (ADR-0004)', () => {
+  it('clamps a profile level above the repository ceiling', () => {
+    const c = resolveConfig({ profileEnv: { AUTONOMY: 'L3' }, harnessMaxAutonomy: 'L2' });
+    expect(c.autonomy).toBe('L2');
+    expect(c.autonomyCappedFrom).toBe('L3');
+  });
+
+  it('clamps a --autonomy override above the repository ceiling', () => {
+    const c = resolveConfig({
+      cli: { autonomy: 'L3' },
+      profileEnv: { AUTONOMY: 'L1' },
+      harnessMaxAutonomy: 'L2',
+    });
+    expect(c.autonomy).toBe('L2');
+    expect(c.autonomyCappedFrom).toBe('L3');
+  });
+
+  it('leaves a level at or below the ceiling untouched', () => {
+    const c = resolveConfig({ profileEnv: { AUTONOMY: 'L1' }, harnessMaxAutonomy: 'L2' });
+    expect(c.autonomy).toBe('L1');
+    expect(c.autonomyCappedFrom).toBeUndefined();
+  });
+
+  it('applies no ceiling when the repository declares none', () => {
+    const c = resolveConfig({ profileEnv: { AUTONOMY: 'L3' } });
+    expect(c.autonomy).toBe('L3');
+    expect(c.autonomyCappedFrom).toBeUndefined();
+  });
+
+  it('rejects an invalid ceiling value', () => {
+    expect(() => resolveConfig({ harnessMaxAutonomy: 'L9' })).toThrow(ConfigError);
+  });
+});

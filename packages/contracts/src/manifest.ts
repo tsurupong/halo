@@ -81,7 +81,12 @@ export interface HarnessKind {
 
 /**
  * `.harness.yml` — required at the target repository root (D1 §1.8). Maps each
- * `kind:<name>` label (default `code`) to its runtimes and prompt.
+ * `kind:<name>` label (default `code`) to its runtimes and prompt, and declares
+ * the repository-level safety caps the core enforces.
+ *
+ * The safety fields live here (rather than in a profile) because `.harness.yml` is
+ * committed and is itself a loop-audit protected file (ADR-0004): the cap an
+ * unattended run obeys stays reviewable in git and cannot be raised by the agent.
  */
 export interface HarnessYml {
   /**
@@ -90,4 +95,19 @@ export interface HarnessYml {
    * @minProperties 1
    */
   kinds: Record<string, HarnessKind>;
+  /**
+   * Repository-level ceiling on the autonomy level (ADR-0004). The effective level
+   * is `min(resolved AUTONOMY, maxAutonomy)`, so neither a profile nor `--autonomy`
+   * can exceed it. Omitted → no repository ceiling (profile/CLI decide alone).
+   */
+  maxAutonomy?: MinAutonomy;
+  /**
+   * Extra paths the audit gate protects from agent self-modification, on top of the
+   * built-in set (`CLAUDE.md`, `PROMPT.md`, `.harness.yml`, `.claude/settings.json`).
+   * Repo-relative glob patterns where a single star matches within one path segment
+   * and a double star matches across segments (for example `packages/plugins/src/gate-`
+   * followed by a double star). Use this when the harness maintains itself, to keep
+   * the gate implementation out of the agent's reach.
+   */
+  protectedPaths?: string[];
 }

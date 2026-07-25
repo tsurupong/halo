@@ -131,3 +131,57 @@ describe('run <profile> (T23)', () => {
     ).rejects.toMatchObject({ exitCode: EXIT.USAGE });
   });
 });
+
+describe('run — .harness.yml autonomy ceiling (ADR-0004)', () => {
+  const captured = () =>
+    vi.fn<(ctx: RunContext) => Promise<{ endReason: 'MAX_ITER'; iterations: [] }>>(async () => ({
+      endReason: 'MAX_ITER',
+      iterations: [],
+    }));
+
+  test('caps a --autonomy override at the declared maxAutonomy and warns', async () => {
+    const cap = captureStreams();
+    const runLoop = captured();
+    const code = await runCommand(parseArgs(['nightly', '--autonomy', 'L3'], RUN_FLAGS), io(cap), {
+      fs: fsWithProfile(),
+      now: 0,
+      hooks: proceedingHooks({ runLoop }),
+      loadHarness: async () => ({
+        path: '/repo/.harness.yml',
+        harness: { kinds: { code: { runtimes: ['n'], prompt: 'p.md' } }, maxAutonomy: 'L2' },
+      }),
+    });
+    expect(code).toBe(EXIT.OK);
+    expect(runLoop.mock.calls[0]![0].config.autonomy).toBe('L2');
+    expect(cap.err()).toMatch(/caps autonomy at L2/);
+  });
+
+  test('leaves autonomy untouched when the repository declares no ceiling', async () => {
+    const cap = captureStreams();
+    const runLoop = captured();
+    await runCommand(parseArgs(['nightly', '--autonomy', 'L3'], RUN_FLAGS), io(cap), {
+      fs: fsWithProfile(),
+      now: 0,
+      hooks: proceedingHooks({ runLoop }),
+      loadHarness: async () => ({
+        path: '/repo/.harness.yml',
+        harness: { kinds: { code: { runtimes: ['n'], prompt: 'p.md' } } },
+      }),
+    });
+    expect(runLoop.mock.calls[0]![0].config.autonomy).toBe('L3');
+    expect(cap.err()).not.toMatch(/caps autonomy/);
+  });
+
+  test('refuses to start when the declaration cannot be read', async () => {
+    const cap = captureStreams();
+    const { ConfigError } = await import('@tsurupong/halo-core');
+    await expect(
+      runCommand(parseArgs(['nightly'], RUN_FLAGS), io(cap), {
+        fs: fsWithProfile(),
+        now: 0,
+        hooks: proceedingHooks(),
+        loadHarness: () => Promise.reject(new ConfigError('.harness.yml:2: broken')),
+      }),
+    ).rejects.toThrow(/broken/);
+  });
+});

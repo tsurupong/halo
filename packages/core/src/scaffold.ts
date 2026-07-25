@@ -73,6 +73,10 @@ export interface HarnessYmlOptions {
   runtime: string;
 }
 
+/** 新規プロジェクトの既定自律度上限 (ADR-0004)。既定プロファイルは 3 種とも L1 なので
+ *  この上限は通常の運用を狭めず、「無人ループが到達しうる上限」を git 上に可視化する。 */
+export const DEFAULT_MAX_AUTONOMY = 'L2';
+
 /** `.harness.yml` 雛形本文を生成する (D1 §1.8 準拠, D3 §3.1)。純粋。 */
 export function renderHarnessYml(options: HarnessYmlOptions): string {
   const runtime = options.runtime || 'node-pnpm';
@@ -86,6 +90,18 @@ export function renderHarnessYml(options: HarnessYmlOptions): string {
     lines.push(`    runtimes: [${runtime}]`);
     lines.push(`    prompt: .halo/prompts/${kind}.md`);
   }
+  lines.push(
+    '',
+    '# 自律度の上限 (ADR-0004)。profile / --autonomy より後に適用されるので、',
+    '# コマンドラインからは引き上げられない。L3 (PR 作成等) を無人で許すなら L3 へ。',
+    `maxAutonomy: ${DEFAULT_MAX_AUTONOMY}`,
+    '',
+    '# エージェントによる自己改変を禁じる追加パス (ADR-0004)。CLAUDE.md / PROMPT.md /',
+    '# .harness.yml / .claude/settings*.json は宣言不要で常に保護される。',
+    '# ハーネス自身を保守させる場合は、ゲート実装やプラグイン定義をここに列挙する。',
+    '# protectedPaths:',
+    '#   - plugins/**/plugin.json',
+  );
   lines.push('');
   return lines.join('\n');
 }

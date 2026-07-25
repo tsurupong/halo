@@ -4,7 +4,7 @@
 import { realpathSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { HALO_CORE_VERSION } from '@tsurupong/halo-core';
+import { HALO_CORE_VERSION, loadHarnessYml, createNodeDiscoveryFs } from '@tsurupong/halo-core';
 import { parseArgs, boolFlag } from './args.js';
 import { EXIT, CliError, type ExitCode } from './exit-codes.js';
 import { createIo, nodeStreams, resolveGlobalFlags, type Streams } from './io.js';
@@ -100,7 +100,12 @@ export async function run(argv: readonly string[], deps: Deps): Promise<ExitCode
   try {
     switch (command) {
       case 'run':
-        return await runCommand(rest, io, { fs, now: deps.now, hooks: defaultRunHooks() });
+        return await runCommand(rest, io, {
+          fs,
+          now: deps.now,
+          hooks: defaultRunHooks(),
+          loadHarness: (cwd) => loadHarnessYml(cwd, createNodeDiscoveryFs()),
+        });
       case 'project':
         return await initCommand(rest, io, { fs });
       case 'trigger':

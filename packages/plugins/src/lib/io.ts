@@ -27,3 +27,11 @@ export function str(obj: unknown, key: string): string | undefined {
   const v = (obj as Record<string, unknown>)[key];
   return typeof v === 'string' && v !== '' ? v : undefined;
 }
+
+/** オブジェクトから文字列配列フィールドを取り出す(欠落・型違いは空配列)。 */
+export function strArray(obj: unknown, key: string): string[] {
+  if (typeof obj !== 'object' || obj === null) return [];
+  const v = (obj as Record<string, unknown>)[key];
+  if (!Array.isArray(v)) return [];
+  return v.filter((item): item is string => typeof item === 'string' && item !== '');
+}

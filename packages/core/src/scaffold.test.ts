@@ -51,3 +51,24 @@ describe('scaffold (T24)', () => {
     expect(fs.files.get('/repo/.gitignore')).toContain('.halo/');
   });
 });
+
+describe('renderHarnessYml — 安全宣言 (ADR-0004)', () => {
+  test('自律度上限を既定で書き出し、生成物がそのままパース・検証を通る', async () => {
+    const { parseHarnessYaml } = await import('./harness.js');
+    const { validateHarnessYml } = await import('./config.js');
+    const yml = renderHarnessYml({ kinds: ['code', 'docs'], runtime: 'node-pnpm' });
+
+    expect(yml).toContain('maxAutonomy: L2');
+    const parsed = validateHarnessYml(parseHarnessYaml(yml));
+    expect(parsed.maxAutonomy).toBe('L2');
+    expect(Object.keys(parsed.kinds)).toEqual(['code', 'docs']);
+  });
+
+  test('protectedPaths の例はコメントのままにする (既定では何も追加保護しない)', async () => {
+    const { parseHarnessYaml } = await import('./harness.js');
+    const parsed = parseHarnessYaml(renderHarnessYml({ kinds: [], runtime: '' })) as {
+      protectedPaths?: unknown;
+    };
+    expect(parsed.protectedPaths).toBeUndefined();
+  });
+});

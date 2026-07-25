@@ -15,6 +15,7 @@ import {
   type LightDecision,
   type HeavyDecision,
   type LoopResult,
+  type LoadedHarness,
 } from '@tsurupong/halo-core';
 
 export const RUN_VALUE_FLAGS = [
@@ -44,6 +45,11 @@ export interface RunDeps {
   fs: CliFs;
   now: number;
   hooks: RunHooks;
+  /**
+   * `.harness.yml` 読み込みシーム (D2 §7)。宣言された `maxAutonomy` を config 解決へ
+   * 渡すために run が必要とする。省略時はリポジトリ上限なし (宣言を読まない旧挙動)。
+   */
+  loadHarness?: (cwd: string) => Promise<LoadedHarness | null>;
 }
 
 function haloDirOf(cwd: string): string {
@@ -113,12 +119,40 @@ export async function runCommand(parsed: ParsedArgs, io: Io, deps: RunDeps): Pro
     );
   }
 
+  // .harness.yml の maxAutonomy はリポジトリ上限 (ADR-0004)。profile / CLI より後に
+  // 適用するので、コミット済みの宣言をコマンドラインから引き上げることはできない。
+  // 宣言が壊れている場合はここで停止する — 安全上限の読み取り失敗を握り潰して
+  // 無人ループを走らせるより、起動を止める方が安全側。
+  let harness: LoadedHarness | null = null;
+  if (deps.loadHarness) {
+    try {
+      harness = await deps.loadHarness(io.flags.cwd);
+    } catch (err) {
+      if (err instanceof ConfigError) throw usageError(err.message);
+      throw err;
+    }
+  }
+
   let config: HaloConfig;
   try {
-    config = resolveConfig({ profileEnv, cli: overrides, profileName: profile });
+    config = resolveConfig({
+      profileEnv,
+      cli: overrides,
+      profileName: profile,
+      ...(harness?.harness.maxAutonomy != null
+        ? { harnessMaxAutonomy: harness.harness.maxAutonomy }
+        : {}),
+    });
   } catch (err) {
     if (err instanceof ConfigError) throw usageError(err.message);
     throw err;
+  }
+
+  if (config.autonomyCappedFrom !== undefined) {
+    io.warn(
+      `warning: .harness.yml caps autonomy at ${config.autonomy}; ` +
+        `requested ${config.autonomyCappedFrom} was lowered for this run.`,
+    );
   }
 
   const ctx: RunContext = { config, haloDir, cwd: io.flags.cwd, now: deps.now };

@@ -11,7 +11,7 @@
 // 1 項目でも違反があれば gate.out JSON {reason, hint?, gate:"50-loop-audit"} を出し exit 2。
 // 全通過なら stdout 空・exit 0。
 import { existsSync } from 'node:fs';
-import { readStdinJson, writeStdoutJson, diag, str } from '../lib/io.js';
+import { readStdinJson, writeStdoutJson, diag, str, strArray } from '../lib/io.js';
 import { run } from '../lib/exec.js';
 
 const GATE = '50-loop-audit';
@@ -30,11 +30,49 @@ function isTestFile(path: string): boolean {
   return path.startsWith('tests/') || path.includes('/tests/');
 }
 
+/**
+ * `.harness.yml` protectedPaths の glob を正規表現へ変換する (ADR-0004)。
+ * `**` はセグメント跨ぎ、`*` は単一セグメント内、`?` は 1 文字。それ以外の
+ * 正規表現メタ文字はリテラル扱い。パスは常にリポジトリ相対で照合する。
+ */
+function globToRegExp(pattern: string): RegExp {
+  let out = '';
+  for (let i = 0; i < pattern.length; i++) {
+    const ch = pattern[i]!;
+    if (ch === '*') {
+      if (pattern[i + 1] === '*') {
+        // `**/` は「0 個以上のディレクトリ」— foo/**/bar が foo/bar にも一致する。
+        if (pattern[i + 2] === '/') {
+          out += '(?:.*/)?';
+          i += 2;
+        } else {
+          out += '.*';
+          i += 1;
+        }
+      } else {
+        out += '[^/]*';
+      }
+      continue;
+    }
+    if (ch === '?') {
+      out += '[^/]';
+      continue;
+    }
+    out += ch.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+  }
+  return new RegExp(`^${out}$`);
+}
+
+// core が gate.in で渡す追加保護パス (ADR-0004)。リポジトリルートの .harness.yml を
+// 読むのは core 側なので、worktree 内の複製を書き換えてもこのリストは弱められない。
+const extraProtected: RegExp[] = [];
+
 function isProtectedFile(path: string): boolean {
   const base = path.split('/').pop() ?? path;
   // .claude/settings*.json は hooks/allow で実効権限を拡張できるため保護対象 (S2, D4 §2)。
   if (path.includes('.claude/') && /^settings(\.local)?\.json$/.test(base)) return true;
-  return base === 'CLAUDE.md' || base === 'PROMPT.md' || base === '.harness.yml';
+  if (base === 'CLAUDE.md' || base === 'PROMPT.md' || base === '.harness.yml') return true;
+  return extraProtected.some((re) => re.test(path));
 }
 
 const input = await readStdinJson().catch(() => undefined);
@@ -48,6 +86,15 @@ if (run('git', ['-C', workdir, 'rev-parse', '--git-dir']).code !== 0)
 // 無ければ後方互換で `git diff HEAD`(作業ツリー未コミット差分のみ)へ倒す。
 const base = str(input, 'base');
 const diffTarget = base !== undefined && base !== '' ? base : 'HEAD';
+
+for (const pattern of strArray(input, 'protected_paths')) {
+  try {
+    extraProtected.push(globToRegExp(pattern));
+  } catch {
+    // 壊れた glob で保護が静かに消えるのが最悪 — 構成不備として明示的に落とす。
+    fail(`protected_paths の glob が不正: '${pattern}'`);
+  }
+}
 
 // intent-to-add: 未追跡の新規ファイルも diff に現れるようにする(作業ツリーは変更しない)。
 run('git', ['-C', workdir, 'add', '-A', '-N']);
