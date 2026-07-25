@@ -110,7 +110,9 @@ The deny set is not statically placed into the target repository. It is **inject
 3. Deny rules have top evaluation priority in Claude Code's permission order — they apply **in every permission mode, including `bypassPermissions`** — so this layer holds regardless of the mode profile (§6).
 4. `.claude/settings.json` inside the worktree, if present, is target-repository state and is **not** relied upon (it is writable by the executor and therefore not a security boundary).
 
-The authoritative pattern list stays the §4.3 table; the injected deny set and the loop-audit checks are both derived from it, and `halo doctor` verifies the injected file matches (drift detection).
+The authoritative pattern list stays the §4.3 table; the injected deny set and the loop-audit checks are both derived from it, and `halo doctor` check 13 verifies the injected file still contains the whole §2.2 standard set (drift detection).
+
+**Implementation note.** The executable form of the §2.2 list is `packages/core/src/executor-settings.ts`: the injector (`run-wiring`) and the doctor check are generated from that one constant, so they cannot drift apart. `.harness.yml` `protectedPaths` is compiled into `Write`/`Edit` deny rules and appended, which is what keeps layer 1 (deny) and layer 2 (gate `protected_paths`) enforcing the same set. If the settings file cannot be written the run **aborts** rather than continuing on layer 2 alone — ADR-0019 calls both layers mandatory.
 
 ---
 
@@ -152,14 +154,15 @@ Internally obtain `git -C <workdir> diff --numstat` / `git -C <workdir> diff <ba
 
 | # | Check item | Check method | Example reason on fail |
 |---|---|---|---|
-| ① | **spec_refs existence** | Query whether the task's `spec_refs` (`kg://` node IDs) **actually exist in the knowledge graph** (read-only). Fail if there is a nonexistent reference. * v1.5's `test -f` is abolished | `spec_refs 'kg://...' does not exist in the graph` |
+| ①※ | **spec_refs existence** | Query whether the task's `spec_refs` (`kg://` node IDs) **actually exist in the knowledge graph** (read-only). Fail if there is a nonexistent reference. * v1.5's `test -f` is abolished | `spec_refs 'kg://...' does not exist in the graph` |
 | ② | **Test files unchanged** | Match the diff's change targets against test-detection patterns (`*.test.*` / `*_test.*` / `test_*.py` / `tests/**`, etc.). Fail if even one is **deleted or changed** (new additions are permitted) | `Test file src/order.test.ts was changed` |
 | ③ | **Zero new escape hatches** | Whether there is no new appearance of `eslint-disable` / `as any` / `@ts-ignore` in the diff's **added lines** (`+`). Keeping existing ones is permitted; additions are forced to zero | `A new @ts-ignore was added in src/api.ts` |
 | ④ | **Coverage threshold unchanged** | Whether the coverage threshold value in a config file is not **lowered** in the diff | `The coverage threshold was modified from 90 → 80` |
 | ⑤ | **Self-modification prohibition** | Fail if the diff's change targets include `CLAUDE.md` / `PROMPT.md` / `.harness.yml` / test files (§11.1) | `Self-modification of PROMPT.md was detected` |
 | ⑥ | **1500-line diff limit** | Fail if the total of added + deleted lines exceeds **1500** (the fixed value of §11.1). Forcing task splitting | `diff 1720 lines > 1500. Split the task` |
-| ⑦ | **Graph modification detection** | Whether the hash of graph files **matches the loop start**. Detect direct modification during execution as fail (§5.3) | `A graph file was modified during loop execution` |
+| ⑦※ | **Graph modification detection** | Whether the hash of graph files **matches the loop start**. Detect direct modification during execution as fail (§5.3) | `A graph file was modified during loop execution` |
 
+- ※ **①/⑦ are deferred to Phase 4 together with the knowledge graph** (D1 §4.2). Until the graph exists there is nothing to query or hash, so the gate emits a pass-with-warning for those two and enforces ②-⑥. The *set of seven* is what is fixed by §11.1; the two graph-dependent members activate when the graph does.
 - ② and ⑤ overlap on test files, but ② protects "modification of tests in general" and ⑤ protects "self-modification (the rule-set of the harness)"—separate invariants. Held independently, they complement each other.
 - The 1500 lines of ⑥ is the fixed value of §11.1. The coverage threshold value of ④ (e.g., 90%) is an initial value (tentative) of §11.2, but the invariant itself of "**prohibiting modification in the lowering direction**" is fixed.
 

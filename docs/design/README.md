@@ -4,6 +4,17 @@ Source: [HALO Requirements Specification v1.8](../../../docs/HALO要件定義書
 The document system follows [HALO Design Document Index](../../../docs/HALO設計書一覧.md) (D1-D9).
 
 > Note: 01-06 contain content as of v1.5 (e.g., the bash-core premise). Where they contradict the core TypeScript migration and the abolition of specs/ confirmed in v1.8, the individual design documents of the D system (d1-, d4-, ...) are authoritative.
+>
+> Concretely, the following in 01-03 have been superseded and are **not** maintained there — read the D-series instead:
+>
+> | Stale in 01-03 | Authority |
+> |---|---|
+> | `plugin.json` `exec`, `*.sh` plugin files, `sh` launchers | D1 §2 / D11 §3 (ADR-0018: `entry` + `aux`, spawned as `node <entry>`) |
+> | A separate `20-lint` gate | D1 §1.4 / §1.7 (lint is part of the runtime `check`) |
+> | The per-autonomy sink table with `10-git-commit` at L2 and `15-create-pr` | D1 §1.5 (ADR-0016: `sink-git-commit` is L1; no L2/L3 sink is bundled yet) |
+> | "loop-audit's 7 checks all run from Phase 1 day 1" | D4 §4.2 (①/⑦ are graph-dependent and activate in Phase 4) |
+>
+> 06 §6.2 (the `iter_N.json` schema) and 06 §5 (the cost parameter table) *are* maintained and remain authoritative for observability and cost knobs.
 
 | # | Section | Corresponding requirements | Related ADR |
 |---|---|---|---|

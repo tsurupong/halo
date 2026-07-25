@@ -230,6 +230,19 @@ Expands Requirements Document §6.2 into implementation parameters. Among the nu
         }
       }
     },
+    "diagnostics": {
+      "type": "array",
+      "description": "Captured plugin stderr (D1 §3.3). Secrets redacted, tail-truncated. Omitted when every plugin was quiet",
+      "items": {
+        "type": "object",
+        "required": ["port", "plugin", "stderr"],
+        "properties": {
+          "port": { "type": "string" },
+          "plugin": { "type": "string" },
+          "stderr": { "type": "string" }
+        }
+      }
+    },
     "gates": {
       "type": "array",
       "description": "Result of running all of gate.d in numeric order. Primary data for computing pass rate",

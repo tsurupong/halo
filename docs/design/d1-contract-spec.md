@@ -2,7 +2,7 @@
 
 | Item | Content |
 |---|---|
-| Document version | 1.0 |
+| Document version | 1.1 (2026-07-25: `exec`→`entry`/`aux` per ADR-0018, `gate.in` `base`/`protected_paths`, `.harness.yml` safety fields, sink autonomy table per ADR-0016, `diagnostics[]`, mcp.d Phase 4 note) |
 | Premise | The HALO Requirements Specification v1.8 is the top-level document |
 | Positioning | **The formal definition of the public API**. Also serves as the README of `packages/contracts` |
 | Public/Private | Public (OSS) |
@@ -17,7 +17,7 @@
 
 The HALO core loop (`packages/core`) and all plugins communicate over a **unified contract of "JSON on stdin, JSON on stdout, decision by exit code" across process boundaries** (requirements §3.2, principle 2). This contract is the public API of the OSS, and the following are treated as the most important invariants.
 
-1. **Language independence**: The core is implemented in TypeScript (distributed via npm, `npx halo`), but plugins may be in any language (bash / Python / Node are all acceptable). Because the contract sits at the process boundary, plugins are independent of the core's implementation language.
+1. **Process-boundary contract**: The core is implemented in TypeScript (distributed via npm, `npx halo`). The contract lives at the process boundary — stdin JSON / stdout JSON / exit code — so a plugin never depends on the core's internals. **Since [ADR-0018](../adr/0018-entry-contract.md) the bundled discovery/runner path spawns `node <entry>`, so a plugin activated through `ports/<port>.d/` must be a JS module**; the bash examples in this document remain valid as *contract* illustrations but no longer describe a supported spawn path. The boundary itself stays language-agnostic (`runPort` takes an arbitrary `execPath`/`args`), and a manifest field for an explicit interpreter is deferred until a concrete non-Node plugin exists (ADR-0018 §Risks).
 2. **Fixed process boundary**: Each plugin is launched as a single process and does not assume any means of communication other than stdin/stdout/exit code (shared memory, global state, mutual dependence on side effects to environment variables, etc.).
 3. **Activation by directory convention**: Placing a plugin in `ports/<port-name>.d/` enables it; deleting it disables it. Execution order is controlled by a numeric prefix (the `conf.d` approach; §2 for each port, §6).
 
@@ -98,9 +98,11 @@ Responsible for fetching tasks and reporting completion/failure. The input is di
 
 **Behavior of the GitHub Issues adapter** (requirements §4.2①):
 
-- `next`: Fetch the first result of `gh issue list --label ready` and relabel it to `in-progress` (a lock to prevent duplicate acquisition).
-- `complete`: Auto-closed on merge via `Closes #<number>` in the PR body.
-- `fail`: Record the retry count in an Issue comment. If the same Issue fails **3 times** (initial value), attach the `needs-human` label and escalate to a human (breaking the infinite loop).
+- `next`: Fetch the first result of `gh issue list --label ready` and relabel it to `in-progress` (a lock to prevent duplicate acquisition). **Every `gh` invocation is checked**: a non-zero exit is a fault (exit 2 → the core's `TASK_SOURCE_ERROR`), never `{"task_id": null}` — otherwise an expired credential is indistinguishable from an empty queue and an idle night gets recorded as a clean run. If the relabel fails the task is **not** handed out, because an unlocked task would be re-fetched every iteration.
+- `complete`: Auto-closed on merge via `Closes #<number>` in the PR body; the adapter records the delivery reference in a comment and moves the label to `done`.
+- `fail`: Record the attempt in an Issue comment (`fail #N: <reason>`). **Below the threshold the Issue is returned to `ready`** so the next iteration re-fetches it — without this the 3-strike escalation is unreachable, since `next` only looks at `ready` and the Issue would sit in `in-progress` forever. On reaching the threshold (**3**, initial value) attach `needs-human` and stop re-supplying it (breaking the infinite loop).
+
+> **Where the attempt count lives**: the core's `retry_count` is per-run, in-memory state, so a trigger that starts a fresh `halo run` each time always reports 1 and never reaches the threshold. The GitHub adapter therefore derives the running total from the Issue itself (counting `fail #N:` comments) and uses `max(derived, retry_count)` — the source of truth is GitHub, consistent with ADR-0009 (zero global state). When the history cannot be read it falls back to `retry_count`, i.e. it under-counts and escalates late rather than labelling `needs-human` early. The local adapter persists the same total under `.halo/tasks/retry/<task_id>.count` and clears it on completion.
 
 **Input JSON Schema**
 
@@ -316,6 +318,8 @@ Pass/fail judgment of the deliverable. **The decision is by exit code, not by ou
 | `task_id` | `string` | ✓ | Task ID |
 | `workdir` | `string` | ✓ | Absolute path of the worktree under inspection |
 | `changed_files` | `string[]` | ✓ | List of changed files |
+| `base` | `string` | | The worktree's base commit (the HEAD captured when it was created). Diff-based gates inspect `git diff <base>` so that **committed and uncommitted changes are both audited**; without it they fall back to `git diff HEAD` and an executor that commits its own work escapes inspection (D4 §4.2). Added in contract MINOR (§7) |
+| `protected_paths` | `string[]` | | Extra repo-relative glob patterns the audit gate must treat as protected, from `.harness.yml` `protectedPaths` (ADR-0004). **The core reads the declaration at the repository root and passes the list in**, so the set a gate enforces cannot be weakened by editing the copy inside the worktree. A single star matches within one path segment, a double star across segments. Added in contract MINOR (§7) |
 
 **Output (stdout, only on fail)**
 
@@ -325,7 +329,7 @@ Pass/fail judgment of the deliverable. **The decision is by exit code, not by ou
 | `hint` | `string` | | e.g. `insufficient tests for src/order.ts` |
 | `gate` | `string` | | Name of the gate that failed (e.g. `30-test`) |
 
-- The `10-typecheck` / `20-lint` / `30-test` in gate.d have no real commands; they are thin wrappers that delegate to the adopted runtime's `check.sh` / `test.sh` (§1.7).
+- The `10-typecheck` / `30-test` in gate.d have no real commands; they are thin wrappers that delegate to the adopted runtime's `check` / `test` roles (§1.7). Lint is folded into the runtime's `check`, so there is no separate `20-lint` gate.
 - `40-ai-review` (evaluator agent) and `50-loop-audit` (structural checks such as the self-modification ban, requirements §11.1) are gates of the same rank.
 - The evaluator is tuned to be "skeptical," but it is made to flag only gaps affecting correctness / requirements to prevent over-flagging (initial value, requirements §11.2).
 
@@ -350,7 +354,9 @@ Pass/fail judgment of the deliverable. **The decision is by exit code, not by ou
   "properties": {
     "task_id": { "type": "string" },
     "workdir": { "type": "string" },
-    "changed_files": { "type": "array", "items": { "type": "string" } }
+    "changed_files": { "type": "array", "items": { "type": "string" } },
+    "base": { "type": "string" },
+    "protected_paths": { "type": "array", "items": { "type": "string" } }
   }
 }
 ```
@@ -387,17 +393,19 @@ Side effects after passing (filtered by autonomy level). Run only after passing;
 
 **Autonomy filter**: Each sink declares its minimum required autonomy level via `minAutonomy` in `plugin.json` (§2). The core skips any sink below the current `AUTONOMY`.
 
-| AUTONOMY | Enabled sinks (initial configuration) |
+| AUTONOMY | Enabled sinks (bundled set as shipped) |
 |---|---|
-| L1 | `20-progress-log` only |
-| L2 | `20-progress-log` + `10-git-commit` + `15-create-pr` (**draft PR**) |
-| L3 | All L2 sinks + `15-create-pr` (**normal PR**, with `Closes #<number>` in the body) |
+| L1 | `sink-git-commit` (`minAutonomy: L1`) + `sink-progress-log` (`minAutonomy: L1`) |
+| L2 | The L1 set + any `minAutonomy: L2` sink (**none is bundled yet** — see below) |
+| L3 | The L2 set + any `minAutonomy: L3` sink, and every sink that declares no `minAutonomy` |
 
 Autonomy levels are cumulative (L3 ⊇ L2 ⊇ L1). A higher level runs all sinks enabled at lower levels.
 
-The `minAutonomy` of `15-create-pr` is `L2`, and a single sink reads the `AUTONOMY` env to produce **a draft PR at L2 and a normal PR at L3** (draft/normal is not split into separate per-level sinks).
+**Why `sink-git-commit` is L1** (ADR-0016): "report only" is reinterpreted as "no external *publication* (push / PR / deploy)". A commit on the local per-task branch is evidence, not publication, and without it an L1 run passing its gates produced nothing durable — the worktree was removed and the work discarded. This supersedes the v1.8 table that placed `10-git-commit` at L2.
 
-Initial configuration: `10-git-commit` / `15-create-pr` / `20-progress-log`. Future: `30-reindex-graph` (re-index after merge), `35-reindex-knowledge` (knowledge-graph re-index after a docs merge).
+**Current gap**: no sink in the bundled set declares `L2` or `L3`, so raising `AUTONOMY` above L1 currently enables nothing extra. A `create-pr` sink (`minAutonomy: L2`, reading the `AUTONOMY` env to produce **a draft PR at L2 and a normal PR at L3** within a single sink) is **deferred past Phase 1** together with the graph layer — see the phase plan in the Requirements Specification. The mechanism (declaration + core filter, ADR-0006) is in place; only the sink is missing.
+
+Future: `30-reindex-graph` (re-index after merge), `35-reindex-knowledge` (knowledge-graph re-index after a docs merge) — both Phase 4.
 
 **Input JSON Schema**
 
@@ -465,18 +473,21 @@ The failure catalog is read by context.d (`30-recent-failures`), which injects r
 
 ### 1.7 ⑦ runtime
 
-Provides deliverable-kind-specific setup and inspection commands. **What runtime absorbs is not the "language" but the "kind of deliverable"**, treating code (node-pnpm / python-uv / rust) and documents (docs-md) on the same footing. Unlike other ports it is a directory bundle, but the contract of each script is identical (stdin JSON + exit code).
+Provides deliverable-kind-specific setup and inspection commands. **What runtime absorbs is not the "language" but the "kind of deliverable"**, treating code (node-pnpm / python-uv / rust) and documents (docs-md) on the same footing. Unlike other ports it is a bundle of three roles, but the contract of each role is identical (stdin JSON + exit code).
 
-```
-ports/runtime.d/<name>/
-├── setup.sh    # env injection + dependency materialization + cache externalization setup
-├── check.sh    # static check (exit 2 = fail)
-└── test.sh     # dynamic verification (exit 2 = fail)
+The three roles are declared in `plugin.json` (§2, ADR-0018) rather than by fixed filenames:
+
+```jsonc
+{
+  "port": "runtime",
+  "entry": "./setup.js",                              // setup: dependency materialisation
+  "aux": { "check": "./check.js", "test": "./test.js" } // static check / dynamic verification
+}
 ```
 
-- Selection is by declaration in `.harness.yml` (there is no `detect.sh`).
-- The `10-typecheck` / `20-lint` / `30-test` in gate.d are thin wrappers delegating to the adopted runtime's `check.sh` / `test.sh`.
-- `setup.sh` must materialize dependencies quickly (node-pnpm hard links / python-uv links / rust shared `CARGO_TARGET_DIR`).
+- Selection is by declaration in `.harness.yml` (there is no auto-detection).
+- The `10-typecheck` / `30-test` in gate.d are thin wrappers delegating to the adopted runtime's `check` / `test` roles. There is no separate `20-lint` gate: lint is part of the runtime's `check` (for `node-pnpm`, `tsc --noEmit` followed by `eslint`), so the command lives in exactly one place.
+- `setup` must materialize dependencies quickly (node-pnpm hard links / python-uv links / rust shared `CARGO_TARGET_DIR`).
 
 **Common input (setup/check/test)**
 
@@ -485,7 +496,7 @@ ports/runtime.d/<name>/
 | `workdir` | `string` | ✓ | Absolute path of the target worktree |
 | `changed_files` | `string[]` | | For narrowing the check/test scope (optional) |
 
-**Decision**: For `check.sh` / `test.sh`, exit 0 = pass / exit 2 = fail.
+**Decision**: For the `check` / `test` roles, exit 0 = pass / exit 2 = fail.
 
 Initial implementations:
 
@@ -529,7 +540,22 @@ kinds:
   docs:
     runtimes: [docs-md]
     prompt: prompts/docs.md
+
+# Repository-level safety caps (ADR-0004). Both optional.
+maxAutonomy: L2
+protectedPaths:
+  - packages/plugins/src/gate-loop-audit/**
+  - .github/workflows/**
 ```
+
+**Safety fields** (ADR-0004). They live here rather than in a profile because `.harness.yml` is committed *and* is itself a loop-audit protected file: the cap an unattended run obeys stays reviewable in git and cannot be raised by the agent.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `maxAutonomy` | `"L1" \| "L2" \| "L3"` | | Repository ceiling on the autonomy level. The effective level is `min(resolved AUTONOMY, maxAutonomy)`, applied **after** the profile and `--autonomy`, so neither can exceed it. Omitted → no repository ceiling |
+| `protectedPaths` | `string[]` | | Extra repo-relative glob patterns protected from agent self-modification, on top of the built-in set (`CLAUDE.md`, `PROMPT.md`, `.harness.yml`, `.claude/settings*.json`). Enforced in **both** layers: the core passes the list to gates via `gate.in.protected_paths` (§1.4) and derives `Write`/`Edit` deny rules for the injected executor settings (D4 §2.4). Use this when the harness maintains itself, to keep the gate implementation out of the agent's reach |
+
+A malformed value in either field stops the run with a configuration error (exit 3) rather than being ignored — a mis-spelled cap that silently does nothing is worse than a failed launch.
 
 **`.harness.yml` JSON Schema**
 
@@ -553,7 +579,11 @@ kinds:
           "prompt": { "type": "string", "description": "path to the prompt template" }
         }
       }
-    }
+    },
+    "maxAutonomy": { "enum": ["L1", "L2", "L3"],
+      "description": "repository ceiling, applied after profile and --autonomy (ADR-0004)" },
+    "protectedPaths": { "type": "array", "items": { "type": "string" },
+      "description": "extra self-modification-protected globs, enforced by gate and deny (ADR-0004)" }
   }
 }
 ```
@@ -566,14 +596,22 @@ Startup of the core (the sole entry point that calls the halo CLI). A bundle of 
 
 ```
 ports/trigger.d/<name>/
-├── install.sh   # register the trigger (scheduler registration, timer enablement, etc.)
-├── uninstall.sh # unregister
-└── fire         # launch entry registered with the OS (absolute path to node_modules/.bin/halo run <profile>)
+└── plugin.json  # entry = fire, aux = { install, uninstall }   (ADR-0018)
+```
+
+The three roles (previously fixed-name `install.sh` / `uninstall.sh` / `fire` files) are declared in the manifest:
+
+```jsonc
+{
+  "port": "trigger",
+  "entry": "./fire.js",
+  "aux": { "fire": "./fire.js", "install": "./install.js", "uninstall": "./uninstall.js" }
+}
 ```
 
 - `fire` is the sole entry point that starts the halo CLI (`node_modules/.bin/halo`), and everything below the CLI (preflight, loop, ports) does not know what the trigger is.
 - In unattended execution it invokes the absolute path to `.bin` directly rather than going through `npx` (version-pinned and network-independent).
-- Initial implementations: `schedule/` (scheduled startup via the Windows Task Scheduler), `polling/` (high-frequency scheduled startup + "exit immediately if 0 ready tasks"). Future: `webhook/` / `manual/` (everything below `fire` is swappable without change).
+- Initial implementations: `trigger-schedule` (scheduled startup), `trigger-polling` (high-frequency scheduled startup + "exit immediately if 0 ready tasks"). The scheduler backend (`schtasks` / `systemd` / `cron` / `launchd`) is auto-detected inside the adapter and overridable with `HALO_SCHEDULER` (ADR-0015). Future: `webhook` / `manual` (everything below `fire` is swappable without change).
 
 > **Startup profiles** (requirements §4.4) are a set of environment-variable files bundling the loop's execution settings (autonomy, limits, task filter, budget), placed in `.halo/profiles/`. The trigger merely starts `halo run <profile>` by specifying the profile name. The internal format of a profile is under the jurisdiction of D2/D3 and is outside the scope of this document's contract.
 
@@ -582,6 +620,8 @@ ports/trigger.d/<name>/
 ### 1.10 Aux mcp.d
 
 Not a port but an MCP configuration fragment passed to the executor. `ports/mcp.d/*.json` is merged to generate `.halo/mcp.json` at startup, which is read via `claude -p --mcp-config <mcp.json> --strict-mcp-config`. Each fragment conforms to an MCP server definition object (under the `mcpServers` key).
+
+> **Deferred to Phase 4** (with the graph layer). `project init` creates the empty `ports/mcp.d/` directory, but neither the merge step nor the `--mcp-config` flag is implemented yet: the executor is spawned with `--strict-mcp-config` and no config, i.e. **zero MCP servers**. That is the fail-closed direction, and the servers this port exists to carry (`codegraph` / `knowledge`) are themselves Phase 4. Enabling this port means implementing the merge **and** adding `--mcp-config` to the executor adapter — one without the other changes nothing.
 
 ```json
 {
@@ -604,7 +644,8 @@ Each plugin has a `plugin.json` in its own directory, declaring the metadata the
 | `name` | `string` | ✓ | Plugin identifier (`@halo/plugin-*`, etc.) |
 | `version` | `string` | ✓ | The plugin's own semver |
 | `port` | `string` | ✓ | The port it belongs to (`task-source` / `context` / `executor` / `gate` / `sink` / `on-fail` / `runtime` / `trigger`) |
-| `exec` | `string` | ✓ | Relative path to the executable (bash / node / python all acceptable) |
+| `entry` | `string` | ✓ | Relative (or absolute) path to the plugin's main JS entry module. The core spawns it as `process.execPath <entry>` — no shell, no exec bit, no shebang (ADR-0018). Replaces the pre-v0.3.0 `exec` field, which discovery now **rejects** |
+| `aux` | `object` | | Named auxiliary JS entries, keyed by role (`fire` / `install` / `uninstall` for trigger, `check` / `test` for runtime). Not spawned by the loop; resolved by whoever owns that role (ADR-0018) |
 | `order` | `integer` | | Execution order (equivalent to the numeric prefix; when omitted, follows the numeric prefix of the file name) |
 | `minAutonomy` | `"L1" \| "L2" \| "L3"` | | Autonomy filter for sinks, etc. When undeclared, treated as the safest side (= regarded as L3 and skipped at L1/L2) |
 | `timeoutSec` | `integer` | | Execution timeout for this plugin (the initial value follows the port default) |
@@ -614,18 +655,30 @@ Each plugin has a `plugin.json` in its own directory, declaring the metadata the
 
 ```json
 {
-  "name": "@halo/plugin-sink-create-pr",
+  "name": "@halo/plugin-sink-git-commit",
   "version": "1.0.0",
   "port": "sink",
-  "exec": "./15-create-pr.sh",
-  "order": 15,
-  "minAutonomy": "L2",
+  "entry": "./main.js",
+  "order": 10,
+  "minAutonomy": "L1",
   "timeoutSec": 120,
-  "env": { "GH_TOKEN": "${HALO_GH_TOKEN}" }
+  "env": { "HALO_GIT_NAME": "halo" }
 }
 ```
 
-> `15-create-pr` is enabled at `minAutonomy: "L2"` and reads the `AUTONOMY` env to produce a draft PR at L2 and a normal PR at L3 (branching within a single sink).
+**Example (trigger bundle, using `aux`)**
+
+```json
+{
+  "name": "@halo/plugin-trigger-polling",
+  "version": "1.0.0",
+  "port": "trigger",
+  "entry": "./fire.js",
+  "aux": { "fire": "./fire.js", "install": "./install.js", "uninstall": "./uninstall.js" }
+}
+```
+
+> `sink-git-commit` is enabled at `minAutonomy: "L1"` because ADR-0016 reinterprets "report only" as "no external publication": a local branch commit is evidence, not publication. A future `create-pr` sink declares `L2` and reads the `AUTONOMY` env to produce a draft PR at L2 and a normal PR at L3 (branching within a single sink) — see §1.5.
 
 **`plugin.json` JSON Schema**
 
@@ -635,14 +688,15 @@ Each plugin has a `plugin.json` in its own directory, declaring the metadata the
   "$id": "https://halo.dev/contracts/plugin.json",
   "title": "plugin manifest",
   "type": "object",
-  "required": ["name", "version", "port", "exec"],
+  "required": ["name", "version", "port", "entry"],
   "properties": {
     "name": { "type": "string" },
     "version": { "type": "string",
       "pattern": "^\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$" },
     "port": { "enum": ["task-source", "context", "executor", "gate",
       "sink", "on-fail", "runtime", "trigger"] },
-    "exec": { "type": "string" },
+    "entry": { "type": "string" },
+    "aux": { "type": "object", "additionalProperties": { "type": "string" } },
     "order": { "type": "integer" },
     "minAutonomy": { "enum": ["L1", "L2", "L3"] },
     "timeoutSec": { "type": "integer", "minimum": 1 },
@@ -652,7 +706,9 @@ Each plugin has a `plugin.json` in its own directory, declaring the metadata the
 }
 ```
 
-> runtime / trigger are directory bundles (fixed-name scripts), and `exec` points to the bundle's entry (omittable for runtime, `fire` for trigger). No numeric prefix is attached; selection is by declaration in `.harness.yml` (runtime) / by the trigger's install (trigger).
+> runtime / trigger are directory bundles: `entry` is the bundle's primary entry (runtime `setup`, trigger `fire`) and the remaining roles live in `aux` (runtime `check` / `test`, trigger `install` / `uninstall`). No numeric prefix is attached; selection is by declaration in `.harness.yml` (runtime) / by the trigger's install (trigger).
+>
+> **Migration from ≤ v0.2.0**: the `exec` field was removed in v0.3.0 (MAJOR, ADR-0018). A manifest that still declares `exec` is **rejected** by discovery with a `DiscoveryError` naming the field — it is not silently ignored and there is no fallback. Regenerate bundled plugins with `halo enable <name>`.
 
 ---
 
@@ -681,7 +737,7 @@ All plugins are run under the following unified convention.
 ### 3.3 Handling of stderr
 
 - **stderr is for diagnostics/logging only** and has no contractual meaning.
-- The core captures the plugin's stderr and offloads it to that iteration's structured log (`.halo/logs/iter_N.json`) (requirements §6.3).
+- The core captures the plugin's stderr and offloads it to that iteration's structured log (`.halo/logs/iter_N.json`), in the `diagnostics[]` array as `{port, plugin, stderr}` (requirements §6.3, obs schema 06 §6.2). Secrets are redacted and each entry is truncated to its tail before it reaches disk. This matters most for **sink / on-fail**: those ports are best-effort, so without the capture their failures leave no trace anywhere.
 - Pass/fail is not judged by the content of stderr (the decision is by exit code / status). A plugin may write human-readable progress and warnings to stderr.
 
 ---
@@ -792,7 +848,7 @@ The contract defined by this document is HALO's public API and is **managed most
 | Backward-compatible feature addition = minor | MINOR | Adding an optional field (e.g., `executor.in.budget.max_budget_usd`, ADR-0021), adding a new port or new status value (within a range that does not break existing behavior), adding an optional field to `plugin.json` |
 | Backward-compatible fix = patch | PATCH | Fixing descriptions/examples, clarifying Schema wording (without changing meaning) |
 
-- The contract version is kept in sync with the package version of `packages/contracts` and mapped to this document's version.
+- The contract version is the package version of `packages/contracts`; this document's version tracks it. (These drifted apart once — the document sat at 1.0 while the package moved to 0.4.0 — so treat a mismatch as a review finding, not as two independent numbers.)
 - Because breaking changes affect all existing plugins (including the 4 samples) and target repositories, a migration guide is provided in D5 on a major update.
 - Finalizing the items this document marked as initial value/deferred (numeric parameters, kg:// node-type addition rules, STUCK marker detection details) is treated as **a patch if it does not change meaning, and minor or higher if it changes the contract**.
 

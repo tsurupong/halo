@@ -61,8 +61,8 @@ commands:
   status [--days <n>]                 稼働状態・予算残・直近実績 (既定 7 日のサマリ集計・コスト付き)
   history [--days <n>] [--limit <n>]  実行履歴の時系列一覧 (既定 7 日 / 20 件)
   watchdog [--action <mode>]          停滞ループの検知/回収 (report|kill|skip, 既定 report)
-  doctor [--fix]                      環境自己診断 (9 検査)
-  enable <plugin-name>                同梱プラグインを絶対パスランチャーとして .halo/ に生成
+  doctor [--fix]                      環境自己診断
+  enable <plugin-name>                同梱プラグインを .halo/ports/<port>.d/ へ有効化 (plugin.json を生成)
 
 global flags:
   --cwd <path>   対象リポジトリルート   --json      機械可読出力

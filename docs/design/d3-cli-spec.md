@@ -2,7 +2,7 @@
 
 | Item | Content |
 |---|---|
-| Document version | 1.0 |
+| Document version | 1.1 (2026-07-25: command table extended to history/watchdog/enable, doctor checks 10-13, abnormal loop end reasons mapped to exit 1, `halo enable` no longer generates a launcher) |
 | Prerequisites | HALO Requirements Specification v1.8 / D1 Contract Specification / D2 Core Detailed Design |
 | Positioning | **Public**. The command definitions of `packages/cli`. The entry point of unattended execution, and the implementation spec of Requirements §4.4 (Launch Layer, CLI-standard safety mechanisms) and §8.2 (zero global state) |
 | Implementation | TypeScript (`packages/cli`, npm-distributed). Installation is `npm i -D halo`, execution is `npx halo <command>` or direct invocation of `node_modules/.bin/halo` from a trigger |
@@ -26,18 +26,21 @@ This principle guarantees the following.
 
 ---
 
-## 1. The 6-Command System
+## 1. The Command System
 
-It takes the form `halo <command> [subcommand] [args] [flags]`. The first level is 6 commands, and `project` and `trigger` have subcommands.
+It takes the form `halo <command> [subcommand] [args] [flags]`, and `project` and `trigger` have subcommands. Rows 1-6 are the original set of D3 v1.0; rows 7-9 were added later by ADR-0013 (watchdog), D9 §3 (history) and ADR-0018 / D11 §3 (enable).
 
 | # | Command | Subcommand | Role | Main delegation target (§6) |
 |---|---|---|---|---|
 | 1 | `run <profile>` | — | Specify a profile and run one launch (preflight → loop). The actual processing that triggers invoke | `core.preflight` / `core.loop` |
 | 2 | `project init` | — | Place the target repository under HALO management (generate the `.harness.yml` template, `.halo/` skeleton, `.gitignore` append) | `core.scaffold` |
-| 3 | `trigger` | `install` / `uninstall` / `list` | Register, unregister, and list trigger adapters. The actual processing is delegated to `trigger.d/<name>/{install,uninstall}.sh` | `core.discovery` + trigger adapter |
+| 3 | `trigger` | `install` / `uninstall` / `list` | Register, unregister, and list trigger adapters. The actual processing is delegated to the adapter's `install` / `uninstall` `aux` entries (ADR-0018) | `core.discovery` + trigger adapter |
 | 4 | `stop` / `resume` | — | Place/remove the kill switch (`.halo/STOP`). Stop/resume unattended execution without entering a terminal | `core.killswitch` |
 | 5 | `status` | — | Display the current operation state, remaining daily budget, latest loop actuals, and trigger registration status | `core.budget` / `core.logger` |
-| 6 | `doctor` | — | Self-diagnosis of environment health (trigger liveness, presence of external commands, permissions) | `core.doctor` |
+| 6 | `doctor` | — | Self-diagnosis of environment health (trigger liveness, presence of external commands, permissions, injected deny settings) | `core.doctor` |
+| 7 | `history` | — | Time-ordered listing of past iterations from `logs/iter_N.json` (D9 §3) | `core.logger` |
+| 8 | `watchdog` | — | One-shot supervisor: detect a wedged run via `logs/current.json` + the lock, then `report` / `kill` / `skip` (ADR-0013, D9 §2) | `core.watchdog` + `core.lock` |
+| 9 | `enable <plugin-name>` | — | Materialise a bundled plugin into `.halo/ports/<port>.d/` (D11 §3) | `halo-plugins` registry |
 
 > `stop` / `resume` are syntactic sugar for operating the "kill switch" safety mechanism of Requirements §4.4 from the CLI; internally they are two sides of one command (touch / rm of the STOP file). They correspond to the "stop|resume" notation of D3 in the design document list.
 
@@ -212,8 +215,13 @@ Since `.halo/` is not committed, the following is appended (not appended if it a
 | 7 | **flock / STOP residue** | Residue of `$TMPDIR/halo.lock` (an orphan lock after a crash), the unintended persistence of `.halo/STOP` | WARN |
 | 8 | **Placement constraint (WSL2)** | Whether `.halo/` and the worktree destination (`$TMPDIR`) are on the ext4 side (not under `/mnt/c/`) (the placement constraint of D1 §1.7) | WARN |
 | 9 | **Disk space** | Free space sufficient for worktree expansion (a prior check of the heavy preflight) | WARN |
+| 10 | **Required commands** | `node` / `git` / `claude` are present on `PATH` (D10 §4). Runs only when the probe is injected — the default CLI wiring always injects it | FAIL |
+| 11 | **Scheduler backend** | Which of `schtasks` / `systemd` / `cron` / `launchd` was detected, or `HALO_SCHEDULER` if pinned (D10 §3.2). Same probe-injection rule as 10 | FAIL (none detected) |
+| 12 | **Legacy launcher config** | Residue of the pre-ADR-0018 `.sh` launcher layout under `ports/*.d/` (a `.sh` file, or a `plugin.json` referencing one) | WARN (`halo enable <name>` regenerates) |
+| 13 | **Injected deny settings** | Whether the settings file the executor is launched with still contains the whole D4 §2.2 deny standard set and `sandbox.denyRead` (ADR-0019 §Risks drift detection). Repository-declared extras from `protectedPaths` are not drift | WARN (not generated yet — the first `halo run` writes it) / FAIL (present but missing rules, or unparseable) |
 
 - Checks 4/5/6 report "presence, permissions, response" separately (e.g., the binary exists but is unauthenticated = FAIL, authenticated but over-permissioned = WARN).
+- Checks 10/11 depend on an injected probe and are skipped when it is absent (kept for backward compatibility); everything else always runs. The shipped CLI injects both, so a real `halo doctor` reports 13 items.
 - `doctor` does not perform an external-API credit probe (to avoid billing and rate consumption; that stays with the responsibility of the heavy preflight).
 
 ---
@@ -227,11 +235,13 @@ The CLI's exit code represents "whether execution is possible and the kind of fa
 | Exit code | Meaning | Applicable example |
 |---|---|---|
 | `0` | Normal completion | Loop normal completion, `--help`/`--version`, `stop`/`resume` success, doctor all OK, a legitimate immediate termination by preflight (STOP detection / flock concurrent-launch avoidance / zero ready / budget exceeded — iteration count or dollar ceiling (ADR-0021) — are "normal non-execution" as exit 0) |
-| `1` | Runtime error | An unrecoverable error within the loop, heavy preflight failure (git contamination / disk shortage / credit exhaustion), trigger install registration failure, doctor has a FAIL item |
+| `1` | Runtime error | An unrecoverable error within the loop, heavy preflight failure (git contamination / disk shortage / credit exhaustion), trigger install registration failure, doctor has a FAIL item. **Also the two abnormal loop end reasons**: `TASK_SOURCE_ERROR` (the task source itself is broken — a non-zero exit or unparseable stdout, distinct from a healthy empty queue) and `ABORTED_ENV` (a global environment fault surfaced by the heavy preflight). Both print the detail on the `error:` line |
 | `2` | Reserved (equivalent to plugin fail) | Normally not returned by the CLI itself. Not used for CLI anomalies to avoid collision with D1's plugin fail convention |
 | `3` | Configuration/usage error | Invalid arguments, unknown profile/trigger name, `.harness.yml` absent/invalid, unknown command |
 
 > **Design decision**: In polling operation, "most fires terminate immediately with zero ready" (Requirements §4.4). To not treat these as anomalies, **immediate termination by preflight is exit 0**. Only true anomalies (heavy preflight failure, error within the loop) are exit 1, so the monitoring side can make only non-zero its alert target.
+>
+> The corollary is that the two categories must stay distinguishable *at the source*. A task-source adapter that swallows its own failure and answers `{"task_id": null}` collapses "broken" into "idle", and no exit-code mapping can recover the difference — which is why D1 §1.1 requires the GitHub adapter to fail loudly on a non-zero `gh`.
 
 ### 5.2 doctor Exit Codes
 
@@ -273,7 +283,7 @@ The correspondence of the core (the 9 modules of D2) functions each command call
 | `doctor` | `doctor.runAll` (each check of §4) + `scaffold.repair` when `--fix` | Aggregate the check results as OK/WARN/FAIL → map to exit code |
 
 - The CLI receives the **return values (structured results)** of the above functions and does not make determinations. For example, "whether the budget is exceeded" is returned by the core as `budget.remaining <= 0`, and the CLI merely maps it to exit 0 (normal non-execution).
-- The actual processing of the trigger adapters (`install.sh` of `schedule`/`polling`, etc.) is bash, and the CLI only handles the spawn and the collection of the exit code (D1 §1.9).
+- The actual processing of the trigger adapters is a JS `aux` entry (`install` / `uninstall`), and the CLI only handles the spawn and the collection of the exit code (D1 §1.9, ADR-0018).
 - This delegation map is also the dividing line of the D8 Test Strategy's "CLI test = mapping test, logic test = core unit test."
 
 ---
@@ -290,7 +300,9 @@ The correspondence of the core (the 9 modules of D2) functions each command call
 | `halo stop` / `halo resume` | Place/remove the kill switch | `--reason` | 0 |
 | `halo status` | Operation state, budget, actuals | `--json` `--profile` | 0 |
 | `halo doctor` | Environment self-diagnosis | `--json` `--fix` | 0 (OK/WARN) / 1 (FAIL) |
-| `halo enable <plugin-name>` | Generate an absolute-path launcher for a bundled plugin into `.halo/ports/<port>.d/` (D11 §3) | — | 0 / 3 |
+| `halo history` | Iteration history from the structured logs | `--days` `--limit` | 0 |
+| `halo watchdog` | Detect / recover a wedged run | `--action report\|kill\|skip` `--profile` | 0 |
+| `halo enable <plugin-name>` | Write a `plugin.json` for a bundled plugin into `.halo/ports/<port>.d/`, with `entry`/`aux` absolutised into the installed package's `dist/`. **No launcher file is generated** (ADR-0018 removed them) | — | 0 / 3 |
 
 ## Appendix B. Glossary
 
