@@ -103,8 +103,8 @@ Values are resolved in the following priority order (higher is stronger). The CL
 
 | Subcommand | Argument/flag | Description |
 |---|---|---|
-| `install <name> <profile>` | `<name>`: the adapter name under `trigger.d` (`schedule` / `polling`, etc.), `<profile>`: the launch profile name | Call the adapter's `install.sh <profile>` to register with the OS scheduler. Idempotent (a same name is deleted → re-registered) |
-| `uninstall <name> [<profile>]` | Same as above. When `<profile>` is omitted, unregister all registrations of that adapter | Call `uninstall.sh`. exit 0 even with no registration (idempotent) |
+| `install <name> <profile>` | `<name>`: the adapter name under `trigger.d` (`schedule` / `polling`, etc.), `<profile>`: the launch profile name | Call the adapter's `install` role (`aux.install`, ADR-0018) with the profile name to register with the OS scheduler. Idempotent (a same name is deleted → re-registered) |
+| `uninstall <name> [<profile>]` | Same as above. When `<profile>` is omitted, unregister all registrations of that adapter | Call the `uninstall` role (`aux.uninstall`). exit 0 even with no registration (idempotent) |
 | `list` | `--json` for machine-readable output | List registered triggers (adapter name / profile / registered task name / absolute path of `fire` / liveness state) |
 
 - `install` embeds the **absolute path of `node_modules/.bin/halo`** into `fire` (unattended execution does not go through npx, version-fixed, Requirements §4.4). The CLI delegates this absolute-path resolution to `core.discovery.resolveBin`.
@@ -275,8 +275,8 @@ The correspondence of the core (the 9 modules of D2) functions each command call
 |---|---|---|
 | `run <profile>` | `config.resolveProfile` + flag merge → `preflight.light` → `preflight.heavy` → `loop.run` | Parse the profile name and flags, map STOP/budget to exit 0 and anomalies to exit 1 |
 | `project init` | `scaffold.harnessYml` / `scaffold.haloSkeleton` / `scaffold.gitignore` | Interpret `--kind`/`--runtime`/`--force`/`--no-gitignore`, display a summary of the generation result |
-| `trigger install` | `discovery.resolveTrigger` + `discovery.resolveBin` → spawn the adapter `install.sh` | Validate the adapter name/profile name, map the spawn exit code |
-| `trigger uninstall` | `discovery.resolveTrigger` → spawn the adapter `uninstall.sh` | Same as above (idempotent, exit 0 even when unregistered) |
+| `trigger install` | `discovery.resolveTrigger` + `discovery.resolveBin` → spawn the adapter `aux.install` | Validate the adapter name/profile name, map the spawn exit code |
+| `trigger uninstall` | `discovery.resolveTrigger` → spawn the adapter `aux.uninstall` | Same as above (idempotent, exit 0 even when unregistered) |
 | `trigger list` | `discovery.listTriggers` + `doctor.checkTriggerLiveness` | Format the list (human-readable / `--json`) |
 | `stop` / `resume` | `killswitch.set` / `killswitch.clear` | Pass `--reason`, idempotent exit 0 |
 | `status` | `budget.remaining` + `logger.lastRun` + `discovery.listTriggers` | Format the display, `--json` serialization |

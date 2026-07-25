@@ -251,7 +251,7 @@ Expands Requirements Document §6.2 into implementation parameters. Among the nu
         "required": ["name", "result"],
         "properties": {
           "name": { "type": "string",
-                    "description": "10-typecheck / 20-lint / 30-test / 40-ai-review / 50-loop-audit" },
+                    "description": "10-typecheck / 30-test / 40-ai-review / 50-loop-audit (lint lives in the runtime check)" },
           "result": { "type": "string", "enum": ["pass", "fail", "skipped"] },
           "reason": { "type": ["string", "null"],
                       "description": "fail only. The text re-injected into the next iteration" },

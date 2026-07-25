@@ -222,7 +222,7 @@ The main causes are the WSL2 VM's automatic shutdown and Windows path inheritanc
 
 | Order | Item | Handling |
 |---|---|---|
-| 1 | Whether a `HALO_<profile>` task exists in the Windows Task Scheduler | Re-run `install.sh` to register |
+| 1 | Whether a `HALO_<profile>` task exists in the scheduler backend (schtasks / systemd / cron / launchd) | Re-run `halo trigger install <name> <profile>` to register |
 | 2 | Whether the distro name in `wsl.exe -d <distro>` is correct | Fix the distro name in the install script |
 | 3 | Whether the VM is running late at night / during the day (task launch = VM startup is assumed) | Verify the launch path with an initial dry-run (`MAX_ITER=1`) (04 §4.3) |
 | 4 | Whether `fire.sh`'s PATH re-cleaning is effective (contamination by `/mnt/c/`) | Confirm the PATH reconstruction in fire.sh |

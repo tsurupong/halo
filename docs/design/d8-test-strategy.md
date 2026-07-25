@@ -61,7 +61,7 @@ The 9 core modules defined by the D2 Core Detailed Design are implemented as **p
 test('skips L3 sink when current autonomy is L1', () => {
   // Arrange
   const sinks = [
-    { name: '15-create-pr', minAutonomy: 'L3' },
+    { name: 'sink-publish', minAutonomy: 'L3' },
     { name: '20-progress-log', minAutonomy: 'L1' },
   ];
   // Act
