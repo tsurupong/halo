@@ -5,6 +5,7 @@ import { doctorCommand } from './doctor.js';
 import { EXIT } from '../exit-codes.js';
 import { memFs, captureStreams, type MemFs } from '../testkit.js';
 import type { CommandProbe, DoctorProbes } from '../core-ext/doctor.js';
+import { buildExecutorSettings, serializeExecutorSettings } from '@tsurupong/halo-core';
 
 function io(cap: ReturnType<typeof captureStreams>, json = false) {
   return createIo(cap.streams, { cwd: '/repo', json, quiet: false, verbose: false });
@@ -38,7 +39,13 @@ function probes(fs: MemFs, command: CommandProbe, over: Partial<DoctorProbes> = 
 
 function healthyFs(): MemFs {
   return memFs({
-    files: { '/repo/.harness.yml': 'kinds:\n  code:\n    runtimes: [node-pnpm]\n' },
+    files: {
+      '/repo/.harness.yml': 'kinds:\n  code:\n    runtimes: [node-pnpm]\n',
+      // ADR-0019 層1 の注入 settings。健全な環境では前回 run が生成済みなので、
+      // c13 が OK になる状態を「健全」の定義に含める。
+      '/repo/.halo/settings/executor-settings.json':
+        serializeExecutorSettings(buildExecutorSettings()),
+    },
     dirs: [
       '/repo/.halo/ports/task-source.d',
       '/repo/.halo/ports/context.d',
@@ -65,7 +72,39 @@ describe('doctor (T28)', () => {
     expect(code).toBe(EXIT.OK);
     const out = JSON.parse(cap.out());
     expect(out.summary.fail).toBe(0);
-    expect(out.checks).toHaveLength(10);
+    expect(out.checks).toHaveLength(11);
+  });
+
+  test('injected deny settings missing a D4 §2.2 rule → FAIL (ADR-0019 drift)', async () => {
+    // 旧実装が書いていた「自己改変の Write だけ」の settings を再現する。秘匿読取と
+    // 破壊的コマンドの deny が欠けている状態を doctor が見逃さないことが要点。
+    const stale = healthyFs();
+    stale.files.set(
+      '/repo/.halo/settings/executor-settings.json',
+      JSON.stringify({ permissions: { deny: ['Write(**/CLAUDE.md)'] } }),
+    );
+    const cap = captureStreams();
+    const code = await doctorCommand(parseArgs([], {}), io(cap, true), {
+      fs: stale,
+      probes: probes(stale, healthyCommand),
+    });
+    expect(code).toBe(EXIT.RUNTIME);
+    const c13 = JSON.parse(cap.out()).checks.find((c: { id: number }) => c.id === 13);
+    expect(c13.status).toBe('FAIL');
+    expect(c13.detail).toContain('Read(**/.env)');
+  });
+
+  test('injected deny settings not yet generated → WARN, not FAIL', async () => {
+    const fresh = healthyFs();
+    fresh.files.delete('/repo/.halo/settings/executor-settings.json');
+    const cap = captureStreams();
+    const code = await doctorCommand(parseArgs([], {}), io(cap, true), {
+      fs: fresh,
+      probes: probes(fresh, healthyCommand),
+    });
+    expect(code).toBe(EXIT.OK);
+    const c13 = JSON.parse(cap.out()).checks.find((c: { id: number }) => c.id === 13);
+    expect(c13.status).toBe('WARN');
   });
 
   test('missing gh binary → FAIL → exit 1', async () => {
