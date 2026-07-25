@@ -41,6 +41,7 @@ if [ -n "\${GH_FAIL_ON:-}" ] && [ "$1 $2" = "\${GH_FAIL_ON}" ]; then
 fi
 case "$1 $2" in
   "issue list") printf '%s' "\${GH_ISSUE_JSON:-[]}" ;;
+  "issue view") printf '%s' "\${GH_COMMENTS_JSON:-}" ;;
   "issue edit"|"issue comment") : ;;
 esac
 exit 0
@@ -170,7 +171,9 @@ describe('task-source-github contract', () => {
     expect(stdout).toBe('');
   });
 
-  it('fail (retry_count=1): comment only, no needs-human, stdout empty', () => {
+  // C1: 閾値未満の失敗は ready へ戻さないと、op=next (--label ready) が二度と拾わず
+  // リトライもエスカレーションも起きないまま in-progress で滞留する。
+  it('fail (below threshold): comments and returns the issue to ready, no needs-human', () => {
     const { stubBinDir, ghLog } = setupStubBin();
     const { code, stdout } = runLauncher(
       JSON.stringify({ op: 'fail', task_id: 'T-42', reason: 'tests red', retry_count: 1 }),
@@ -180,6 +183,43 @@ describe('task-source-github contract', () => {
     expect(stdout).toBe('');
     const log = readFileSync(ghLog, 'utf8');
     expect(log).not.toContain('needs-human');
+    expect(log).toContain('issue edit 42 --add-label ready --remove-label in-progress');
+  });
+
+  // N4: 通算回数は GitHub 側の `fail #N:` コメントから導出する。コアの retry_count は
+  // run プロセス内の値なので、trigger が run を都度起動する運用では常に 1 のままになる。
+  it('fail: derives the running total from past fail comments, not the in-process count', () => {
+    const { stubBinDir, ghLog } = setupStubBin();
+    const comments = JSON.stringify({
+      comments: [
+        { body: 'fail #1: tests red' },
+        { body: 'unrelated human comment' },
+        { body: 'fail #2: still red' },
+      ],
+    });
+    // retry_count=1 (毎回プロセスが起動し直す運用の再現) でも通算 3 回目なので
+    // needs-human に到達しなければならない。
+    runLauncher(
+      JSON.stringify({ op: 'fail', task_id: 'T-42', reason: 'red again', retry_count: 1 }),
+      { ...baseEnv(stubBinDir, ghLog), GH_COMMENTS_JSON: comments },
+    );
+    const log = readFileSync(ghLog, 'utf8');
+    expect(log).toContain('fail #3: red again');
+    expect(log).toContain('add-label needs-human');
+    expect(log).not.toContain('--add-label ready');
+  });
+
+  it('fail: falls back to the in-process count when the history cannot be read', () => {
+    const { stubBinDir, ghLog } = setupStubBin();
+    // GH_COMMENTS_JSON 未設定 → issue view の出力が空 → 履歴不明。過小評価に倒し、
+    // コアの retry_count を採用する (誤って早期に needs-human を付けない)。
+    runLauncher(
+      JSON.stringify({ op: 'fail', task_id: 'T-42', reason: 'red', retry_count: 3 }),
+      baseEnv(stubBinDir, ghLog),
+    );
+    const log = readFileSync(ghLog, 'utf8');
+    expect(log).toContain('fail #3: red');
+    expect(log).toContain('add-label needs-human');
   });
 
   it('fail (retry_count=3): needs-human escalation', () => {

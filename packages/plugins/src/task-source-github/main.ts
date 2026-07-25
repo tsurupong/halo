@@ -3,7 +3,8 @@
 //   next     : ready 先頭 Issue を取得し ready→in-progress へ付け替え、task-source.out を stdout へ。
 //              ready 0 件なら {"task_id":null} + exit 0。
 //   complete : 完了記録(in-progress→done、PR URL をコメント)。副作用のみ、stdout 空。
-//   fail     : リトライをコメント記録。retry_count>=THRESHOLD で needs-human 付与。副作用のみ。
+//   fail     : リトライをコメント記録。通算回数が THRESHOLD 未満なら ready へ戻して再供給し、
+//              到達したら needs-human を付与する。副作用のみ。
 // stdout は JSON 契約チャネル。complete/fail では何も出さない(D1 §3.2)。
 import { readStdinJson, writeStdoutJson, diag, str } from '../lib/io.js';
 import { run } from '../lib/exec.js';
@@ -29,6 +30,29 @@ function gh(args: string[], what: string): { code: number; stdout: string } {
   if (r.code === 127) die('依存コマンド欠落: gh');
   if (r.code !== 0) die(`${what} に失敗 (gh exit ${r.code}): gh ${args.join(' ')}`);
   return { code: r.code, stdout: r.stdout };
+}
+
+/**
+ * この Issue が過去に何回失敗したかを GitHub 側から導出する (N4)。`fail #N:` 形式の
+ * コメント数を数える。取得・解析できなければ 0 を返し、呼び出し側がコアの retry_count に
+ * フォールバックする — 回数が過小になっても「エスカレーションが遅れる」だけで、
+ * 誤って needs-human を早期に付けるよりは安全側。
+ */
+function pastFailureCount(num: string): number {
+  const out = gh(
+    ['issue', 'view', num, '--json', 'comments'],
+    `Issue #${num} の失敗履歴取得`,
+  ).stdout;
+  try {
+    const parsed = JSON.parse(out) as { comments?: unknown };
+    const comments = Array.isArray(parsed.comments) ? parsed.comments : [];
+    return comments.filter((c) => {
+      const body = (c as Record<string, unknown>)['body'];
+      return typeof body === 'string' && /^fail #\d+:/.test(body);
+    }).length;
+  } catch {
+    return 0;
+  }
 }
 
 const input = await readStdinJson().catch(() => undefined);
@@ -113,12 +137,23 @@ switch (op) {
     const rc = typeof rcRaw === 'number' ? rcRaw : 0;
     if (taskId === undefined) die('fail requires task_id');
     const num = taskId.replace(/^T-/, '');
-    gh(['issue', 'comment', num, '--body', `fail #${rc}: ${reason}`], '失敗コメントの投稿');
-    // 同一 Issue で THRESHOLD 回失敗 → needs-human でエスカレーション(無限ループ遮断)。
-    if (rc >= failThreshold) {
+    // 失敗回数の真実の源は GitHub 側 (ADR-0009 ゼロ・グローバル状態)。コアの retry_count は
+    // runLoop 内の in-memory 値なので、trigger が run を都度起動する運用では毎回 1 から
+    // 始まり閾値に到達しない (N4)。過去の `fail #N:` コメント数から通算回数を導出する。
+    const attempts = Math.max(pastFailureCount(num) + 1, rc);
+    gh(['issue', 'comment', num, '--body', `fail #${attempts}: ${reason}`], '失敗コメントの投稿');
+    if (attempts >= failThreshold) {
+      // 閾値到達 → needs-human でエスカレーション(無限ループ遮断)。
       gh(
         ['issue', 'edit', num, '--add-label', 'needs-human', '--remove-label', 'in-progress'],
         `Issue #${num} の needs-human エスカレーション`,
+      );
+    } else {
+      // C1: 閾値未満なら ready へ戻す。戻さないと op=next (--label ready) が二度と拾わず、
+      // リトライも失敗理由の再注入 (D2 §2.4) も起きないまま in-progress で滞留する。
+      gh(
+        ['issue', 'edit', num, '--add-label', 'ready', '--remove-label', 'in-progress'],
+        `Issue #${num} の再供給 (in-progress→ready)`,
       );
     }
     break;
