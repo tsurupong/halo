@@ -167,4 +167,74 @@ describe('gate-loop-audit (launcher contract)', () => {
     expect(typeof out.reason).toBe('string');
     expect(out.gate).toBe('50-loop-audit');
   });
+
+  // ADR-0004: .harness.yml protectedPaths を core が gate.in.protected_paths で渡す。
+  // 自分自身(ゲート実装)を保護対象に入れられることが、selfhost 時の要点。
+  describe('protected_paths (ADR-0004)', () => {
+    function runAuditWithProtected(
+      workdir: string,
+      protectedPaths: string[],
+    ): { code: number; stdout: string } {
+      const input = JSON.stringify({
+        task_id: 'T-1',
+        workdir,
+        changed_files: [],
+        protected_paths: protectedPaths,
+      });
+      const { code, stdout } = runLauncher(input);
+      return { code, stdout };
+    }
+
+    it('fails a change to a declared protected path', () => {
+      const wt = newRepo(makeTmpRoot());
+      mkdirSync(join(wt, 'plugins', 'gate-loop-audit'), { recursive: true });
+      writeFileSync(join(wt, 'plugins', 'gate-loop-audit', 'plugin.json'), '{}\n');
+      git(wt, ['add', '-A']);
+      git(wt, ['commit', '-qm', 'add gate']);
+      writeFileSync(join(wt, 'plugins', 'gate-loop-audit', 'plugin.json'), '{"weakened":true}\n');
+
+      const { code, stdout } = runAuditWithProtected(wt, ['plugins/gate-*/**']);
+      expect(code).toBe(2);
+      const out = JSON.parse(stdout) as { reason: string; gate: string };
+      expect(out.reason).toMatch(/plugins\/gate-loop-audit\/plugin\.json/);
+      expect(out.gate).toBe('50-loop-audit');
+    });
+
+    it('matches a double star across directory levels, including zero levels', () => {
+      const wt = newRepo(makeTmpRoot());
+      mkdirSync(join(wt, 'a', 'b'), { recursive: true });
+      writeFileSync(join(wt, 'a', 'keep.txt'), 'x\n');
+      writeFileSync(join(wt, 'a', 'b', 'deep.txt'), 'x\n');
+      git(wt, ['add', '-A']);
+      git(wt, ['commit', '-qm', 'add tree']);
+
+      writeFileSync(join(wt, 'a', 'b', 'deep.txt'), 'changed\n');
+      expect(runAuditWithProtected(wt, ['a/**/*.txt']).code).toBe(2);
+
+      const wt2 = newRepo(makeTmpRoot());
+      mkdirSync(join(wt2, 'a'), { recursive: true });
+      writeFileSync(join(wt2, 'a', 'keep.txt'), 'x\n');
+      git(wt2, ['add', '-A']);
+      git(wt2, ['commit', '-qm', 'add file']);
+      writeFileSync(join(wt2, 'a', 'keep.txt'), 'changed\n');
+      expect(runAuditWithProtected(wt2, ['a/**/*.txt']).code).toBe(2);
+    });
+
+    it('leaves unrelated paths alone (a single star does not cross a separator)', () => {
+      const wt = newRepo(makeTmpRoot());
+      writeFileSync(join(wt, 'src', 'a.ts'), 'export const a = 2;\n');
+      // `src/*.md` must not match `src/a.ts`, and must not match across directories.
+      expect(runAuditWithProtected(wt, ['src/*.md', 'other/*']).code).toBe(0);
+    });
+
+    it('protects nothing extra when the field is absent (built-ins still apply)', () => {
+      const wt = newRepo(makeTmpRoot());
+      mkdirSync(join(wt, 'plugins'), { recursive: true });
+      writeFileSync(join(wt, 'plugins', 'x.json'), '{}\n');
+      expect(runAudit(wt).code).toBe(0);
+
+      writeFileSync(join(wt, 'PROMPT.md'), '# tampered\n');
+      expect(runAudit(wt).code).toBe(2);
+    });
+  });
 });

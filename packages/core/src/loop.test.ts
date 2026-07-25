@@ -79,6 +79,7 @@ function harness(opts: {
   isStopPresent?: LoopDeps['isStopPresent'];
   isBudgetOk?: LoopDeps['isBudgetOk'];
   preflightHeavy?: LoopDeps['preflightHeavy'];
+  kindPrompt?: LoopDeps['kindPrompt'];
   resolvePrUrl?: LoopDeps['resolvePrUrl'];
   phaseTracker?: LoopDeps['phaseTracker'];
 }): Harness {
@@ -115,6 +116,7 @@ function harness(opts: {
       removed.push(workdir);
     },
     ...(opts.preflightHeavy ? { preflightHeavy: opts.preflightHeavy } : {}),
+    ...(opts.kindPrompt ? { kindPrompt: opts.kindPrompt } : {}),
     ...(opts.resolvePrUrl ? { resolvePrUrl: opts.resolvePrUrl } : {}),
     ...(opts.phaseTracker ? { phaseTracker: opts.phaseTracker } : {}),
   };
@@ -394,7 +396,8 @@ describe('runLoop', () => {
           return tsNext++ < 1 ? jsonRes({ task_id: '1' }) : jsonRes({ task_id: null });
         }
         if (name === 'ex') return jsonRes({ status: 'done', summary: 'ok' });
-        if (name === 'g') return jsonRes({ reason: 'coverage low', gate: '30-test' }, { exitCode: 2 });
+        if (name === 'g')
+          return jsonRes({ reason: 'coverage low', gate: '30-test' }, { exitCode: 2 });
         return res();
       },
     });
@@ -841,5 +844,113 @@ describe('runLoop phase tracking', () => {
     const result = await runLoop(h.deps);
     expect(result.endReason).toBe('STOP');
     expect(seen.map((s) => s.phase)).toEqual(['idle']);
+  });
+});
+
+describe('runLoop kind resolution (D2 §7.2)', () => {
+  const ports = () =>
+    emptyPorts({
+      taskSource: [plug('task-source', 'ts')],
+      executor: [plug('executor', 'ex')],
+      gate: [plug('gate', 'g')],
+      onFail: [plug('on-fail', 'of')],
+    });
+
+  it('injects the resolved kind prompt into the executor prompt', async () => {
+    const h = harness({
+      ports: ports(),
+      kindPrompt: () => ({
+        status: 'resolved',
+        kind: 'code',
+        runtimes: ['node-pnpm'],
+        instructions: 'HOUSE RULES',
+      }),
+      respond: (name, stdin, i) => {
+        if (name === 'ts') {
+          if ((stdin as { op: string }).op !== 'next') return res();
+          return i === 0
+            ? jsonRes({ task_id: '1', title: 'T', body: 'B' })
+            : jsonRes({ task_id: null });
+        }
+        if (name === 'ex') return jsonRes({ status: 'done', summary: 'ok' });
+        return res({ exitCode: 0 });
+      },
+    });
+    await runLoop(h.deps);
+    const exec = h.calls.find((c) => c.name === 'ex');
+    expect((exec?.stdin as { prompt: string }).prompt).toContain('## Instructions\nHOUSE RULES');
+  });
+
+  it('escalates an unresolvable kind without creating a worktree', async () => {
+    const h = harness({
+      ports: ports(),
+      kindPrompt: () => ({
+        status: 'needs-human',
+        kind: 'infra',
+        reason: "kind 'infra' is not defined in .harness.yml",
+      }),
+      respond: (name, stdin, i) => {
+        if (name === 'ts') {
+          if ((stdin as { op: string }).op !== 'next') return res();
+          return i === 0 ? jsonRes({ task_id: '1', kind: 'infra' }) : jsonRes({ task_id: null });
+        }
+        return res();
+      },
+    });
+    const result = await runLoop(h.deps);
+    expect(result.iterations).toEqual([
+      expect.objectContaining({ taskId: '1', outcome: 'escalated' }),
+    ]);
+    // The executor never ran and no worktree was created or removed.
+    expect(h.calls.some((c) => c.name === 'ex')).toBe(false);
+    expect(h.removed).toEqual([]);
+    // on-fail ran and the task-source was told to record the failure (op=fail).
+    expect(h.calls.some((c) => c.name === 'of')).toBe(true);
+    expect(h.calls.some((c) => c.name === 'ts' && (c.stdin as { op: string }).op === 'fail')).toBe(
+      true,
+    );
+  });
+
+  it('continues to the next task after escalating one (loop is not ended)', async () => {
+    // The harness counts every call to `ts` (including op=fail), so count op=next here.
+    let nextCalls = 0;
+    const h = harness({
+      ports: ports(),
+      kindPrompt: (task) =>
+        task.task_id === '1'
+          ? { status: 'needs-human', kind: 'infra', reason: 'undefined kind' }
+          : { status: 'resolved', kind: 'code', runtimes: ['n'], instructions: 'RULES' },
+      respond: (name, stdin) => {
+        if (name === 'ts') {
+          if ((stdin as { op: string }).op !== 'next') return res();
+          nextCalls += 1;
+          if (nextCalls === 1) return jsonRes({ task_id: '1', kind: 'infra' });
+          if (nextCalls === 2) return jsonRes({ task_id: '2' });
+          return jsonRes({ task_id: null });
+        }
+        if (name === 'ex') return jsonRes({ status: 'done', summary: 'ok' });
+        return res({ exitCode: 0 });
+      },
+    });
+    const result = await runLoop(h.deps);
+    expect(result.endReason).toBe('NO_TASK');
+    expect(result.iterations.map((it) => it.outcome)).toEqual(['escalated', 'passed']);
+  });
+
+  it('injects nothing when no kindPrompt resolver is wired', async () => {
+    const h = harness({
+      ports: ports(),
+      respond: (name, stdin, i) => {
+        if (name === 'ts') {
+          if ((stdin as { op: string }).op !== 'next') return res();
+          return i === 0 ? jsonRes({ task_id: '1', title: 'T' }) : jsonRes({ task_id: null });
+        }
+        if (name === 'ex') return jsonRes({ status: 'done', summary: 'ok' });
+        return res({ exitCode: 0 });
+      },
+    });
+    await runLoop(h.deps);
+    const exec = h.calls.find((c) => c.name === 'ex');
+    expect((exec?.stdin as { prompt: string }).prompt).not.toContain('## Instructions');
   });
 });

@@ -49,7 +49,12 @@ describe('runPort', () => {
   it('forwards stderr lines to onStderr, keeps stdout channel clean (D2 §3.4)', async () => {
     const p = fixture('diag.sh', 'echo "diag one" >&2; echo "diag two" >&2; echo "{}"');
     const lines: string[] = [];
-    const r = await runPort({ execPath: p, stdin: {}, timeoutMs: 5000, onStderr: (l) => lines.push(l) });
+    const r = await runPort({
+      execPath: p,
+      stdin: {},
+      timeoutMs: 5000,
+      onStderr: (l) => lines.push(l),
+    });
     expect(lines).toEqual(['diag one', 'diag two']);
     expect(parseJsonStdout(r.stdout).ok).toBe(true);
   });

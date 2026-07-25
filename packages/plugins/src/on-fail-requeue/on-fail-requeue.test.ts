@@ -9,7 +9,11 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const distPath = join(__dirname, '..', '..', 'dist', 'on-fail-requeue', 'main.js');
 
 function runLauncher(input: string, env: Record<string, string> = {}) {
-  const r = spawnSync(process.execPath, [distPath], { input, env: { ...process.env, ...env }, encoding: 'utf8' });
+  const r = spawnSync(process.execPath, [distPath], {
+    input,
+    env: { ...process.env, ...env },
+    encoding: 'utf8',
+  });
   return { code: r.status ?? 1, stdout: r.stdout, stderr: r.stderr };
 }
 
@@ -42,7 +46,12 @@ describe('on-fail-requeue', () => {
     writeFileSync(join(tasksDir, 'failed', 'T-1.md'), '# task');
 
     const result = runLauncher(
-      JSON.stringify({ task_id: 'T-1', reason: 'HTTP 429 rate limit exceeded', retry_count: 1, gate: '30-test' }),
+      JSON.stringify({
+        task_id: 'T-1',
+        reason: 'HTTP 429 rate limit exceeded',
+        retry_count: 1,
+        gate: '30-test',
+      }),
       { HALO_TASKS_DIR: tasksDir, HALO_REQUEUE_DIR: requeueDir, REQUEUE_MAX_ATTEMPTS: '3' },
     );
 
@@ -96,11 +105,14 @@ describe('on-fail-requeue', () => {
     const tasksDir = join(tmp, '.halo', 'tasks');
     const requeueDir = join(tmp, '.halo', 'requeue');
 
-    const result = runLauncher(JSON.stringify({ task_id: 'ghost', reason: 'ECONNRESET', retry_count: 0 }), {
-      HALO_TASKS_DIR: tasksDir,
-      HALO_REQUEUE_DIR: requeueDir,
-      REQUEUE_MAX_ATTEMPTS: '3',
-    });
+    const result = runLauncher(
+      JSON.stringify({ task_id: 'ghost', reason: 'ECONNRESET', retry_count: 0 }),
+      {
+        HALO_TASKS_DIR: tasksDir,
+        HALO_REQUEUE_DIR: requeueDir,
+        REQUEUE_MAX_ATTEMPTS: '3',
+      },
+    );
 
     expect(result.code).toBe(0);
     expect(result.stdout).toBe('');
@@ -111,11 +123,14 @@ describe('on-fail-requeue', () => {
     const tasksDir = join(tmp, '.halo', 'tasks');
     const requeueDir = join(tmp, '.halo', 'requeue');
 
-    const result = runLauncher(JSON.stringify({ task_id: '../evil', reason: '429', retry_count: 0 }), {
-      HALO_TASKS_DIR: tasksDir,
-      HALO_REQUEUE_DIR: requeueDir,
-      REQUEUE_MAX_ATTEMPTS: '3',
-    });
+    const result = runLauncher(
+      JSON.stringify({ task_id: '../evil', reason: '429', retry_count: 0 }),
+      {
+        HALO_TASKS_DIR: tasksDir,
+        HALO_REQUEUE_DIR: requeueDir,
+        REQUEUE_MAX_ATTEMPTS: '3',
+      },
+    );
 
     expect(result.code).toBe(0);
     expect(result.stdout).toBe('');

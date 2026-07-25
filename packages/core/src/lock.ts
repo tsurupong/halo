@@ -27,7 +27,11 @@ export const LOCK_DEFAULTS = {
  * Path to the lock file. Profile-scoped when a profile is given so `continuous`
  * and `nightly` runs are independently serialised (D2 §1.2). Pure.
  */
-export function defaultLockPath(tmpdir: string, profile?: string, lockName = LOCK_DEFAULTS.lockName): string {
+export function defaultLockPath(
+  tmpdir: string,
+  profile?: string,
+  lockName = LOCK_DEFAULTS.lockName,
+): string {
   const sep = tmpdir.endsWith('/') ? '' : '/';
   const name = profile ? lockName.replace(/\.lock$/, `-${profile}.lock`) : lockName;
   return `${tmpdir}${sep}${name}`;
@@ -119,7 +123,11 @@ export type AcquireResult =
  */
 export async function acquireLock(options: AcquireOptions): Promise<AcquireResult> {
   const { path, pid, sys } = options;
-  const info: LockInfo = { pid, startedAt: new Date(sys.now()).toISOString(), ...(options.host ? { host: options.host } : {}) };
+  const info: LockInfo = {
+    pid,
+    startedAt: new Date(sys.now()).toISOString(),
+    ...(options.host ? { host: options.host } : {}),
+  };
 
   const first = await tryCreate(path, info, sys);
   if (first) return { acquired: true, handle: { path, info }, reclaimedStale: false };
@@ -128,7 +136,12 @@ export async function acquireLock(options: AcquireOptions): Promise<AcquireResul
   const existing = await readExisting(path, sys);
   const reclaim =
     existing === null ||
-    isStaleLock({ info: existing, now: sys.now(), ownerAlive: sys.isProcessAlive(existing.pid), ...(options.staleMs != null ? { staleMs: options.staleMs } : {}) });
+    isStaleLock({
+      info: existing,
+      now: sys.now(),
+      ownerAlive: sys.isProcessAlive(existing.pid),
+      ...(options.staleMs != null ? { staleMs: options.staleMs } : {}),
+    });
 
   if (!reclaim) return { acquired: false, heldBy: existing };
 

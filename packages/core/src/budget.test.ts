@@ -42,9 +42,9 @@ describe('localDayKey', () => {
 
 describe('logTimestampMs', () => {
   it('prefers ended_at, falls back to started_at', () => {
-    expect(logTimestampMs({ started_at: '2026-07-01T00:00:00Z', ended_at: '2026-07-02T00:00:00Z' })).toBe(
-      Date.parse('2026-07-02T00:00:00Z'),
-    );
+    expect(
+      logTimestampMs({ started_at: '2026-07-01T00:00:00Z', ended_at: '2026-07-02T00:00:00Z' }),
+    ).toBe(Date.parse('2026-07-02T00:00:00Z'));
     expect(logTimestampMs({ started_at: '2026-07-01T00:00:00Z', ended_at: 'garbage' })).toBe(
       Date.parse('2026-07-01T00:00:00Z'),
     );
@@ -59,7 +59,11 @@ describe('aggregateDailyUsage', () => {
   it('counts only today and sums recorded cost', () => {
     const local = new Date(NOON);
     const todayIso = local.toISOString();
-    const logs = [makeLog(todayIso, 0.5), makeLog(todayIso, 1.25), makeLog('2020-01-01T00:00:00Z', 99)];
+    const logs = [
+      makeLog(todayIso, 0.5),
+      makeLog(todayIso, 1.25),
+      makeLog('2020-01-01T00:00:00Z', 99),
+    ];
     const usage = aggregateDailyUsage(logs, NOON);
     expect(usage.usedIterations).toBe(2);
     expect(usage.usedCostUsd).toBeCloseTo(1.75);
@@ -102,8 +106,12 @@ describe('evaluateBudget', () => {
   });
 
   it('enforces the cost cap when set, at the boundary', () => {
-    expect(evaluateBudget({ usedIterations: 1, usedCostUsd: 9.99 }, { dailyMaxCostUsd: 10 }).ok).toBe(true);
-    expect(evaluateBudget({ usedIterations: 1, usedCostUsd: 10 }, { dailyMaxCostUsd: 10 }).ok).toBe(false);
+    expect(
+      evaluateBudget({ usedIterations: 1, usedCostUsd: 9.99 }, { dailyMaxCostUsd: 10 }).ok,
+    ).toBe(true);
+    expect(evaluateBudget({ usedIterations: 1, usedCostUsd: 10 }, { dailyMaxCostUsd: 10 }).ok).toBe(
+      false,
+    );
   });
 
   it('requires both dimensions to have headroom when both are set', () => {
@@ -151,7 +159,13 @@ describe('checkBudget', () => {
       'iter_2.json': JSON.stringify(makeLog(todayIso, 2)),
       'other.json': 'ignored',
     });
-    const s = await checkBudget({ logDir: '/logs', fs, now: NOON, dailyMaxIterations: 5, dailyMaxCostUsd: 10 });
+    const s = await checkBudget({
+      logDir: '/logs',
+      fs,
+      now: NOON,
+      dailyMaxIterations: 5,
+      dailyMaxCostUsd: 10,
+    });
     expect(s.usedIterations).toBe(2);
     expect(s.usedCostUsd).toBeCloseTo(3);
     expect(s.ok).toBe(true);

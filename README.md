@@ -1,5 +1,10 @@
 # HALO — Harness for Autonomous Loop Orchestration
 
+[![CI](https://github.com/tsurupong/halo/actions/workflows/ci.yml/badge.svg)](https://github.com/tsurupong/halo/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/%40tsurupong%2Fhalo)](https://www.npmjs.com/package/@tsurupong/halo)
+[![node](https://img.shields.io/node/v/%40tsurupong%2Fhalo)](https://nodejs.org)
+[![license](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
+
 HALO is a general-purpose autonomous development harness that lets an AI agent (Claude Code headless) repeatedly run the **implement → verify → output** loop without human intervention, starting from tasks fetched from a task source. Task sources, executors, quality gates, sinks, and triggers are all swappable ports, and reference implementations for each port are bundled (e.g. task sources backed by GitHub Issues or a local markdown queue, sinks that commit results or append progress logs). The name reflects the essence of a harness: a ring that surrounds and protects the loop (Guides = pre-control + Sensors = post-control).
 
 The goal is to continuously produce deliverables that pass quality gates during unattended overnight runs. Requirements definition, acceptance decisions, PR merges, and production deployment are deliberately not automated — they remain fixed human gates.
@@ -13,6 +18,47 @@ The goal is to continuously produce deliverables that pass quality gates during 
 - **Reliability**: An external watchdog detects and recovers stalled loops (ADR-0013), and failed tasks are requeued or quarantined (ADR-0014).
 - **Autonomy profiles**: L1–L3 autonomy levels progressively unlock side effects such as commits and PR creation.
 - **Zero-billing CI**: E2E tests that call an LLM are isolated as a manual smoke test; CI consists only of deterministic tests (unit / loop regression / contract).
+
+## How it works
+
+One iteration handles exactly one task, in a worktree created for it and destroyed
+afterwards. Every box below is a swappable plugin behind a JSON contract; the core only
+knows the ports.
+
+```mermaid
+flowchart LR
+  subgraph guides["Guides — pre-control"]
+    TRG[trigger]
+    TS[task-source]
+    CTX[context]
+  end
+  subgraph loop["one iteration = one task"]
+    PRE[preflight<br/>STOP · lock · budget]
+    WT[disposable worktree]
+    EX[executor<br/>claude -p]
+  end
+  subgraph sensors["Sensors — post-control"]
+    GATE[gates<br/>logical AND]
+    SINK[sinks<br/>autonomy-filtered]
+    ONFAIL[on-fail]
+  end
+
+  TRG --> PRE
+  TS -->|next| PRE
+  PRE --> WT
+  CTX --> EX
+  WT --> EX
+  EX --> GATE
+  GATE -->|pass| SINK
+  GATE -->|fail| ONFAIL
+  SINK -->|complete| TS
+  ONFAIL -->|fail → retry / escalate| TS
+```
+
+A gate failure is re-injected into the next attempt's prompt, which is what makes the loop
+learn rather than merely repeat. Three failures escalate the task to a human. `.harness.yml`
+declares, in version control, which prompt each task kind runs under and the autonomy
+ceiling the loop may never exceed.
 
 ## Requirements
 
@@ -80,7 +126,7 @@ pnpm lint           # eslint
 pnpm format         # prettier --check
 ```
 
-CI (`.github/workflows/ci.yml`) runs three jobs — unit, loop-regression, and contract — none of which call an LLM: zero billing, fully deterministic. The loop regression tests replace the executor with a fixture that returns fixed JSON. The E2E smoke test that actually calls Claude is run manually via `scripts/e2e-dry-run.mjs`.
+CI (`.github/workflows/ci.yml`) runs four jobs — static (lint + format), unit, loop-regression, and contract — none of which call an LLM: zero billing, fully deterministic. The loop regression tests replace the executor with a fixture that returns fixed JSON. The E2E smoke test that actually calls Claude is run manually via `scripts/e2e-dry-run.mjs`.
 
 ## Design documents
 
@@ -89,6 +135,12 @@ The primary sources for design decisions are the ADRs in `docs/adr/` and the des
 ## Status
 
 See the [releases](https://github.com/tsurupong/halo/releases) and `docs/adr/` for the current state and history of the project. ADRs marked *proposed* indicate work that is designed but not yet implemented.
+
+## Contributing
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md) — it includes the acceptance criteria for plugin
+pull requests and the repository's language policy. Security issues go through the private
+channel in [SECURITY.md](./SECURITY.md), never through an issue or PR.
 
 ## License
 

@@ -9,7 +9,11 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const distPath = join(__dirname, '..', '..', 'dist', 'sink-git-commit', 'main.js');
 
 function runLauncher(input: string, env: Record<string, string> = {}) {
-  const r = spawnSync(process.execPath, [distPath], { input, env: { ...process.env, ...env }, encoding: 'utf8' });
+  const r = spawnSync(process.execPath, [distPath], {
+    input,
+    env: { ...process.env, ...env },
+    encoding: 'utf8',
+  });
   return { code: r.status ?? 1, stdout: r.stdout, stderr: r.stderr };
 }
 
@@ -43,7 +47,17 @@ describe('sink-git-commit', () => {
     const repo = join(tmp, 'wt');
     mkdirSync(repo, { recursive: true });
     git(repo, ['init', '-q', '-b', 'feature/issue-T-1']);
-    git(repo, ['-c', 'user.name=seed', '-c', 'user.email=seed@x', 'commit', '-q', '--allow-empty', '-m', 'seed']);
+    git(repo, [
+      '-c',
+      'user.name=seed',
+      '-c',
+      'user.email=seed@x',
+      'commit',
+      '-q',
+      '--allow-empty',
+      '-m',
+      'seed',
+    ]);
     const base = git(repo, ['rev-parse', 'HEAD']).stdout.trim();
 
     writeFileSync(join(repo, 'impl.txt'), 'new code');
@@ -63,7 +77,17 @@ describe('sink-git-commit', () => {
     const repo = join(tmp, 'wt');
     mkdirSync(repo, { recursive: true });
     git(repo, ['init', '-q', '-b', 'feature/issue-T-1']);
-    git(repo, ['-c', 'user.name=seed', '-c', 'user.email=seed@x', 'commit', '-q', '--allow-empty', '-m', 'seed']);
+    git(repo, [
+      '-c',
+      'user.name=seed',
+      '-c',
+      'user.email=seed@x',
+      'commit',
+      '-q',
+      '--allow-empty',
+      '-m',
+      'seed',
+    ]);
 
     writeFileSync(join(repo, 'impl.txt'), 'new code');
     const input = JSON.stringify({ task_id: 'T-1', workdir: repo, summary: 'did the thing' });

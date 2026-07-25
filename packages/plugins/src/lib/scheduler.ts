@@ -14,7 +14,8 @@ import { run } from './exec.js';
 import { diag } from './io.js';
 
 export type Backend = 'schtasks' | 'systemd' | 'cron' | 'launchd' | 'none';
-export type Spec = { kind: 'interval'; minutes: number } | { kind: 'daily'; hh: number; mm: number };
+export type Spec =
+  { kind: 'interval'; minutes: number } | { kind: 'daily'; hh: number; mm: number };
 
 const NAME_RE = /^[A-Za-z0-9._-]+$/;
 const SAFE_PATH_RE = /^[A-Za-z0-9/._-]+$/;
@@ -83,12 +84,14 @@ function buildEnvAssign(): string {
 export function parseSpec(spec: string): Spec {
   if (spec.startsWith('interval:')) {
     const v = spec.slice('interval:'.length);
-    if (!/^[0-9]+$/.test(v) || Number(v) < 1) throw new Error(`scheduler: invalid interval spec: ${spec}`);
+    if (!/^[0-9]+$/.test(v) || Number(v) < 1)
+      throw new Error(`scheduler: invalid interval spec: ${spec}`);
     return { kind: 'interval', minutes: Number(v) };
   }
   if (spec.startsWith('daily:')) {
     const v = spec.slice('daily:'.length);
-    if (!/^[0-2][0-9]:[0-5][0-9]$/.test(v)) throw new Error(`scheduler: invalid daily spec: ${spec}`);
+    if (!/^[0-2][0-9]:[0-5][0-9]$/.test(v))
+      throw new Error(`scheduler: invalid daily spec: ${spec}`);
     const [hh, mm] = v.split(':');
     return { kind: 'daily', hh: Number(hh), mm: Number(mm) };
   }
@@ -176,8 +179,34 @@ function installSchtasks(profile: string, spec: Spec, cmd: string): void {
   const tr = `wsl.exe -e bash -lc '${cmd}'`;
   const args =
     spec.kind === 'interval'
-      ? ['/Create', '/TN', taskName, '/SC', 'MINUTE', '/MO', String(spec.minutes), '/TR', tr, '/RL', 'LIMITED', '/F']
-      : ['/Create', '/TN', taskName, '/SC', 'DAILY', '/ST', `${pad(spec.hh)}:${pad(spec.mm)}`, '/TR', tr, '/RL', 'LIMITED', '/F'];
+      ? [
+          '/Create',
+          '/TN',
+          taskName,
+          '/SC',
+          'MINUTE',
+          '/MO',
+          String(spec.minutes),
+          '/TR',
+          tr,
+          '/RL',
+          'LIMITED',
+          '/F',
+        ]
+      : [
+          '/Create',
+          '/TN',
+          taskName,
+          '/SC',
+          'DAILY',
+          '/ST',
+          `${pad(spec.hh)}:${pad(spec.mm)}`,
+          '/TR',
+          tr,
+          '/RL',
+          'LIMITED',
+          '/F',
+        ];
   const r = run('schtasks.exe', args);
   process.stderr.write(r.stderr);
   if (r.code !== 0) throw new Error(`scheduler: schtasks /Create failed (exit ${r.code})`);
@@ -232,7 +261,9 @@ function cronStrip(current: string, marker: string): string[] {
 function installCron(trigger: string, profile: string, spec: Spec, cmd: string): void {
   const marker = `# HALO:${trigger}:${profile}`;
   const schedule =
-    spec.kind === 'interval' ? `*/${spec.minutes} * * * *` : `${pad(spec.mm)} ${pad(spec.hh)} * * *`;
+    spec.kind === 'interval'
+      ? `*/${spec.minutes} * * * *`
+      : `${pad(spec.mm)} ${pad(spec.hh)} * * *`;
   const current = run('crontab', ['-l']).stdout;
   const lines = cronStrip(current, marker);
   lines.push(`${schedule} ${cmd} ${marker}`);
@@ -267,7 +298,8 @@ function installLaunchd(trigger: string, profile: string, spec: Spec, cmd: strin
     plist,
     `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n<dict>\n  <key>Label</key>\n  <string>${label}</string>\n  <key>ProgramArguments</key>\n  <array>\n    <string>/bin/bash</string>\n    <string>-lc</string>\n    <string>${cmd}</string>\n  </array>\n${scheduleXml}\n</dict>\n</plist>\n`,
   );
-  if (run('launchctl', ['load', plist]).code !== 0) throw new Error('scheduler: launchctl load failed');
+  if (run('launchctl', ['load', plist]).code !== 0)
+    throw new Error('scheduler: launchctl load failed');
 }
 
 function uninstallLaunchd(trigger: string, profile: string): void {

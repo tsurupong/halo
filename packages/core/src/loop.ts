@@ -25,6 +25,7 @@ import type {
 } from '@tsurupong/halo-contracts';
 import type { DiscoveredPlugin } from './discovery.js';
 import type { HeavyDecision } from './preflight.js';
+import type { KindPrompt } from './harness.js';
 import { shouldRunSink } from './autonomy.js';
 import { classifyExit, parseJsonStdout, type ExitClass, type RunPortResult } from './runPort.js';
 import type { ExecutorRecord, GateResult, IterationInput, Logger, Outcome } from './logger.js';
@@ -143,8 +144,13 @@ export function buildPrompt(
   task: TaskSourceOut,
   fragments: readonly Fragment[],
   lastFailure?: LastFailure,
+  instructions?: string,
 ): string {
   const parts: string[] = [`# Task ${task.task_id ?? ''}`.trim()];
+  // The kind's prompt template from `.harness.yml` (D2 §7.2) comes first: it is the
+  // repository's standing instructions, and the task is what to apply them to.
+  if (instructions !== undefined && instructions.trim() !== '')
+    parts.push(`## Instructions\n${instructions.trim()}`);
   if (task.title) parts.push(`## Title\n${task.title}`);
   if (task.body) parts.push(`## Requirement\n${task.body}`);
   if (fragments.length > 0) {
@@ -285,6 +291,11 @@ export interface LoopConfig {
   executorTimeoutSec?: number;
   /** Seconds added to the executor budget to derive its process-level wall (D2 §3.3, M2). */
   executorTimeoutGraceSec?: number;
+  /**
+   * `.harness.yml` `protectedPaths` (ADR-0004), passed through to every gate via
+   * `gate.in.protected_paths` so the audit gate can protect repo-declared paths.
+   */
+  protectedPaths?: readonly string[];
 }
 
 /** Everything the driver needs; all side effects are injected (D2 §2 委譲). */
@@ -301,6 +312,12 @@ export interface LoopDeps {
   isBudgetOk: () => boolean | Promise<boolean>;
   /** PreflightHeavy (D2 §4.2); omitted → always proceeds (Phase 1 stub). */
   preflightHeavy?: (task: TaskSourceOut) => HeavyDecision | Promise<HeavyDecision>;
+  /**
+   * Resolve this task's `kind` to its `.harness.yml` prompt template (D2 §7.2).
+   * Omitted → no repository instructions are injected (tests / repos predating the
+   * wiring). A `needs-human` result escalates this task and the loop continues.
+   */
+  kindPrompt?: (task: TaskSourceOut) => KindPrompt | Promise<KindPrompt>;
   /** Create the disposable worktree, returning its absolute path (D2 §8.2). */
   createWorktree: (task: TaskSourceOut) => string | Promise<string>;
   /** Remove the worktree (`git worktree remove --force`), always in a finally (D2 §8.3). */
@@ -439,6 +456,45 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
       return finish('ABORTED_ENV', `preflight: ${heavy.reason}`);
     }
 
+    // Kind resolution (D2 §7.2): the committed `.harness.yml` decides which prompt
+    // template this task runs under. Unlike PreflightHeavy this is a *task-level*
+    // misconfiguration — an undeclared kind or unreadable template affects only this
+    // task, so it escalates to a human and the loop moves on. Retrying cannot fix a
+    // declaration error, so it escalates immediately rather than burning the retry
+    // threshold. Resolved before the worktree exists: no point paying for one.
+    let instructions: string | undefined;
+    if (deps.kindPrompt) {
+      const resolved = await deps.kindPrompt(task);
+      if (resolved.status === 'needs-human') {
+        state.retryCount += 1;
+        taskStates.set(taskId, state);
+        await markPhase(taskId, 'on_fail');
+        await runBestEffort(
+          deps.ports.onFail,
+          deps.runner,
+          onFailInput(taskId, resolved.reason, state.retryCount),
+        );
+        await runTaskSourceFail(deps, taskId, resolved.reason, state.retryCount);
+        await record(deps, {
+          iter,
+          startedAt,
+          profile,
+          task,
+          outcome: 'escalated',
+          retryCount: state.retryCount,
+        });
+        iterations.push({
+          iter,
+          taskId,
+          outcome: 'escalated',
+          gateFailure: { reason: resolved.reason },
+          retryCount: state.retryCount,
+        });
+        continue;
+      }
+      instructions = resolved.instructions;
+    }
+
     const workdir = await deps.createWorktree(task);
     try {
       // Context (merge strategy, D2 §2.6 / §3.6).
@@ -447,7 +503,7 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
       const fragments = mergeFragments(ctxOuts, tokenLimit, estimate);
 
       // BuildPrompt with the previous failure re-injected (D2 §2.4).
-      const prompt = buildPrompt(task, fragments, state.lastFailure);
+      const prompt = buildPrompt(task, fragments, state.lastFailure, instructions);
 
       // Execute (single strategy). Classify by stdout status (D2 §2.3). A spawn
       // failure (RunPortError: ENOENT etc.) must not escape and crash the loop —
@@ -517,6 +573,11 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
         workdir,
         changed_files: changed,
         ...(gateBase !== '' ? { base: gateBase } : {}),
+        // ADR-0004: 保護対象の追加宣言は core (リポジトリルートの .harness.yml) 由来。
+        // worktree 内の複製を書き換えても、gate が従うリストは弱められない。
+        ...(cfg.protectedPaths && cfg.protectedPaths.length > 0
+          ? { protected_paths: [...cfg.protectedPaths] }
+          : {}),
       };
       const gateRuns = await runGates(deps, gateIn);
       const verdict = evaluateGates(gateRuns);

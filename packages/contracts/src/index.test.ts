@@ -26,7 +26,11 @@ test('valid port I/O values type-check', () => {
   const noTask: TaskSourceOut = { task_id: null };
   const input: TaskSourceIn = { op: 'complete', task_id: 'T-1', pr_url: 'https://x/pr/1' };
   const ctx: ContextOut = { fragments: [{ source: 'codegraph', content: 'c', priority: 10 }] };
-  const exIn: ExecutorIn = { prompt: 'p', workdir: '/w', budget: { max_turns: 40, timeout_sec: 900 } };
+  const exIn: ExecutorIn = {
+    prompt: 'p',
+    workdir: '/w',
+    budget: { max_turns: 40, timeout_sec: 900 },
+  };
   const exOut: ExecutorOut = { status: 'done', summary: 's' };
   const gate: GateOut = { reason: 'coverage 87% < 90%' };
   const onFail: OnFailIn = { task_id: 'T-1', reason: 'r', retry_count: 0 };

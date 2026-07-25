@@ -62,7 +62,7 @@ describe('gate-runtime-check (delegate contract)', () => {
     for (const name of ['check.js', 'test.js']) {
       writeFileSync(
         join(runtimeDir, name),
-        "process.exit(process.env.STUB_EXIT ? Number(process.env.STUB_EXIT) : 0);\n",
+        'process.exit(process.env.STUB_EXIT ? Number(process.env.STUB_EXIT) : 0);\n',
       );
     }
 

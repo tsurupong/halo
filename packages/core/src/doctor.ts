@@ -309,10 +309,7 @@ export async function runAll(probes: DoctorProbes): Promise<DoctorReport> {
   const stopPresent = await fs.exists(join(haloDir, 'STOP'));
   const c7 = checkLockStop(await probes.orphanLock(), stopPresent);
   // isWsl 未注入時は従来どおり無条件で ext4 検査 (後方互換, D10 §4)。
-  const c8 = checkPlacement(
-    await probes.onExt4(),
-    probes.isWsl ? await probes.isWsl() : true,
-  );
+  const c8 = checkPlacement(await probes.onExt4(), probes.isWsl ? await probes.isWsl() : true);
   const c9 = checkDisk(await probes.diskOk());
 
   const legacyOffenders: string[] = [];

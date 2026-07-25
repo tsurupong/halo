@@ -10,7 +10,11 @@ const pluginDir = join(__dirname, '..', '..', '..', '..', 'plugins', 'sink-progr
 const distPath = join(__dirname, '..', '..', 'dist', 'sink-progress-log', 'main.js');
 
 function runLauncher(input: string, env: Record<string, string> = {}) {
-  const r = spawnSync(process.execPath, [distPath], { input, env: { ...process.env, ...env }, encoding: 'utf8' });
+  const r = spawnSync(process.execPath, [distPath], {
+    input,
+    env: { ...process.env, ...env },
+    encoding: 'utf8',
+  });
   return { code: r.status ?? 1, stdout: r.stdout, stderr: r.stderr };
 }
 
@@ -52,12 +56,18 @@ describe('sink-progress-log 正常系', () => {
   it('logs へ構造化 1 行 JSON を追記し stdout は空', () => {
     const tmp = makeTmpDir();
     const logsDir = join(tmp, 'logs');
-    const input = JSON.stringify({ task_id: 'T-7', workdir: join(tmp, 'wt'), summary: 'planned 3 steps' });
+    const input = JSON.stringify({
+      task_id: 'T-7',
+      workdir: join(tmp, 'wt'),
+      summary: 'planned 3 steps',
+    });
     const result = runLauncher(input, { HALO_LOGS_DIR: logsDir });
 
     expect(result.code).toBe(0);
     expect(result.stdout).toBe('');
-    const logfile = readdirSync(logsDir).find((f) => f.startsWith('progress-') && f.endsWith('.jsonl'));
+    const logfile = readdirSync(logsDir).find(
+      (f) => f.startsWith('progress-') && f.endsWith('.jsonl'),
+    );
     expect(logfile).toBeDefined();
     const content = readFileSync(join(logsDir, logfile as string), 'utf8').trim();
     const entry = JSON.parse(content) as { task_id: string; summary: string; ts: string };
@@ -69,10 +79,16 @@ describe('sink-progress-log 正常系', () => {
   it('複数回実行で append 累積する(2行)', () => {
     const tmp = makeTmpDir();
     const logsDir = join(tmp, 'logs');
-    const input = JSON.stringify({ task_id: 'T-7', workdir: join(tmp, 'wt'), summary: 'planned 3 steps' });
+    const input = JSON.stringify({
+      task_id: 'T-7',
+      workdir: join(tmp, 'wt'),
+      summary: 'planned 3 steps',
+    });
     runLauncher(input, { HALO_LOGS_DIR: logsDir });
     runLauncher(input, { HALO_LOGS_DIR: logsDir });
-    const logfile = readdirSync(logsDir).find((f) => f.startsWith('progress-') && f.endsWith('.jsonl')) as string;
+    const logfile = readdirSync(logsDir).find(
+      (f) => f.startsWith('progress-') && f.endsWith('.jsonl'),
+    ) as string;
     const lines = readFileSync(join(logsDir, logfile), 'utf8').trim().split('\n');
     expect(lines.length).toBe(2);
   });
@@ -90,7 +106,11 @@ describe('sink-progress-log 正常系', () => {
     const tmp = makeTmpDir();
     const repo = join(tmp, 'repo');
     mkdirSync(repo, { recursive: true });
-    const input = JSON.stringify({ task_id: 'T-7', workdir: join(tmp, 'wt'), summary: 'planned 3 steps' });
+    const input = JSON.stringify({
+      task_id: 'T-7',
+      workdir: join(tmp, 'wt'),
+      summary: 'planned 3 steps',
+    });
     const r = spawnSync(process.execPath, [distPath], {
       input,
       cwd: repo,

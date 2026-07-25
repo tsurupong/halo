@@ -32,8 +32,18 @@ interface Contract {
 
 /** D1 appendix A: the 12 distributed contracts. */
 export const CONTRACTS: readonly Contract[] = [
-  { file: 'task-source.in.json', source: 'ports.ts', type: 'TaskSourceIn', title: 'task-source input' },
-  { file: 'task-source.out.json', source: 'ports.ts', type: 'TaskSourceOut', title: 'task-source output (op=next)' },
+  {
+    file: 'task-source.in.json',
+    source: 'ports.ts',
+    type: 'TaskSourceIn',
+    title: 'task-source input',
+  },
+  {
+    file: 'task-source.out.json',
+    source: 'ports.ts',
+    type: 'TaskSourceOut',
+    title: 'task-source output (op=next)',
+  },
   { file: 'context.out.json', source: 'ports.ts', type: 'ContextOut', title: 'context output' },
   { file: 'executor.in.json', source: 'ports.ts', type: 'ExecutorIn', title: 'executor input' },
   { file: 'executor.out.json', source: 'ports.ts', type: 'ExecutorOut', title: 'executor output' },
@@ -41,7 +51,12 @@ export const CONTRACTS: readonly Contract[] = [
   { file: 'gate.out.json', source: 'ports.ts', type: 'GateOut', title: 'gate output (fail only)' },
   { file: 'sink.in.json', source: 'ports.ts', type: 'SinkIn', title: 'sink input' },
   { file: 'on-fail.in.json', source: 'ports.ts', type: 'OnFailIn', title: 'on-fail input' },
-  { file: 'runtime.in.json', source: 'ports.ts', type: 'RuntimeIn', title: 'runtime script input (setup/check/test)' },
+  {
+    file: 'runtime.in.json',
+    source: 'ports.ts',
+    type: 'RuntimeIn',
+    title: 'runtime script input (setup/check/test)',
+  },
   { file: 'harness-yml.json', source: 'manifest.ts', type: 'HarnessYml', title: '.harness.yml' },
   { file: 'plugin.json', source: 'manifest.ts', type: 'PluginManifest', title: 'plugin manifest' },
 ];
@@ -67,7 +82,10 @@ function generatorFor(source: Contract['source']): SchemaGenerator {
 }
 
 /** Build one flat schema (no top $ref / definitions wrapper) for a contract. */
-export function buildSchema(contract: Contract, generator = generatorFor(contract.source)): JsonSchema {
+export function buildSchema(
+  contract: Contract,
+  generator = generatorFor(contract.source),
+): JsonSchema {
   const raw = generator.createSchema(contract.type) as JsonSchema;
 
   // Drop the generator's draft-07 marker and any empty definitions bag.

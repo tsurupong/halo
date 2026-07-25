@@ -45,8 +45,7 @@ function parseEnvelope(raw: string): { text: string; cost?: number; isError: boo
     if (j !== null && typeof j === 'object') {
       const text = typeof j['result'] === 'string' ? (j['result'] as string) : raw;
       const rawCost = j['total_cost_usd'] ?? j['cost_usd'];
-      const cost =
-        typeof rawCost === 'number' && Number.isFinite(rawCost) ? rawCost : undefined;
+      const cost = typeof rawCost === 'number' && Number.isFinite(rawCost) ? rawCost : undefined;
       return { text, ...(cost !== undefined ? { cost } : {}), isError: j['is_error'] === true };
     }
   } catch {
@@ -82,21 +81,27 @@ if (!existsSync(workdir)) {
 const r = spawnSync(
   'claude',
   [
-    '-p', prompt,
+    '-p',
+    prompt,
     '--strict-mcp-config',
     // S2: 対象リポジトリの project/local 設定 (.claude/settings.json の allow/hooks) を
     // 無視し、無人ループの実効権限をリポジトリ側ファイルに拡張させない (要件 §6.1 / D4 §2)。
-    '--setting-sources', 'user',
+    '--setting-sources',
+    'user',
     // ADR-0019 層1: HALO 管理 settings(deny 集合)を spawn 時に注入(存在時のみ)。
     ...(settingsFile !== undefined && settingsFile !== '' && existsSync(settingsFile)
       ? ['--settings', settingsFile]
       : []),
-    '--permission-mode', permissionMode,
+    '--permission-mode',
+    permissionMode,
     // ADR-0020: dontAsk 下の許可リスト = 可視ツール境界。
-    '--allowedTools', allowedTools,
+    '--allowedTools',
+    allowedTools,
     // S3: cost を取得するため結果を JSON エンベロープで受け取る (DAILY_MAX_COST_USD の集計元)。
-    '--output-format', 'json',
-    '--max-turns', String(maxTurns),
+    '--output-format',
+    'json',
+    '--max-turns',
+    String(maxTurns),
     // ADR-0021: ランタイム側のコスト上限停止(未指定なら付与しない)。
     ...(maxBudgetUsd !== undefined ? ['--max-budget-usd', String(maxBudgetUsd)] : []),
   ],
@@ -113,7 +118,10 @@ if (r.error !== undefined && (r.error as NodeJS.ErrnoException).code === 'ENOENT
   emit('stuck', 'missing command: claude');
 }
 // spawnSync の timeout は SIGKILL でプロセスを落とし signal に現れる。
-if (r.signal !== null || (r.error !== undefined && (r.error as NodeJS.ErrnoException).code === 'ETIMEDOUT')) {
+if (
+  r.signal !== null ||
+  (r.error !== undefined && (r.error as NodeJS.ErrnoException).code === 'ETIMEDOUT')
+) {
   emit('timeout', `claude timed out after ${timeoutSec}s`);
 }
 
@@ -122,7 +130,11 @@ const err = r.stderr ?? '';
 const code = r.status ?? 1;
 
 const lastLines = (text: string, n: number): string =>
-  text.split('\n').filter((l) => l !== '').slice(-n).join(' ');
+  text
+    .split('\n')
+    .filter((l) => l !== '')
+    .slice(-n)
+    .join(' ');
 
 // S3: JSON エンベロープを解釈して本文テキストと cost を取り出す(非JSONは生テキスト)。
 const env = parseEnvelope(out);

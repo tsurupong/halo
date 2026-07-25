@@ -6,7 +6,15 @@
 // (削除はしない — 上限超過は必ず移動で表現、ADR-0014)。
 // record(order 10)が先に failure-catalog へ記録した後に走る(order 20)。
 // ベストエフォート(部分失敗許容)。出力は無し、stdout は空に保つ。
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { readStdinJson, diag, str } from '../lib/io.js';
 

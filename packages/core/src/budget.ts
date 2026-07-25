@@ -102,8 +102,12 @@ export function evaluateBudget(usage: BudgetUsage, limits: BudgetLimits = {}): B
     usedCostUsd: usage.usedCostUsd,
     ...(dailyMaxIterations !== undefined ? { dailyMaxIterations } : {}),
     ...(dailyMaxCostUsd !== undefined ? { dailyMaxCostUsd } : {}),
-    remainingIterations: dailyMaxIterations === undefined ? null : Math.max(0, dailyMaxIterations - usage.usedIterations),
-    remainingCostUsd: dailyMaxCostUsd === undefined ? null : Math.max(0, dailyMaxCostUsd - usage.usedCostUsd),
+    remainingIterations:
+      dailyMaxIterations === undefined
+        ? null
+        : Math.max(0, dailyMaxIterations - usage.usedIterations),
+    remainingCostUsd:
+      dailyMaxCostUsd === undefined ? null : Math.max(0, dailyMaxCostUsd - usage.usedCostUsd),
   };
 }
 

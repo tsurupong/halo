@@ -20,6 +20,8 @@ import type {
 import {
   discoverPort,
   findHarnessYml,
+  loadHarnessYml,
+  readKindPrompt,
   createNodeDiscoveryFs,
   runPort,
   runPreflightLight,
@@ -136,7 +138,10 @@ const EXECUTOR_DENY_SETTINGS = {
 /** deny settings を haloDir 配下へ生成し、そのパスを返す(失敗時 undefined = 注入なし)。 */
 async function writeExecutorSettings(
   haloDir: string,
-  fs: { mkdir: (p: string, o: { recursive: true }) => Promise<unknown>; writeFile: (p: string, d: string) => Promise<void> },
+  fs: {
+    mkdir: (p: string, o: { recursive: true }) => Promise<unknown>;
+    writeFile: (p: string, d: string) => Promise<void>;
+  },
 ): Promise<string | undefined> {
   const dir = join(haloDir, 'settings');
   const path = join(dir, 'executor-settings.json');
@@ -248,7 +253,9 @@ function seamTmpdir(): string {
 /** haloDir 下の全 loop ポートを走査して LoopPorts を組む (D2 §6)。 */
 export async function discoverLoopPorts(haloDir: string, fs: DiscoveryFs): Promise<LoopPorts> {
   const [taskSource, context, executor, gate, sink, onFail] = await Promise.all(
-    LOOP_PORT_ORDER.map((port) => discoverPort({ haloRoot: haloDir, port, fs, requireEntry: true })),
+    LOOP_PORT_ORDER.map((port) =>
+      discoverPort({ haloRoot: haloDir, port, fs, requireEntry: true }),
+    ),
   );
   return {
     taskSource: taskSource!.plugins,
@@ -343,8 +350,7 @@ export function createRunHooks(seams: RunWiringSeams = nodeRunWiringSeams()): Ru
       // 重量段: .harness.yml 必須チェック (要件 §4.2③) + worktree clean。
       // disk/graph は D2 §4.2 の後続フェーズ。
       return runPreflightHeavy({
-        harnessYmlPresent: async () =>
-          (await findHarnessYml(ctx.cwd, seams.discoveryFs)) !== null,
+        harnessYmlPresent: async () => (await findHarnessYml(ctx.cwd, seams.discoveryFs)) !== null,
         worktreeClean: () => isWorktreeClean(seams.git(ctx.cwd)),
       });
     },
@@ -382,6 +388,10 @@ export function createRunHooks(seams: RunWiringSeams = nodeRunWiringSeams()): Ru
         // 成果ゼロの偽 complete が発火する (2026-07-16 に実際に発生)。
         // ADR-0019 層1: executor 用 deny settings を生成 (worktree 外・HALO 管理)。
         const executorSettingsFile = await writeExecutorSettings(ctx.haloDir, seams.logsFs);
+        // kind 解決 (D2 §7.2): 宣言は run 中不変なので 1 回だけ読む。読めない/壊れている
+        // 場合は kindPrompt を配線しない — .harness.yml 不在は preflightHeavy が
+        // NO_HARNESS_YML で既に止めており、ここで二重に落とす必要はない。
+        const loadedHarness = await loadHarnessYml(ctx.cwd, seams.discoveryFs).catch(() => null);
         const worktreeBase = new Map<string, string>();
         const logger = createLogger({ logDir: logsDir(ctx.haloDir), fs: seams.logsFs });
         // ハング検知: 各工程境界で logs/current.json を上書き (task md: phase-boundary-log)。
@@ -400,6 +410,10 @@ export function createRunHooks(seams: RunWiringSeams = nodeRunWiringSeams()): Ru
             ...(ctx.config.maxTurns != null ? { maxTurns: ctx.config.maxTurns } : {}),
             // ADR-0021: 1 実行あたり USD 上限を executor.in.budget へパススルー。
             ...(ctx.config.maxBudgetUsd != null ? { maxBudgetUsd: ctx.config.maxBudgetUsd } : {}),
+            // ADR-0004: .harness.yml の追加保護パスを gate.in へパススルー。
+            ...(loadedHarness?.harness.protectedPaths != null
+              ? { protectedPaths: loadedHarness.harness.protectedPaths }
+              : {}),
           },
           ports,
           runner: makeRunner(ctx, {
@@ -409,6 +423,18 @@ export function createRunHooks(seams: RunWiringSeams = nodeRunWiringSeams()): Ru
           logger,
           phaseTracker,
           now: seams.now,
+          // タスクの kind → .harness.yml の prompt テンプレート本文 (D2 §7.2)。
+          ...(loadedHarness !== null
+            ? {
+                kindPrompt: (task) =>
+                  readKindPrompt(
+                    loadedHarness.harness,
+                    loadedHarness.path,
+                    task.kind ?? undefined,
+                    seams.discoveryFs,
+                  ),
+              }
+            : {}),
           isStopPresent: () => isStopFilePresent(ctx.haloDir, seams.logsFs),
           isBudgetOk: async () => !(await isBudgetExhaustedFor(ctx, seams)),
           createWorktree: async (task) => {

@@ -78,11 +78,15 @@ describe('status (T26)', () => {
     });
     const cap = captureStreams();
     // limits を注入せず、--profile 経由でプロファイル env から解決させる。
-    await statusCommand(parseArgs(['--profile', 'nightly'], { valueFlags: ['profile'] }), io(cap, true), {
-      fs,
-      now: NOW,
-      spawn: noSpawn,
-    });
+    await statusCommand(
+      parseArgs(['--profile', 'nightly'], { valueFlags: ['profile'] }),
+      io(cap, true),
+      {
+        fs,
+        now: NOW,
+        spawn: noSpawn,
+      },
+    );
     const out = JSON.parse(cap.out());
     expect(out.budget.dailyMaxIterations).toBe(80);
     expect(out.budget.dailyMaxCostUsd).toBe(12);
@@ -97,11 +101,15 @@ describe('status (T26)', () => {
       },
     });
     const cap = captureStreams();
-    await statusCommand(parseArgs(['--profile', 'daytime-l1'], { valueFlags: ['profile'] }), io(cap, true), {
-      fs,
-      now: NOW,
-      spawn: noSpawn,
-    });
+    await statusCommand(
+      parseArgs(['--profile', 'daytime-l1'], { valueFlags: ['profile'] }),
+      io(cap, true),
+      {
+        fs,
+        now: NOW,
+        spawn: noSpawn,
+      },
+    );
     expect(JSON.parse(cap.out()).budget.dailyMaxIterations).toBe(30);
   });
 

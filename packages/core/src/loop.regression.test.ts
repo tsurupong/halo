@@ -11,7 +11,13 @@ import type { DiscoveredPlugin } from './discovery.js';
 import type { Port } from '@tsurupong/halo-contracts';
 import type { IterationInput, Logger } from './logger.js';
 import { runPort } from './runPort.js';
-import { runLoop, type LoopConfig, type LoopDeps, type LoopPorts, type PortRunner } from './loop.js';
+import {
+  runLoop,
+  type LoopConfig,
+  type LoopDeps,
+  type LoopPorts,
+  type PortRunner,
+} from './loop.js';
 
 const MOCK_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'test', 'mocks');
 
@@ -22,7 +28,13 @@ beforeEach(() => {
 afterEach(() => rmSync(stateDir, { recursive: true, force: true }));
 
 /** A DiscoveredPlugin pointing at a fixture script, carrying per-scenario env. */
-function mock(port: Port, name: string, script: string, env: Record<string, string> = {}, minAutonomy?: DiscoveredPlugin['manifest']['minAutonomy']): DiscoveredPlugin {
+function mock(
+  port: Port,
+  name: string,
+  script: string,
+  env: Record<string, string> = {},
+  minAutonomy?: DiscoveredPlugin['manifest']['minAutonomy'],
+): DiscoveredPlugin {
   return {
     port,
     name,
@@ -30,7 +42,14 @@ function mock(port: Port, name: string, script: string, env: Record<string, stri
     dir: MOCK_DIR,
     entryPath: join(MOCK_DIR, script),
     order: 0,
-    manifest: { name, version: '1.0.0', port, entry: script, ...(minAutonomy ? { minAutonomy } : {}), env },
+    manifest: {
+      name,
+      version: '1.0.0',
+      port,
+      entry: script,
+      ...(minAutonomy ? { minAutonomy } : {}),
+      env,
+    },
   };
 }
 
@@ -46,7 +65,10 @@ interface Rig {
   logs: IterationInput[];
 }
 
-function rig(ports: Partial<LoopPorts>, over: Omit<Partial<LoopDeps>, 'config'> & { config?: Partial<LoopConfig> } = {}): Rig {
+function rig(
+  ports: Partial<LoopPorts>,
+  over: Omit<Partial<LoopDeps>, 'config'> & { config?: Partial<LoopConfig> } = {},
+): Rig {
   const logs: IterationInput[] = [];
   const logger: Logger = {
     writeIteration: async (input) => {
@@ -60,9 +82,22 @@ function rig(ports: Partial<LoopPorts>, over: Omit<Partial<LoopDeps>, 'config'> 
       args: [plugin.entryPath],
       stdin,
       timeoutMs: (opts?.timeoutSec ?? 5) * 1000,
-      env: { ...baseEnv(), STATE_DIR: stateDir, PLUGIN_NAME: plugin.name, ...(plugin.manifest.env ?? {}) },
+      env: {
+        ...baseEnv(),
+        STATE_DIR: stateDir,
+        PLUGIN_NAME: plugin.name,
+        ...(plugin.manifest.env ?? {}),
+      },
     });
-  const full: LoopPorts = { taskSource: [], context: [], executor: [], gate: [], sink: [], onFail: [], ...ports };
+  const full: LoopPorts = {
+    taskSource: [],
+    context: [],
+    executor: [],
+    gate: [],
+    sink: [],
+    onFail: [],
+    ...ports,
+  };
   const deps: LoopDeps = {
     config: { autonomy: 'L1', maxIter: 20, timeoutSec: 3600, profileName: 'reg', ...over.config },
     ports: full,
@@ -93,7 +128,9 @@ describe('loop regression (fixture plugins, zero billing)', () => {
     );
     const result = await runLoop(deps);
     expect(result.endReason).toBe('NO_TASK');
-    expect(result.iterations).toEqual([expect.objectContaining({ taskId: '1', outcome: 'passed' })]);
+    expect(result.iterations).toEqual([
+      expect.objectContaining({ taskId: '1', outcome: 'passed' }),
+    ]);
     expect(existsSync(join(stateDir, 'sink_log'))).toBe(true);
     expect(existsSync(join(stateDir, 'ts_complete'))).toBe(true);
     expect(logs).toHaveLength(1);
@@ -140,7 +177,9 @@ describe('loop regression (fixture plugins, zero billing)', () => {
       onFail: [mock('on-fail', 'rec', 'on-fail.mjs')],
     });
     const result = await runLoop(deps);
-    expect(result.iterations[0]).toEqual(expect.objectContaining({ executorStatus: 'stuck', outcome: 'failed' }));
+    expect(result.iterations[0]).toEqual(
+      expect.objectContaining({ executorStatus: 'stuck', outcome: 'failed' }),
+    );
     expect(existsSync(join(stateDir, 'gate'))).toBe(false); // gate never invoked
     expect(existsSync(join(stateDir, 'onfail'))).toBe(true);
   });

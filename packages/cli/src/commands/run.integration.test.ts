@@ -15,6 +15,7 @@ import { parseArgs } from '../args.js';
 import { createIo } from '../io.js';
 import { captureStreams } from '../testkit.js';
 import { createNodeCliFs } from '../core-ext/fs.js';
+import { loadHarnessYml, createNodeDiscoveryFs } from '@tsurupong/halo-core';
 import { createRunHooks } from '../core-ext/run-wiring.js';
 import { runCommand } from './run.js';
 import { EXIT } from '../exit-codes.js';
@@ -98,6 +99,15 @@ require('fs').readFileSync(0);
 process.exit(0);
 `;
 
+// executor が実際に受け取った prompt を記録する (kind 解決 → prompt 合成の実配線検証用)。
+const EXEC_RECORD_PROMPT = `
+const fs = require('fs');
+const input = JSON.parse(fs.readFileSync(0, 'utf8') || '{}');
+fs.writeFileSync(process.env.STATE_DIR + '/prompt.txt', String(input.prompt || ''));
+process.stdout.write(JSON.stringify({ status: 'done', summary: 'ok' }));
+process.exit(0);
+`;
+
 // worktree の HEAD を記録する executor (使い捨て worktree が常に最新 HEAD 起点である回帰用)。
 const EXEC_RECORD_HEAD = `
 const fs = require('fs');
@@ -127,7 +137,13 @@ function io(cap: ReturnType<typeof captureStreams>) {
 }
 
 function deps() {
-  return { fs: createNodeCliFs(), now: Date.now(), hooks: createRunHooks() };
+  return {
+    fs: createNodeCliFs(),
+    now: Date.now(),
+    hooks: createRunHooks(),
+    // index.ts と同じ実配線: .harness.yml の maxAutonomy をここで効かせる。
+    loadHarness: (cwd: string) => loadHarnessYml(cwd, createNodeDiscoveryFs()),
+  };
 }
 
 function writeProfile(body = 'AUTONOMY=L1\nMAX_ITER=20\nTIMEOUT=1h\n'): void {
@@ -148,10 +164,14 @@ beforeEach(() => {
   git('config', 'commit.gpgsign', 'false');
   mkdirSync(join(repo, '.halo', 'state'), { recursive: true });
   // .harness.yml は必須 (要件 §4.2③): 無いと preflight.heavy が NO_HARNESS_YML で止まる。
+  // 宣言した prompt は実在させる — 不在なら kind 解決が needs-human になり escalated 扱い
+  // (D2 §7.2)。`halo project init` は両方を生成するので、ここも実物と同じ状態にする。
   writeFileSync(
     join(repo, '.harness.yml'),
     'kinds:\n  code:\n    runtimes: [node-pnpm]\n    prompt: .halo/prompts/code.md\n',
   );
+  mkdirSync(join(repo, '.halo', 'prompts'), { recursive: true });
+  writeFileSync(join(repo, '.halo', 'prompts', 'code.md'), '# house rules\n');
   writeProfile();
 });
 
@@ -236,11 +256,55 @@ process.exit(0);
       const cap = captureStreams();
       const code = await runCommand(parseArgs(['p'], RUN_FLAGS), io(cap), deps());
       expect(code).toBe(EXIT.OK);
-      expect(readFileSync(join(state, 'wt-path'), 'utf8').trim()).toBe(join(wtBase, 'halo-wt-issue-7'));
+      expect(readFileSync(join(state, 'wt-path'), 'utf8').trim()).toBe(
+        join(wtBase, 'halo-wt-issue-7'),
+      );
     } finally {
       delete process.env['HALO_WORKTREE_DIR'];
       rmSync(wtBase, { recursive: true, force: true });
     }
+  });
+
+  // D2 §7.2 / ADR-0004 の実配線: .harness.yml が宣言どおり効いていることを端から端まで見る。
+  it('.harness.yml の prompt が executor へ実際に届く', async () => {
+    const state = join(repo, '.halo', 'state');
+    plugin('task-source', 'ts', 'index.cjs', TASK_SOURCE, { STATE_DIR: state });
+    plugin('executor', 'ex', 'run.cjs', EXEC_RECORD_PROMPT, { STATE_DIR: state });
+    plugin('gate', '10-g', 'run.cjs', GATE_PASS);
+    git('add', '-A');
+    git('commit', '-q', '-m', 'fixtures');
+
+    const cap = captureStreams();
+    expect(await runCommand(parseArgs(['p'], RUN_FLAGS), io(cap), deps())).toBe(EXIT.OK);
+
+    const prompt = readFileSync(join(state, 'prompt.txt'), 'utf8');
+    expect(prompt).toContain('## Instructions');
+    expect(prompt).toContain('# house rules');
+  });
+
+  it('.harness.yml の maxAutonomy が --autonomy より優先される', async () => {
+    writeFileSync(
+      join(repo, '.harness.yml'),
+      'kinds:\n  code:\n    runtimes: [node-pnpm]\n    prompt: .halo/prompts/code.md\nmaxAutonomy: L1\n',
+    );
+    const state = join(repo, '.halo', 'state');
+    plugin('task-source', 'ts', 'index.cjs', TASK_SOURCE, { STATE_DIR: state });
+    plugin('executor', 'ex', 'run.cjs', EXEC_DONE);
+    plugin('gate', '10-g', 'run.cjs', GATE_PASS);
+    git('add', '-A');
+    git('commit', '-q', '-m', 'fixtures');
+
+    const cap = captureStreams();
+    expect(await runCommand(parseArgs(['p', '--autonomy', 'L3'], RUN_FLAGS), io(cap), deps())).toBe(
+      EXIT.OK,
+    );
+
+    // このフィクスチャは quiet なので警告文言は出ない (それは run.test.ts で検証)。
+    // ここで見るのは「上限が実際に効いた結果」— 記録された自律度そのもの。
+    const log = JSON.parse(readFileSync(join(logsDir(), 'iter_1.json'), 'utf8')) as {
+      autonomy: string;
+    };
+    expect(log.autonomy).toBe('L1');
   });
 
   it('preflight STOP: .halo/STOP present → exit 0, loop never runs (no logs)', async () => {

@@ -1,0 +1,64 @@
+name: Plugin proposal
+description: Propose a new plugin, or a change to a bundled one
+labels: [plugin]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The acceptance criteria for a plugin PR are in
+        [CONTRIBUTING.md](../blob/main/CONTRIBUTING.md#contributing-a-plugin). Reading them
+        first usually answers most of the design questions.
+
+  - type: dropdown
+    id: port
+    attributes:
+      label: Port
+      description: Which of the eight ports does this plugin implement?
+      options:
+        - task-source
+        - context
+        - executor
+        - gate
+        - sink
+        - on-fail
+        - runtime
+        - trigger
+    validations:
+      required: true
+
+  - type: input
+    id: name
+    attributes:
+      label: Proposed name
+      description: 'Must be `<port>-<impl>`, e.g. `task-source-jira`.'
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does it solve
+      description: What can't be done today, or what is awkward with the bundled plugins?
+    validations:
+      required: true
+
+  - type: textarea
+    id: side-effects
+    attributes:
+      label: Side effects and required autonomy
+      description: >
+        What does it change outside the worktree, and what `minAutonomy` should it declare?
+        A plugin with no side effects can say "none".
+    validations:
+      required: true
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: External dependencies
+      description: >
+        Does it need a third-party library, a network service, or a credential? The
+        published packages have zero third-party runtime dependencies, so anything new
+        needs a reason.
+    validations:
+      required: true

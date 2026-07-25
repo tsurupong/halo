@@ -48,7 +48,12 @@ export function fire(trigger: string, profile: string): never {
 }
 
 /** install 実処理。冪等(再実行は削除→再登録)。fireArgv は fire を起動する argv(node + スクリプトパス)。 */
-export function install(trigger: string, profile: string, spec: string, fireArgv: readonly string[]): never {
+export function install(
+  trigger: string,
+  profile: string,
+  spec: string,
+  fireArgv: readonly string[],
+): never {
   try {
     schedulerInstall(trigger, profile, spec, fireArgv);
   } catch (e) {

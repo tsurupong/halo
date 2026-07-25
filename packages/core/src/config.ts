@@ -9,6 +9,7 @@
 // pure validation + kind-resolution helpers discovery calls.
 
 import type { MinAutonomy, HarnessYml, HarnessKind } from '@tsurupong/halo-contracts';
+import { autonomyRank } from './autonomy.js';
 
 /** Thrown on any configuration / usage error → CLI maps to exit 3 (D3 §5). */
 export class ConfigError extends Error {
@@ -21,6 +22,12 @@ export class ConfigError extends Error {
 /** Fully resolved runtime configuration handed to the loop. */
 export interface HaloConfig {
   autonomy: MinAutonomy;
+  /**
+   * Set only when `.harness.yml` `maxAutonomy` lowered the resolved level: the level
+   * that was requested before clamping. The CLI surfaces it so an operator whose
+   * `--autonomy` was capped sees why (ADR-0004).
+   */
+  autonomyCappedFrom?: MinAutonomy;
   maxIter: number;
   timeoutSec: number;
   dailyMaxIterations?: number;
@@ -123,6 +130,11 @@ export interface ResolveConfigInput {
   defaults?: Record<string, string>;
   /** Profile name for provenance (recorded in logs). */
   profileName?: string;
+  /**
+   * Repository ceiling from `.harness.yml` `maxAutonomy` (ADR-0004). Applied last,
+   * after CLI > profile > defaults, so it cannot be overridden from the command line.
+   */
+  harnessMaxAutonomy?: string;
 }
 
 /**
@@ -150,8 +162,19 @@ export function resolveConfig(input: ResolveConfigInput = {}): HaloConfig {
   const taskFilter = firstDefined(cli.taskFilter, profile.TASK_FILTER, defaults.TASK_FILTER);
   const kindFilter = firstDefined(cli.kindFilter, profile.KIND_FILTER, defaults.KIND_FILTER);
 
+  // 要求された自律度を先に確定させ、最後にリポジトリ上限でクランプする (ADR-0004)。
+  // 上限は .harness.yml (コミット対象・loop-audit 保護対象) 由来なので、profile / CLI の
+  // どちらからも引き上げられない — 上限が git 上でレビュー可能である、という性質が要点。
+  const requested = normalizeAutonomy(requireValue(autonomyRaw, 'AUTONOMY'));
+  const ceiling =
+    input.harnessMaxAutonomy != null && input.harnessMaxAutonomy !== ''
+      ? normalizeAutonomy(input.harnessMaxAutonomy)
+      : undefined;
+  const capped = ceiling !== undefined && autonomyRank(requested) > autonomyRank(ceiling);
+
   const config: HaloConfig = {
-    autonomy: normalizeAutonomy(requireValue(autonomyRaw, 'AUTONOMY')),
+    autonomy: capped && ceiling !== undefined ? ceiling : requested,
+    ...(capped ? { autonomyCappedFrom: requested } : {}),
     maxIter: normalizePositiveInt(requireValue(maxIterRaw, 'MAX_ITER'), 'MAX_ITER'),
     timeoutSec: parseDuration(requireValue(timeoutRaw, 'TIMEOUT')),
     ...(dailyItersRaw != null
@@ -231,6 +254,23 @@ export function validateHarnessYml(parsed: unknown): HarnessYml {
   for (const [name, def] of entries) {
     validateKind(name, def);
   }
+
+  // 安全フィールド (ADR-0004)。どちらも任意だが、書かれている以上は厳格に検証する —
+  // 綴り間違いを黙って無視すると「上限を宣言したつもり」で無人ループが走ってしまう。
+  const { maxAutonomy, protectedPaths } = parsed as Record<string, unknown>;
+  if (maxAutonomy !== undefined && !(AUTONOMY_VALUES as readonly unknown[]).includes(maxAutonomy)) {
+    throw new ConfigError(
+      `.harness.yml: invalid maxAutonomy: '${String(maxAutonomy)}' (expected one of ${AUTONOMY_VALUES.join(', ')})`,
+    );
+  }
+  if (
+    protectedPaths !== undefined &&
+    (!Array.isArray(protectedPaths) ||
+      !protectedPaths.every((p) => typeof p === 'string' && p !== ''))
+  ) {
+    throw new ConfigError('.harness.yml: `protectedPaths` must be an array of non-empty strings');
+  }
+
   return parsed as HarnessYml;
 }
 

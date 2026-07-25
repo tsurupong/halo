@@ -100,20 +100,19 @@ describe('on-fail-notify', () => {
 
   it('retry_count が閾値未満なら送信しない', async () => {
     const url = await startServer();
-    const result = await run(
-      JSON.stringify({ task_id: 'T-12', reason: 'x', retry_count: 2 }),
-      { HALO_NOTIFY_URL: url },
-    );
+    const result = await run(JSON.stringify({ task_id: 'T-12', reason: 'x', retry_count: 2 }), {
+      HALO_NOTIFY_URL: url,
+    });
     expect(result.code).toBe(0);
     expect(received).toHaveLength(0);
   });
 
   it('HALO_NOTIFY_THRESHOLD で閾値を上書きできる', async () => {
     const url = await startServer();
-    const result = await run(
-      JSON.stringify({ task_id: 'T-12', reason: 'x', retry_count: 1 }),
-      { HALO_NOTIFY_URL: url, HALO_NOTIFY_THRESHOLD: '1' },
-    );
+    const result = await run(JSON.stringify({ task_id: 'T-12', reason: 'x', retry_count: 1 }), {
+      HALO_NOTIFY_URL: url,
+      HALO_NOTIFY_THRESHOLD: '1',
+    });
     expect(result.code).toBe(0);
     expect(received).toHaveLength(1);
   });

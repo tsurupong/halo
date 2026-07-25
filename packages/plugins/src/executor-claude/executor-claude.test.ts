@@ -1,7 +1,15 @@
 // executor-claude 契約テスト(plugins/executor-claude/test.contract.sh の TS 移植)。
 // claude コマンドは PATH 上のスタブに差し替え、ランチャー(run.sh)経由で main.js を spawn して検証する。
 import { describe, it, expect, afterEach } from 'vitest';
-import { existsSync, mkdtempSync, rmSync, writeFileSync, chmodSync, mkdirSync, readFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+  chmodSync,
+  mkdirSync,
+  readFileSync,
+} from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -80,7 +88,11 @@ describe('executor-claude contract', () => {
 
   it('[HALO:STUCK] marker -> status:stuck', () => {
     const { stubBinDir, workdir } = setupStubBin();
-    const input = JSON.stringify({ prompt: 'do the thing', workdir, budget: { max_turns: 40, timeout_sec: 900 } });
+    const input = JSON.stringify({
+      prompt: 'do the thing',
+      workdir,
+      budget: { max_turns: 40, timeout_sec: 900 },
+    });
     const { stdout } = runLauncher(input, {
       ...baseEnv(stubBinDir),
       CLAUDE_STUB_OUT: 'tried but [HALO:STUCK] cannot resolve',
@@ -91,7 +103,11 @@ describe('executor-claude contract', () => {
 
   it('claude non-zero exit -> status:stuck', () => {
     const { stubBinDir, workdir } = setupStubBin();
-    const input = JSON.stringify({ prompt: 'do the thing', workdir, budget: { max_turns: 40, timeout_sec: 900 } });
+    const input = JSON.stringify({
+      prompt: 'do the thing',
+      workdir,
+      budget: { max_turns: 40, timeout_sec: 900 },
+    });
     const { stdout } = runLauncher(input, {
       ...baseEnv(stubBinDir),
       CLAUDE_STUB_OUT: 'crash',
@@ -108,7 +124,11 @@ describe('executor-claude contract', () => {
   // TS実装の実際の挙動の食い違いであり、実装の挙動を正としてテストする。
   it('claude exit 124 (pseudo-timeout, no real signal) -> status:stuck under current impl', () => {
     const { stubBinDir, workdir } = setupStubBin();
-    const input = JSON.stringify({ prompt: 'do the thing', workdir, budget: { max_turns: 40, timeout_sec: 900 } });
+    const input = JSON.stringify({
+      prompt: 'do the thing',
+      workdir,
+      budget: { max_turns: 40, timeout_sec: 900 },
+    });
     const { stdout } = runLauncher(input, {
       ...baseEnv(stubBinDir),
       CLAUDE_STUB_EXIT: '124',
@@ -118,7 +138,9 @@ describe('executor-claude contract', () => {
   });
 
   it('missing prompt -> status:stuck, valid out shape maintained', () => {
-    const { stdout } = runLauncher(JSON.stringify({ workdir: '/tmp', budget: { max_turns: 1, timeout_sec: 1 } }));
+    const { stdout } = runLauncher(
+      JSON.stringify({ workdir: '/tmp', budget: { max_turns: 1, timeout_sec: 1 } }),
+    );
     const out = JSON.parse(stdout) as { status: string; summary: string };
     expect(out.status).toBe('stuck');
     expect(typeof out.summary).toBe('string');
@@ -127,7 +149,11 @@ describe('executor-claude contract', () => {
   it('default --permission-mode dontAsk + --allowedTools are passed to claude (ADR-0020)', () => {
     const { stubBinDir, workdir } = setupStubBin();
     const argsFile = join(dirname(stubBinDir), 'args');
-    const input = JSON.stringify({ prompt: 'do the thing', workdir, budget: { max_turns: 40, timeout_sec: 900 } });
+    const input = JSON.stringify({
+      prompt: 'do the thing',
+      workdir,
+      budget: { max_turns: 40, timeout_sec: 900 },
+    });
     runLauncher(input, { ...baseEnv(stubBinDir), CLAUDE_ARGS_FILE: argsFile });
     const args = readFileSync(argsFile, 'utf8').split('\n');
     expect(args).toContain('--permission-mode');
@@ -145,7 +171,11 @@ describe('executor-claude contract', () => {
     const { stubBinDir, workdir } = setupStubBin();
     const argsFile = join(dirname(stubBinDir), 'args-budget');
     runLauncher(
-      JSON.stringify({ prompt: 'x', workdir, budget: { max_turns: 40, timeout_sec: 900, max_budget_usd: 2.5 } }),
+      JSON.stringify({
+        prompt: 'x',
+        workdir,
+        budget: { max_turns: 40, timeout_sec: 900, max_budget_usd: 2.5 },
+      }),
       { ...baseEnv(stubBinDir), CLAUDE_ARGS_FILE: argsFile },
     );
     const args = readFileSync(argsFile, 'utf8').split('\n');
@@ -162,7 +192,11 @@ describe('executor-claude contract', () => {
   it('HALO_CLAUDE_ALLOWED_TOOLS overrides the allowlist', () => {
     const { stubBinDir, workdir } = setupStubBin();
     const argsFile = join(dirname(stubBinDir), 'args-allow');
-    const input = JSON.stringify({ prompt: 'x', workdir, budget: { max_turns: 40, timeout_sec: 900 } });
+    const input = JSON.stringify({
+      prompt: 'x',
+      workdir,
+      budget: { max_turns: 40, timeout_sec: 900 },
+    });
     runLauncher(input, {
       ...baseEnv(stubBinDir),
       CLAUDE_ARGS_FILE: argsFile,
@@ -177,7 +211,11 @@ describe('executor-claude contract', () => {
     const argsFile = join(dirname(stubBinDir), 'args-settings');
     const settingsFile = join(dirname(stubBinDir), 'executor-settings.json');
     writeFileSync(settingsFile, '{"permissions":{"deny":["Write(**/CLAUDE.md)"]}}');
-    const input = JSON.stringify({ prompt: 'x', workdir, budget: { max_turns: 40, timeout_sec: 900 } });
+    const input = JSON.stringify({
+      prompt: 'x',
+      workdir,
+      budget: { max_turns: 40, timeout_sec: 900 },
+    });
     runLauncher(input, {
       ...baseEnv(stubBinDir),
       CLAUDE_ARGS_FILE: argsFile,
@@ -190,7 +228,11 @@ describe('executor-claude contract', () => {
   it('omits --settings when HALO_SETTINGS_FILE is unset or missing (ADR-0019 layer-2 fallback)', () => {
     const { stubBinDir, workdir } = setupStubBin();
     const argsFile = join(dirname(stubBinDir), 'args-nosettings');
-    const input = JSON.stringify({ prompt: 'x', workdir, budget: { max_turns: 40, timeout_sec: 900 } });
+    const input = JSON.stringify({
+      prompt: 'x',
+      workdir,
+      budget: { max_turns: 40, timeout_sec: 900 },
+    });
     runLauncher(input, {
       ...baseEnv(stubBinDir),
       CLAUDE_ARGS_FILE: argsFile,
@@ -203,7 +245,11 @@ describe('executor-claude contract', () => {
   it('passes --setting-sources user and --output-format json (S2/S3)', () => {
     const { stubBinDir, workdir } = setupStubBin();
     const argsFile = join(dirname(stubBinDir), 'args-s23');
-    const input = JSON.stringify({ prompt: 'x', workdir, budget: { max_turns: 40, timeout_sec: 900 } });
+    const input = JSON.stringify({
+      prompt: 'x',
+      workdir,
+      budget: { max_turns: 40, timeout_sec: 900 },
+    });
     runLauncher(input, { ...baseEnv(stubBinDir), CLAUDE_ARGS_FILE: argsFile });
     const args = readFileSync(argsFile, 'utf8').split('\n');
     expect(args).toContain('--setting-sources');
@@ -214,7 +260,11 @@ describe('executor-claude contract', () => {
 
   it('extracts total_cost_usd from a JSON envelope into cost.usd_estimate (S3)', () => {
     const { stubBinDir, workdir } = setupStubBin();
-    const input = JSON.stringify({ prompt: 'x', workdir, budget: { max_turns: 40, timeout_sec: 900 } });
+    const input = JSON.stringify({
+      prompt: 'x',
+      workdir,
+      budget: { max_turns: 40, timeout_sec: 900 },
+    });
     const { stdout } = runLauncher(input, {
       ...baseEnv(stubBinDir),
       CLAUDE_STUB_OUT: JSON.stringify({ result: 'done ok', total_cost_usd: 0.42, is_error: false }),
@@ -232,7 +282,11 @@ describe('executor-claude contract', () => {
   it('HALO_CLAUDE_PERMISSION_MODE overrides permission mode', () => {
     const { stubBinDir, workdir } = setupStubBin();
     const argsFile = join(dirname(stubBinDir), 'args2');
-    const input = JSON.stringify({ prompt: 'do the thing', workdir, budget: { max_turns: 40, timeout_sec: 900 } });
+    const input = JSON.stringify({
+      prompt: 'do the thing',
+      workdir,
+      budget: { max_turns: 40, timeout_sec: 900 },
+    });
     runLauncher(input, {
       ...baseEnv(stubBinDir),
       CLAUDE_ARGS_FILE: argsFile,
@@ -245,7 +299,11 @@ describe('executor-claude contract', () => {
 
   it('non-zero exit propagates stderr detail into summary', () => {
     const { stubBinDir, workdir } = setupStubBin();
-    const input = JSON.stringify({ prompt: 'do the thing', workdir, budget: { max_turns: 40, timeout_sec: 900 } });
+    const input = JSON.stringify({
+      prompt: 'do the thing',
+      workdir,
+      budget: { max_turns: 40, timeout_sec: 900 },
+    });
     const { stdout } = runLauncher(input, {
       ...baseEnv(stubBinDir),
       CLAUDE_STUB_OUT: '',
@@ -259,7 +317,11 @@ describe('executor-claude contract', () => {
 
   it('non-zero exit propagates stdout tail into summary', () => {
     const { stubBinDir, workdir } = setupStubBin();
-    const input = JSON.stringify({ prompt: 'do the thing', workdir, budget: { max_turns: 40, timeout_sec: 900 } });
+    const input = JSON.stringify({
+      prompt: 'do the thing',
+      workdir,
+      budget: { max_turns: 40, timeout_sec: 900 },
+    });
     const { stdout } = runLauncher(input, {
       ...baseEnv(stubBinDir),
       CLAUDE_STUB_OUT: 'crash detail on stdout',
@@ -271,7 +333,11 @@ describe('executor-claude contract', () => {
 
   it('stdout is a single JSON line', () => {
     const { stubBinDir, workdir } = setupStubBin();
-    const input = JSON.stringify({ prompt: 'do the thing', workdir, budget: { max_turns: 40, timeout_sec: 900 } });
+    const input = JSON.stringify({
+      prompt: 'do the thing',
+      workdir,
+      budget: { max_turns: 40, timeout_sec: 900 },
+    });
     const { stdout } = runLauncher(input, { ...baseEnv(stubBinDir), CLAUDE_STUB_OUT: 'ok' });
     const lines = stdout.split('\n').filter((l) => l !== '');
     expect(lines.length).toBe(1);

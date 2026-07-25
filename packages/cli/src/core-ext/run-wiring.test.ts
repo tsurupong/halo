@@ -18,9 +18,11 @@ vi.mock('node:child_process', () => ({
       stdin: EventEmitter & { end: (data: string) => void };
     };
     child.stdout = new EventEmitter();
-    (child.stdout as unknown as { setEncoding: (enc: string) => void }).setEncoding = () => undefined;
+    (child.stdout as unknown as { setEncoding: (enc: string) => void }).setEncoding = () =>
+      undefined;
     child.stderr = new EventEmitter();
-    (child.stderr as unknown as { setEncoding: (enc: string) => void }).setEncoding = () => undefined;
+    (child.stderr as unknown as { setEncoding: (enc: string) => void }).setEncoding = () =>
+      undefined;
     child.stdin = Object.assign(new EventEmitter(), { end: () => undefined });
     queueMicrotask(() => child.emit('close', 0, null));
     return child;
@@ -68,7 +70,9 @@ describe('makeRunner (entry contract, ADR-0018)', () => {
 
   it('injects HALO_SETTINGS_FILE only for the executor port (ADR-0019)', async () => {
     spawnCalls.length = 0;
-    const runner = makeRunner(ctx(), { executorSettingsFile: '/repo/.halo/settings/executor-settings.json' });
+    const runner = makeRunner(ctx(), {
+      executorSettingsFile: '/repo/.halo/settings/executor-settings.json',
+    });
     await runner(plugin({ port: 'executor' }), {});
     await runner(plugin({ port: 'gate' }), {});
 
