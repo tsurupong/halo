@@ -31,7 +31,7 @@ The document system follows [HALO Design Document Index](../../../docs/HALO設�
 | D6 | [Graph Design](d6-graph-design.md) ◆private — KuzuDB DDL, kg:// resolution, CGC re-indexing, staleness detection → automatic issue creation, glossary check, MCP tools, requirement-ingestion procedure | §5 | 0003, 0005, 0011 |
 | D7 | [Operations Runbook (skeleton)](d7-ops-runbook.md) — autonomy promotion/demotion, needs-human flow, failure-catalog/sign promotion, budget monitoring, troubleshooting (measured values filled in after Phase 1-2) | §7, §9 | 0006, 0012 |
 | D8 | [Test Strategy](d8-test-strategy.md) — core unit (vitest), loop regression (executor mock), contract test, E2E, CI configuration | §9 | 0010 |
-| D9 | [Reliability Design](d9-reliability-design.md) — watchdog supervisor, status aggregation, transient-failure requeue/quarantine | §3.2, §8.2 | 0013, 0014 |
+| D9 | [Reliability Design](d9-reliability-design.md) — watchdog supervisor + scheduling/heartbeat, status aggregation, transient-failure requeue/quarantine, graceful shutdown | §3.2, §8.2 | 0013, 0014, 0022, 0023 |
 | D10 | [Portability Design](d10-portability-design.md) — POSIX target, fire fixes, scheduler backend abstraction (schtasks/systemd/cron/launchd), doctor env checks, CI matrix | §6.1, §11.2 | 0008, 0015 |
 | D11 | [TypeScript Plugin Migration](d11-typescript-plugins-design.md) — packages/plugins layout, POSIX sh launchers, Vitest contract driver, scheduler.ts, 6-step migration order | §4, §6.1 | 0001, 0015, 0017 |
 | 06 | [Security / cost control / observability](06-security-cost-observability.md) — bubblewrap specification, list of blocked operations, PAT scope, cost parameter table, iter_N.json schema | §6, §10 | 0004, 0008 |

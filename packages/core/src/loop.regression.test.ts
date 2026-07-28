@@ -88,6 +88,9 @@ function rig(
         PLUGIN_NAME: plugin.name,
         ...(plugin.manifest.env ?? {}),
       },
+      // ADR-0022: the wiring hands the shutdown signal to every port, so the
+      // regression rig must too — otherwise an abort would still wait out timeoutSec.
+      ...(over.abort !== undefined ? { signal: over.abort } : {}),
     });
   const full: LoopPorts = {
     taskSource: [],
@@ -107,9 +110,10 @@ function rig(
     isStopPresent: over.isStopPresent ?? (() => false),
     isBudgetOk: over.isBudgetOk ?? (() => true),
     createWorktree: (task) => `/wt/${task.task_id}`,
-    removeWorktree: () => undefined,
+    removeWorktree: over.removeWorktree ?? (() => undefined),
     ...(over.preflightHeavy ? { preflightHeavy: over.preflightHeavy } : {}),
     ...(over.resolvePrUrl ? { resolvePrUrl: over.resolvePrUrl } : {}),
+    ...(over.abort !== undefined ? { abort: over.abort } : {}),
   };
   return { deps, logs };
 }
@@ -228,4 +232,41 @@ describe('loop regression (fixture plugins, zero billing)', () => {
     expect(result.endReason).toBe('MAX_ITER');
     expect(result.iterations).toHaveLength(3);
   });
+  // --- cooperative shutdown (ADR-0022) — real child, real kill -----------------
+
+  it('SIGTERM-style abort tears down a running executor and ends ABORTED_SIGNAL', async () => {
+    const controller = new AbortController();
+    const removed: string[] = [];
+    const { deps, logs } = rig(
+      {
+        taskSource: [mock('task-source', 'ts', 'task-source.mjs', { TS_REPEAT: '1' })],
+        // A real child that would take 30 s to answer. If the abort did not kill it,
+        // this test would sit here until the port timeout instead of finishing fast.
+        executor: [mock('executor', 'ex', 'executor.mjs', { EXEC_HANG_MS: '30000' })],
+        gate: [mock('gate', 'g', 'gate.mjs', { GATE_MODE: 'pass' })],
+        onFail: [mock('on-fail', 'of', 'on-fail.mjs')],
+      },
+      {
+        abort: controller.signal,
+        removeWorktree: (workdir) => {
+          removed.push(workdir);
+        },
+      },
+    );
+
+    const started = Date.now();
+    setTimeout(() => controller.abort(), 150);
+    const result = await runLoop(deps);
+    const elapsed = Date.now() - started;
+
+    expect(result.endReason).toBe('ABORTED_SIGNAL');
+    expect(result.iterations[0]?.outcome).toBe('aborted_signal');
+    // Neutral: the interrupted task keeps its retry budget.
+    expect(result.iterations[0]?.retryCount).toBe(0);
+    expect(logs.map((l) => l.outcome)).toEqual(['aborted_signal']);
+    // The disposable worktree is still removed on the way out.
+    expect(removed).toEqual(['/wt/1']);
+    // Bounded by the kill grace, nowhere near the 30 s the child wanted.
+    expect(elapsed).toBeLessThan(10_000);
+  }, 20_000);
 });

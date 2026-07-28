@@ -4,7 +4,9 @@ import { spawn as nodeSpawn } from 'node:child_process';
 import type { CliFs } from './core-ext/fs.js';
 import type { SpawnAdapter, SpawnResult, TriggerContext } from './core-ext/triggers.js';
 import type { CommandProbe, DoctorProbes } from './core-ext/doctor.js';
-import type { RunHooks } from './commands/run.js';
+import type { RunHooks, SignalSeam } from './commands/run.js';
+import type { SchedulerSeam } from './commands/watchdog.js';
+import { schedulerInstall, schedulerUninstall } from '@tsurupong/halo-plugins/lib/scheduler';
 import { createRunHooks } from './core-ext/run-wiring.js';
 
 /** entry 契約 (plugin.json の aux.install/aux.uninstall 等, ADR-0017) を実行する SpawnAdapter。
@@ -101,6 +103,8 @@ export function nodeDoctorProbes(cwd: string, fs: CliFs, spawn: SpawnAdapter): D
     async isWsl() {
       return isWslProc(fs);
     },
+    // c14 (ADR-0023): 時計を注入した時だけ watchdog heartbeat 検査が走る。
+    now: () => Date.now(),
     async schedulerBackend() {
       // HALO_SCHEDULER による明示固定 → WSL(schtasks) → systemd → cron → launchd (D10 §3.2)。
       const fixed = SCHEDULER_BACKENDS.find((b) => b === process.env.HALO_SCHEDULER);
@@ -132,4 +136,41 @@ async function isWslProc(fs: CliFs): Promise<boolean> {
  */
 export function defaultRunHooks(): RunHooks {
   return createRunHooks();
+}
+
+/**
+ * 既定スケジューラシーム (ADR-0023, D9 §2.6)。`halo trigger install` が使うのと同一の
+ * バックエンド抽象 (schtasks / systemd / cron / launchd) をそのまま呼ぶ。
+ */
+export function nodeSchedulerSeam(): SchedulerSeam {
+  return {
+    install: (trigger, profile, spec, fireArgv) =>
+      schedulerInstall(trigger, profile, spec, fireArgv),
+    uninstall: (trigger, profile) => schedulerUninstall(trigger, profile),
+  };
+}
+
+/**
+ * 既定シグナルシーム (ADR-0022, D3 §2.1)。`halo run` だけが解放すべき資源
+ * (lock / worktree / phase ログ) を持つので、ハンドラを張るのも run だけ。
+ * 解除関数を返すのは、リスナーを残したまま次のコマンドへ抜けないため。
+ */
+export function nodeSignalSeam(): SignalSeam {
+  return {
+    on(handler) {
+      const signals: NodeJS.Signals[] = ['SIGINT', 'SIGTERM'];
+      const wrapped = signals.map((sig) => {
+        const fn = (): void => handler(sig);
+        process.on(sig, fn);
+        return { sig, fn };
+      });
+      return () => {
+        for (const { sig, fn } of wrapped) process.off(sig, fn);
+      };
+    },
+    // process.exit は巻き戻しを行わない — 2 回目のシグナルの契約そのもの (D9 §5.2)。
+    exit(code) {
+      process.exit(code);
+    },
+  };
 }

@@ -59,8 +59,10 @@ export const LOOP_DEFAULTS = {
 /**
  * Terminal conditions of D2 §2.7 — every one exits the loop cleanly. Beyond the
  * original five, `TASK_SOURCE_ERROR` distinguishes a broken task-source from a
- * healthy idle `NO_TASK` (M4), and `ABORTED_ENV` marks a global environment
- * failure surfaced by PreflightHeavy (dirty worktree, low disk, stale graph — M3).
+ * healthy idle `NO_TASK` (M4), `ABORTED_ENV` marks a global environment failure
+ * surfaced by PreflightHeavy (dirty worktree, low disk, stale graph — M3), and
+ * `ABORTED_SIGNAL` marks a cooperative shutdown requested by SIGINT/SIGTERM
+ * (ADR-0022) — the only reason that can interrupt an iteration mid-flight.
  */
 export type LoopEndReason =
   | 'STOP'
@@ -69,7 +71,8 @@ export type LoopEndReason =
   | 'MAX_ITER'
   | 'TIMEOUT'
   | 'TASK_SOURCE_ERROR'
-  | 'ABORTED_ENV';
+  | 'ABORTED_ENV'
+  | 'ABORTED_SIGNAL';
 
 /** Thrown for a configuration error the loop must not silently continue past (D2 §2.7). */
 export class LoopError extends Error {
@@ -349,6 +352,14 @@ export interface LoopDeps {
   estimateTokens?: (text: string) => number;
   /** Hang-detection phase file (`current.json`); omitted → no phase writes. */
   phaseTracker?: PhaseTracker;
+  /**
+   * Cooperative shutdown requested from outside (ADR-0022, D9 §5). The CLI aborts
+   * this on the first SIGINT/SIGTERM. The loop consults it at the iteration
+   * boundary and after each long-running port phase, and ends `ABORTED_SIGNAL`
+   * without recording a failure. The same signal must also be handed to `runPort`
+   * by the wiring, so the in-flight child is torn down rather than awaited.
+   */
+  abort?: AbortSignal;
 }
 
 /** Per-iteration summary returned to the caller (and mirrored into `iter_N.json`). */
@@ -426,7 +437,42 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
     return endDetail != null ? { endReason, iterations, endDetail } : { endReason, iterations };
   };
 
+  /** Cooperative shutdown requested (ADR-0022). Cheap enough to poll at every phase edge. */
+  const aborted = (): boolean => deps.abort?.aborted === true;
+
+  /**
+   * End the run because a signal interrupted this iteration (ADR-0022, D9 §5.3).
+   * Deliberately does **not** run on-fail, does **not** send `op=fail`, and leaves
+   * `retryCount` untouched: an operator stopping the harness is not a task failure,
+   * and counting it as one would escalate healthy work to `needs-human` after a few
+   * routine stops. The task stays wherever the task-source left it and is
+   * re-supplied next run. The caller returns this from inside the worktree `try`,
+   * so the `finally` still removes the worktree.
+   */
+  const abortIteration = async (
+    task: TaskSourceOut,
+    taskId: string,
+    startedAt: string,
+    state: TaskState,
+    diagnostics: PluginDiagnostic[],
+  ): Promise<LoopResult> => {
+    await record(deps, {
+      iter,
+      startedAt,
+      profile,
+      task,
+      outcome: 'aborted_signal',
+      retryCount: state.retryCount,
+      diagnostics,
+    });
+    iterations.push({ iter, taskId, outcome: 'aborted_signal', retryCount: state.retryCount });
+    return finish('ABORTED_SIGNAL');
+  };
+
   for (;;) {
+    // Shutdown wins over every other terminal check: once a signal has been seen,
+    // starting another iteration would only produce work we are about to discard.
+    if (aborted()) return finish('ABORTED_SIGNAL');
     // Terminal checks at the iteration boundary (D2 §2.7 #4, #5).
     if (exceededTimeout(startMs, deps.now(), cfg.timeoutSec)) return finish('TIMEOUT');
     iter += 1;
@@ -564,6 +610,11 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
       // 失敗した実行でも課金は発生しているので、status を問わず加算する (ADR-0021)。
       accumulatedCostUsd += Math.max(0, readCostUsd(exec.out?.cost) ?? 0);
 
+      // ADR-0022: シグナルで executor を落とした場合、その `error` は「タスクが悪い」
+      // ではなく「人がハーネスを止めた」。ここで抜けないと下の失敗経路に落ちて
+      // retry_count++ と op=fail が走り、健全なタスクが needs-human へ押し出される。
+      if (aborted()) return await abortIteration(task, taskId, startedAt, state, diagnostics);
+
       if (exec.outcome !== 'done') {
         // Executor failure path (stuck / timeout / crash) → OnFail, retry (D2 §2.3).
         // Retain the reason so the next attempt's prompt sees why it failed (L2).
@@ -619,6 +670,9 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
           : {}),
       };
       const gateRuns = await runGates(deps, gateIn, collect);
+      // A gate whose child we just killed exits non-zero and would fail the
+      // logical-AND — the same false failure the executor check above avoids.
+      if (aborted()) return await abortIteration(task, taskId, startedAt, state, diagnostics);
       const verdict = evaluateGates(gateRuns);
 
       if (verdict.passed) {
@@ -871,6 +925,7 @@ function spawnFailureResult(reason: string): RunPortResult {
     stdout: JSON.stringify({ reason }),
     stderr: '',
     timedOut: false,
+    aborted: false,
     durationMs: 0,
   };
 }

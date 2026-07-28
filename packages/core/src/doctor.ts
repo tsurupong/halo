@@ -3,8 +3,8 @@
 // 終了コードへ写像するだけ (D3 §5.2: FAIL あり=1 / WARN のみ=0)。
 //
 // 検査は常時実行の c1-c9 / c12 / c13 に加え、probe を注入した場合のみ走る c10 (必須
-// コマンド, D10 §4) と c11 (スケジューラバックエンド, D10 §3.2) がある。既定の CLI 配線
-// (deps.ts) は両方を注入するので、実運用では 13 検査になる。
+// コマンド, D10 §4) / c11 (スケジューラバックエンド, D10 §3.2) / c14 (watchdog heartbeat,
+// ADR-0023) がある。既定の CLI 配線 (deps.ts) は全て注入するので、実運用では 14 検査になる。
 import type { CliFs } from './fs.js';
 import { PORT_DIRS } from './scaffold.js';
 import { resolveBinPath, listTriggers, type TriggerContext } from './triggers.js';
@@ -68,6 +68,10 @@ export interface DoctorProbes {
   schedulerBackend?(): Promise<SchedulerBackend>;
   /** WSL 上か。未注入なら c8 (ext4 配置) は従来どおり無条件実行 (後方互換)。 */
   isWsl?(): Promise<boolean>;
+  /** 現在時刻 (ms)。未注入なら c14 (watchdog heartbeat) は実行しない (後方互換)。 */
+  now?(): number;
+  /** heartbeat 不在時に想定する登録間隔 (分)。手書き cron 登録への配慮 (D9 §2.6 既定)。 */
+  watchdogDefaultEveryMinutes?: number;
 }
 
 // --- 個別検査 (純粋: 事実→CheckResult) ------------------------------------
@@ -294,6 +298,42 @@ export function checkExecutorSettings(state: ExecutorSettingsState): CheckResult
   return { id, title, status: 'OK', detail: 'D4 §2.2 の deny 標準集合を充足' };
 }
 
+/** c14 に渡す事実: heartbeat が読めたか、読めたなら経過秒と登録間隔 (ADR-0023, D9 §2.7)。 */
+export type WatchdogHeartbeatState =
+  { present: false } | { present: true; ageSec: number; intervalSec: number };
+
+/**
+ * c14: watchdog heartbeat の鮮度検査 (ADR-0023, D9 §2.7)。監督は正常時 `watchdog.jsonl`
+ * に何も書かないので、「一度も登録されていない」と「登録済みで異常なし」を区別できる
+ * 唯一の材料がこの heartbeat になる。
+ *
+ * 必ず WARN 止まりにする: WSL2 VM のサスペンドでも同じ症状 (古い ts) が出るので、
+ * FAIL にすると無害な原因で run 全体が止まる (D7 §5.2)。
+ */
+export function checkWatchdogHeartbeat(state: WatchdogHeartbeatState): CheckResult {
+  const id = 14;
+  const title = 'watchdog heartbeat';
+  if (!state.present) {
+    return {
+      id,
+      title,
+      status: 'WARN',
+      detail:
+        '未検出 — ハング検知が一度も動いていません。`halo watchdog install --action report` で登録してください',
+    };
+  }
+  // 2 倍を許容幅にするのは、1 周期ぶんの取りこぼしを異常と呼ばないため。
+  if (state.ageSec > state.intervalSec * 2) {
+    return {
+      id,
+      title,
+      status: 'WARN',
+      detail: `最終実行が ${Math.round(state.ageSec)}s 前 (登録間隔 ${state.intervalSec}s の 2 倍超) — スケジュールが発火していない可能性`,
+    };
+  }
+  return { id, title, status: 'OK', detail: `${Math.round(state.ageSec)}s 前に実行` };
+}
+
 export function checkSchedulerBackend(backend: SchedulerBackend): CheckResult {
   if (backend === 'none')
     return {
@@ -331,6 +371,44 @@ async function readExecutorSettingsState(
   } catch (err) {
     return { present: true, drift: { status: 'unreadable', reason: (err as Error).message } };
   }
+}
+
+/**
+ * c14 の事実収集 (I/O のみ)。heartbeat の `ts` から経過秒を、`watchdog-schedule.json`
+ * (install が書く) から登録間隔を得る。marker が無くても heartbeat があれば既定間隔で
+ * 評価する — 手で cron を書いた環境を「未登録」と決めつけないため。
+ */
+async function readWatchdogHeartbeatState(
+  haloDir: string,
+  fs: CliFs,
+  now: number,
+  defaultEveryMinutes: number,
+): Promise<WatchdogHeartbeatState> {
+  let ts: number;
+  try {
+    const raw = JSON.parse(await fs.readFile(join(haloDir, 'logs', 'watchdog-last.json'))) as {
+      ts?: unknown;
+    };
+    if (typeof raw.ts !== 'string') return { present: false };
+    ts = Date.parse(raw.ts);
+    if (Number.isNaN(ts)) return { present: false };
+  } catch {
+    return { present: false };
+  }
+  let everyMinutes = defaultEveryMinutes;
+  try {
+    const sched = JSON.parse(
+      await fs.readFile(join(haloDir, 'logs', 'watchdog-schedule.json')),
+    ) as {
+      every_minutes?: unknown;
+    };
+    if (typeof sched.every_minutes === 'number' && sched.every_minutes > 0) {
+      everyMinutes = sched.every_minutes;
+    }
+  } catch {
+    // marker 不在は既定間隔で評価する (上のコメント参照)。
+  }
+  return { present: true, ageSec: Math.max(0, (now - ts) / 1000), intervalSec: everyMinutes * 60 };
 }
 
 function join(...parts: string[]): string {
@@ -427,6 +505,18 @@ export async function runAll(probes: DoctorProbes): Promise<DoctorReport> {
   }
   if (probes.schedulerBackend) {
     checks.push(checkSchedulerBackend(await probes.schedulerBackend()));
+  }
+  if (probes.now) {
+    checks.push(
+      checkWatchdogHeartbeat(
+        await readWatchdogHeartbeatState(
+          haloDir,
+          fs,
+          probes.now(),
+          probes.watchdogDefaultEveryMinutes ?? 5,
+        ),
+      ),
+    );
   }
 
   return aggregate(checks);

@@ -41,7 +41,13 @@ export interface TaskRecord {
   retryCount?: number;
 }
 
-export type Outcome = 'passed' | 'failed' | 'escalated' | 'no_task' | 'stopped' | 'aborted_env';
+/**
+ * `aborted_signal` (ADR-0022) is *not* a failure: it records that SIGINT/SIGTERM
+ * interrupted the iteration. It carries no `retry_count` increment and no
+ * `op=fail`, so consumers must not fold it into a failure category (D9 §3).
+ */
+export type Outcome =
+  'passed' | 'failed' | 'escalated' | 'no_task' | 'stopped' | 'aborted_env' | 'aborted_signal';
 
 /**
  * One plugin's captured stderr for this iteration (D1 §3.3, D2 §3.4). stderr has no

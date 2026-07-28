@@ -29,6 +29,7 @@ function res(over: Partial<RunPortResult> = {}): RunPortResult {
     stdout: '',
     stderr: '',
     timedOut: false,
+    aborted: false,
     durationMs: 1,
     ...over,
   };
@@ -82,6 +83,7 @@ function harness(opts: {
   kindPrompt?: LoopDeps['kindPrompt'];
   resolvePrUrl?: LoopDeps['resolvePrUrl'];
   phaseTracker?: LoopDeps['phaseTracker'];
+  abort?: LoopDeps['abort'];
 }): Harness {
   const logs: IterationInput[] = [];
   const calls: Array<{ name: string; stdin: unknown }> = [];
@@ -119,6 +121,7 @@ function harness(opts: {
     ...(opts.kindPrompt ? { kindPrompt: opts.kindPrompt } : {}),
     ...(opts.resolvePrUrl ? { resolvePrUrl: opts.resolvePrUrl } : {}),
     ...(opts.phaseTracker ? { phaseTracker: opts.phaseTracker } : {}),
+    ...(opts.abort ? { abort: opts.abort } : {}),
   };
   return { deps, logs, calls, removed };
 }
@@ -952,5 +955,144 @@ describe('runLoop kind resolution (D2 §7.2)', () => {
     await runLoop(h.deps);
     const exec = h.calls.find((c) => c.name === 'ex');
     expect((exec?.stdin as { prompt: string }).prompt).not.toContain('## Instructions');
+  });
+});
+
+// --- cooperative shutdown (ADR-0022, D9 §5) ----------------------------------
+
+describe('runLoop signal abort', () => {
+  const ports = () =>
+    emptyPorts({
+      taskSource: [plug('task-source', 'ts')],
+      executor: [plug('executor', 'ex')],
+      gate: [plug('gate', 'g')],
+      onFail: [plug('on-fail', 'of')],
+    });
+
+  it('ends ABORTED_SIGNAL at the iteration boundary without consuming a task', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const h = harness({
+      ports: ports(),
+      abort: controller.signal,
+      respond: () => jsonRes({ task_id: '1', title: 'T' }),
+    });
+    const result = await runLoop(h.deps);
+    expect(result.endReason).toBe('ABORTED_SIGNAL');
+    expect(result.iterations).toEqual([]);
+    // Nothing was asked of the task-source: no op=next, so no task is taken.
+    expect(h.calls).toEqual([]);
+  });
+
+  it('aborts mid-execute neutrally: no retry increment, no op=fail, worktree removed', async () => {
+    const controller = new AbortController();
+    const h = harness({
+      ports: ports(),
+      abort: controller.signal,
+      respond: (name, stdin) => {
+        if (name === 'ts') {
+          if ((stdin as { op: string }).op !== 'next') return res();
+          return jsonRes({ task_id: '7', title: 'T' });
+        }
+        if (name === 'ex') {
+          // The signal arrives while the executor is running; runPort would have
+          // killed the child, so the adapter's output is a torn-down error.
+          controller.abort();
+          return res({ exitCode: null, signal: 'SIGTERM', aborted: true });
+        }
+        return res();
+      },
+    });
+    const result = await runLoop(h.deps);
+
+    expect(result.endReason).toBe('ABORTED_SIGNAL');
+    expect(result.iterations).toEqual([
+      { iter: 1, taskId: '7', outcome: 'aborted_signal', retryCount: 0 },
+    ]);
+    // The disposable worktree is still cleaned up (the abort returns through the finally).
+    expect(h.removed).toEqual(['/wt/7']);
+    // Neutral: the task-source is never told this was a failure, and on-fail never runs.
+    expect(h.calls.filter((c) => c.name === 'of')).toEqual([]);
+    expect(
+      h.calls.filter((c) => c.name === 'ts' && (c.stdin as { op?: string }).op === 'fail'),
+    ).toEqual([]);
+    // The iteration log records it as its own outcome, not as failed/escalated.
+    expect(h.logs.map((l) => l.outcome)).toEqual(['aborted_signal']);
+    expect(h.logs[0]?.task?.retryCount).toBe(0);
+  });
+
+  it('aborts mid-gate without letting the killed gate read as a gate failure', async () => {
+    const controller = new AbortController();
+    const h = harness({
+      ports: ports(),
+      abort: controller.signal,
+      respond: (name, stdin) => {
+        if (name === 'ts') {
+          if ((stdin as { op: string }).op !== 'next') return res();
+          return jsonRes({ task_id: '9', title: 'T' });
+        }
+        if (name === 'ex') return jsonRes({ status: 'done', summary: 'ok' });
+        if (name === 'g') {
+          // A gate whose child was killed exits non-zero — which classifyExit folds
+          // to `error` and evaluateGates would surface as a failing logical-AND.
+          controller.abort();
+          return res({ exitCode: null, signal: 'SIGTERM', aborted: true });
+        }
+        return res();
+      },
+    });
+    const result = await runLoop(h.deps);
+
+    expect(result.endReason).toBe('ABORTED_SIGNAL');
+    expect(result.iterations[0]?.outcome).toBe('aborted_signal');
+    expect(result.iterations[0]?.retryCount).toBe(0);
+    expect(h.removed).toEqual(['/wt/9']);
+    expect(h.calls.filter((c) => c.name === 'of')).toEqual([]);
+  });
+
+  it('marks the phase idle on the way out so a stopped run does not look wedged', async () => {
+    const controller = new AbortController();
+    const phases: Array<{ phase: string; taskId: string | null }> = [];
+    const h = harness({
+      ports: ports(),
+      abort: controller.signal,
+      phaseTracker: {
+        set: async (_iter, taskId, phase) => {
+          phases.push({ phase, taskId });
+        },
+      },
+      respond: (name, stdin) => {
+        if (name === 'ts') {
+          if ((stdin as { op: string }).op !== 'next') return res();
+          return jsonRes({ task_id: '3', title: 'T' });
+        }
+        if (name === 'ex') {
+          controller.abort();
+          return res({ exitCode: null, signal: 'SIGTERM', aborted: true });
+        }
+        return res();
+      },
+    });
+    await runLoop(h.deps);
+    expect(phases.at(-1)).toEqual({ phase: 'idle', taskId: null });
+  });
+
+  it('runs normally when the signal is present but never fires', async () => {
+    const controller = new AbortController();
+    const h = harness({
+      ports: ports(),
+      abort: controller.signal,
+      respond: (name, stdin, i) => {
+        if (name === 'ts') {
+          if ((stdin as { op: string }).op !== 'next') return res();
+          return i === 0 ? jsonRes({ task_id: '1', title: 'T' }) : jsonRes({ task_id: null });
+        }
+        if (name === 'ex') return jsonRes({ status: 'done', summary: 'ok' });
+        return res({ exitCode: 0 });
+      },
+    });
+    const result = await runLoop(h.deps);
+    expect(result.endReason).toBe('NO_TASK');
+    expect(result.iterations[0]?.outcome).toBe('passed');
   });
 });

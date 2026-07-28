@@ -40,6 +40,22 @@ describe('aggregateRuns (D9 §3)', () => {
     expect(summary.windowDays).toBe(7);
   });
 
+  test('aborted_signal is counted but never becomes a failure category (ADR-0022, D9 §3)', () => {
+    // 運用上の停止 (systemctl stop / Ctrl-C / watchdog kill) がタスク失敗として
+    // 集計されると、毎晩定時で止めるプロファイルの失敗率が実態と無関係に膨らむ。
+    const summary = aggregateRuns(
+      [
+        entry({ iter: 1, outcome: 'passed' }),
+        entry({ iter: 2, outcome: 'aborted_signal' }),
+        entry({ iter: 3, outcome: 'aborted_signal' }),
+      ],
+      { windowDays: 7, now: NOW },
+    );
+    expect(summary.total).toBe(3);
+    expect(summary.byOutcome).toEqual({ passed: 1, aborted_signal: 2 });
+    expect(summary.failureCategories).toEqual({});
+  });
+
   test('classifies executor timeout/stuck ahead of gate reasons', () => {
     const summary = aggregateRuns(
       [

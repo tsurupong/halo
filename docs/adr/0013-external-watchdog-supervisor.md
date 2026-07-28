@@ -1,8 +1,10 @@
 # ADR-0013: External Watchdog Supervisor Process
 
 **Date**: 2026-07-15
-**Status**: accepted (implemented 2026-07-15, shipped in v0.2.0)
+**Status**: accepted (implemented 2026-07-15, shipped in v0.2.0; amended by [ADR-0023](0023-watchdog-scheduling-and-heartbeat.md))
 **Deciders**: Owner
+
+> **Amendment note (2026-07-28)**: the decision below is unchanged. The Negative consequence *"if the watchdog itself is not scheduled, no protection (mitigated by documenting it in the ops runbook and trigger setup)"* was never mitigated — nothing registered the command and no runbook procedure existed. [ADR-0023](0023-watchdog-scheduling-and-heartbeat.md) closes it with `halo watchdog install`, a heartbeat file, and a `doctor` check.
 
 ## Context
 

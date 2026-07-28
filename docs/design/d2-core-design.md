@@ -144,9 +144,9 @@ Autonomy is cumulative (L3 ⊇ L2 ⊇ L1). The bundled set currently declares `L
 
 Combine the `fragments` of all context.d plugins, stably sort them in descending `priority` order, truncate at the token limit (Requirements §3.2 Principle 4, initial value **under 100k**), and produce a single `{ fragments: [...] }`. **Per D1 §1.2, `priority` means "larger is higher priority," so they are concatenated in descending order (largest priority first)** (this is the opposite of some descriptions in the v1.5 materials; this document takes D1 as authoritative). A failure or malformed JSON from an individual plugin causes that plugin to be treated as empty fragments and skipped while the others continue (on the premise that missing context is detected by the gate, D1 §1.2). This combine/truncate logic is implemented as a pure function without side effects.
 
-### 2.7 Termination Conditions (5 kinds)
+### 2.7 Termination Conditions (6 kinds)
 
-The loop terminates on any one of the following 5 conditions. All follow the principle of **falling to the safe side (producing no side effects)** and terminate normally with exit 0.
+The loop terminates on any one of the following 6 conditions. All follow the principle of **falling to the safe side (producing no side effects)** and terminate normally with exit 0.
 
 | # | Termination condition | Detection point | Exit code | Notes |
 |---|---|---|---|---|
@@ -155,6 +155,9 @@ The loop terminates on any one of the following 5 conditions. All follow the pri
 | 3 | **Zero ready tasks** | In Next, the task-source returns `{"task_id": null}` + exit 0 | 0 | The core that makes polling-type "task-existence-driven" operation hold |
 | 4 | **MAX_ITER reached** | The loop counter reaches the limit (**initial value 20**) | 0 | Total-volume control combined with the profile's TIMEOUT |
 | 5 | **Execution time limit (TIMEOUT)** | At an iteration boundary, elapsed time exceeds the profile TIMEOUT | 0 | Consistency with the polling interval and prevention of resource occupation (Requirements §4.4) |
+| 6 | **Signal abort (`ABORTED_SIGNAL`)** | `LoopDeps.abort` is signalled — checked at the iteration boundary and immediately after the executor returns (ADR-0022) | 0 | Ctrl-C / `systemctl stop` / the `kill` action of `halo watchdog`. Unlike 1-5 this can interrupt mid-iteration: the in-flight port child is killed through `runPort` (§3.3) and the iteration is recorded `aborted_signal` **neutrally** — no `retry_count` increment, no `op=fail`. See D9 §5 |
+
+> **Difference between condition 1 (STOP) and condition 6 (signal)**: STOP is polite — it is read at the iteration boundary only, so an in-flight executor runs to completion. A signal cannot afford that (systemd escalates to SIGKILL after 90 s by default, while `executorTimeoutSec` is 900 s), so it aborts the child. Both leave the task re-suppliable; neither records a failure.
 
 > **Configuration defects are handled separately**: Zero plugins for a single port (task-source / executor), or the absence of the required configuration (`.harness.yml`), is not a "termination condition" but an **error**. The former stops the core (no silent continuation), and the latter does not execute the task and applies `needs-human` (Requirements §4.2③ / D1 §1.8).
 
@@ -187,6 +190,7 @@ Each plugin's execution timeout is determined by `plugin.json`'s `timeoutSec` (w
 
 - When the timeout is reached, a termination signal is sent to the child process (with a forced kill after a grace period), and that execution is treated as a failure.
 - The executor's `budget.timeout_sec` (**initial value 900**) is the timeout for the prompt execution itself, and the path where the executor adapter returns `{"status":"timeout"}` (D1 §1.3) and runPort's process timeout form double protection. runPort's timeout is the last line of defense for the abnormal case where the adapter does not respond.
+- **Abort (ADR-0022)**: `RunPortInput.signal` accepts an optional `AbortSignal`. When it fires, runPort takes the *same* path as a timeout — SIGTERM to the detached process group, then SIGKILL after `killGraceMs` — and resolves with the abort recorded on the result rather than throwing. There is only one kill mechanism (`killTree`); the timeout and the abort are two triggers for it. This is what bounds shutdown latency to the kill grace instead of `timeoutSec`.
 
 ### 3.4 Forwarding stderr to Logs
 

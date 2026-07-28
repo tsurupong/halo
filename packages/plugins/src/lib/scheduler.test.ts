@@ -78,6 +78,53 @@ describe('schedulerInstall: fireArgv quoting', () => {
     }
   });
 
+  it('npm スコープパッケージのパス(@ を含む)が通る', () => {
+    // node_modules/@tsurupong/... は npm インストール環境で必ず現れる形。ここが弾かれると
+    // trigger install / watchdog install が実環境で一切登録できない(モノレポでは露見しない)。
+    const root = mkTmp();
+    const stubDir = join(root, 'stubbin');
+    mkdirSync(stubDir, { recursive: true });
+    const state = join(root, 'crontab.state');
+    writeFileSync(
+      join(stubDir, 'crontab'),
+      `#!/usr/bin/env bash\nif [ "\${1:-}" = "-l" ]; then\n  [ -f "${state}" ] || { echo "no crontab" >&2; exit 1; }\n  cat "${state}"\nelif [ "\${1:-}" = "-" ]; then\n  cat > "${state}"\nfi\nexit 0\n`,
+    );
+    chmodSync(join(stubDir, 'crontab'), 0o755);
+
+    const originalPath = process.env['PATH'];
+    process.env['PATH'] = `${stubDir}:${originalPath ?? ''}`;
+    process.env['HALO_SCHEDULER'] = 'cron';
+    try {
+      schedulerInstall('watchdog', 'nightly-watchdog', 'interval:5', [
+        '/usr/bin/node',
+        '/home/u/halo/node_modules/@tsurupong/halo/dist/index.js',
+        'watchdog',
+        '--action',
+        'kill',
+      ]);
+    } finally {
+      process.env['PATH'] = originalPath;
+      delete process.env['HALO_SCHEDULER'];
+    }
+
+    expect(readFileSync(state, 'utf8')).toContain(
+      '"/home/u/halo/node_modules/@tsurupong/halo/dist/index.js"',
+    );
+  });
+
+  it('@ を許可しても $ ` % & < > " \\ ; は依然として弾く(注入面が広がっていない)', () => {
+    process.env['HALO_SCHEDULER'] = 'cron';
+    try {
+      for (const bad of ['$HOME', '`id`', 'a%b', 'a&b', 'a<b', 'a>b', 'a"b', 'a\\b', 'a;b']) {
+        expect(() =>
+          schedulerInstall('polling', 'p1', 'interval:15', ['/usr/bin/node', bad]),
+        ).toThrow(/scheduler: invalid fireArgv/);
+      }
+    } finally {
+      delete process.env['HALO_SCHEDULER'];
+    }
+  });
+
   it('空白入り絶対パスの fireArgv は通る', () => {
     const root = mkTmp();
     const stubDir = join(root, 'stubbin');
