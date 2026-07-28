@@ -40,6 +40,11 @@ export interface RunContext {
   haloDir: string;
   cwd: string;
   now: number;
+  /**
+   * 協調シャットダウン (ADR-0022)。1 回目の SIGINT/SIGTERM でこれが abort され、
+   * 配線が loop と全 runPort 呼び出しへ渡す。省略時はシグナル非対応 (旧挙動)。
+   */
+  abort?: AbortSignal;
 }
 
 export interface RunDeps {
@@ -51,6 +56,25 @@ export interface RunDeps {
    * 渡すために run が必要とする。省略時はリポジトリ上限なし (宣言を読まない旧挙動)。
    */
   loadHarness?: (cwd: string) => Promise<LoadedHarness | null>;
+  /**
+   * シグナルシーム (ADR-0022)。`process.on` を直接触らずに注入するのは、テストが
+   * テストランナー自身へシグナルを送らずに 2 回目の即時終了まで検証できるようにするため。
+   * 省略時はハンドラを張らない (シグナルで即死する旧挙動)。
+   */
+  signals?: SignalSeam;
+}
+
+/** SIGINT/SIGTERM の受け口と強制終了 (ADR-0022, D3 §2.1)。 */
+export interface SignalSeam {
+  /** ハンドラを登録し、解除関数を返す。run 終了時に必ず解除する。 */
+  on(handler: (signal: NodeJS.Signals) => void): () => void;
+  /** 2 回目のシグナル用の即時終了 (cleanup を諦める脱出口)。 */
+  exit(code: number): void;
+}
+
+/** POSIX の 128+signum。未知のシグナルは SIGTERM 相当に倒す。 */
+export function signalExitCode(signal: NodeJS.Signals): number {
+  return 128 + (signal === 'SIGINT' ? 2 : 15);
 }
 
 function haloDirOf(cwd: string): string {
@@ -169,35 +193,59 @@ export async function runCommand(parsed: ParsedArgs, io: Io, deps: RunDeps): Pro
 
   const ctx: RunContext = { config, haloDir, cwd: io.flags.cwd, now: deps.now };
 
-  // preflight.light: STOP / flock / 予算 — 不通過は「正当な非実行」→ exit 0 (D3 §5.1)。
-  const light = await deps.hooks.preflightLight(ctx);
-  if (!light.proceed) {
-    io.warn(`preflight: 即終了 (${light.reason})`);
-    return EXIT.OK;
-  }
+  // ADR-0022: 1 回目は協調中断 (子プロセスを落として finally を通す)、2 回目は即時終了。
+  // ハンドラ自身は fs を触らない — 後片付けは通常の巻き戻し経路が担う。
+  const controller = new AbortController();
+  let signalCount = 0;
+  const disposeSignals = deps.signals?.on((sig) => {
+    signalCount += 1;
+    if (signalCount === 1) {
+      io.warn(
+        `received ${sig}: 現在のイテレーションを中断して後片付けします (もう一度送ると即時終了)`,
+      );
+      controller.abort();
+      return;
+    }
+    io.warn(`received ${sig} again: 後片付けを諦めて即時終了します`);
+    deps.signals?.exit(signalExitCode(sig));
+  });
+  ctx.abort = controller.signal;
 
-  // preflight.heavy: git 汚染 / ディスク不足 / graph — 不通過は真の異常 → exit 1。
-  const heavy = await deps.hooks.preflightHeavy(ctx);
-  if (!heavy.proceed) {
-    throw runtimeError(`preflight failed: ${heavy.reason}`);
-  }
-
-  let result: LoopResult;
+  // ハンドラは preflight も含めて必ず解除する。lock 取得は runLoop 内なので、
+  // preflight 段での例外脱出でもリスナーを残さない。
   try {
-    result = await deps.hooks.runLoop(ctx);
-  } catch (err) {
-    throw runtimeError(`loop error: ${(err as Error).message}`);
-  }
+    // preflight.light: STOP / flock / 予算 — 不通過は「正当な非実行」→ exit 0 (D3 §5.1)。
+    const light = await deps.hooks.preflightLight(ctx);
+    if (!light.proceed) {
+      io.warn(`preflight: 即終了 (${light.reason})`);
+      return EXIT.OK;
+    }
 
-  const exit = loopReasonToExit(result.endReason);
-  if (exit !== EXIT.OK) {
-    // 異常終了は endDetail (task-source の stderr 抜粋など) ごと error 行へ出す。
-    // ここを warn + exit 0 にしていると、監視から見て正常終了と区別が付かない。
-    throw runtimeError(
-      `loop ended abnormally (${result.endReason})` +
-        (result.endDetail != null && result.endDetail !== '' ? `: ${result.endDetail}` : ''),
-    );
+    // preflight.heavy: git 汚染 / ディスク不足 / graph — 不通過は真の異常 → exit 1。
+    const heavy = await deps.hooks.preflightHeavy(ctx);
+    if (!heavy.proceed) {
+      throw runtimeError(`preflight failed: ${heavy.reason}`);
+    }
+
+    let result: LoopResult;
+    try {
+      result = await deps.hooks.runLoop(ctx);
+    } catch (err) {
+      throw runtimeError(`loop error: ${(err as Error).message}`);
+    }
+
+    const exit = loopReasonToExit(result.endReason);
+    if (exit !== EXIT.OK) {
+      // 異常終了は endDetail (task-source の stderr 抜粋など) ごと error 行へ出す。
+      // ここを warn + exit 0 にしていると、監視から見て正常終了と区別が付かない。
+      throw runtimeError(
+        `loop ended abnormally (${result.endReason})` +
+          (result.endDetail != null && result.endDetail !== '' ? `: ${result.endDetail}` : ''),
+      );
+    }
+    io.warn(`loop: 終了 (${result.endReason}, iterations=${result.iterations.length})`);
+    return exit;
+  } finally {
+    disposeSignals?.();
   }
-  io.warn(`loop: 終了 (${result.endReason}, iterations=${result.iterations.length})`);
-  return exit;
 }

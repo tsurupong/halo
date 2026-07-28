@@ -18,7 +18,7 @@ import { watchdogCommand } from './commands/watchdog.js';
 import { doctorCommand } from './commands/doctor.js';
 import { enableCommand } from './commands/enable.js';
 import { createNodeCliFs } from './core-ext/fs.js';
-import { nodeSpawnAdapter, nodeDoctorProbes, defaultRunHooks } from './deps.js';
+import { nodeSpawnAdapter, nodeDoctorProbes, defaultRunHooks, nodeSignalSeam } from './deps.js';
 
 export const CLI_VERSION = HALO_CORE_VERSION;
 
@@ -111,6 +111,7 @@ export async function run(argv: readonly string[], deps: Deps): Promise<ExitCode
           now: deps.now,
           hooks: defaultRunHooks(),
           loadHarness: (cwd) => loadHarnessYml(cwd, createNodeDiscoveryFs()),
+          signals: nodeSignalSeam(),
         });
       case 'project':
         return await initCommand(rest, io, { fs });

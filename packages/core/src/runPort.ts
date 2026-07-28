@@ -53,6 +53,14 @@ export interface RunPortInput {
   onStderr?: (line: string) => void;
   /** Cap on captured bytes; defaults to {@link RUN_PORT_DEFAULTS.maxBufferBytes}. */
   maxBufferBytes?: number;
+  /**
+   * Cooperative shutdown (ADR-0022, D2 §3.3). When this fires, the child is torn
+   * down through the *same* `killTree` path a timeout uses (SIGTERM → grace →
+   * SIGKILL on the process group) and the result carries `aborted: true`. There is
+   * one kill mechanism; timeout and abort are two triggers for it. Already-aborted
+   * on entry → no child is spawned at all.
+   */
+  signal?: AbortSignal;
   /** Spawn override for tests. */
   spawn?: SpawnFn;
 }
@@ -68,6 +76,8 @@ export interface RunPortResult {
   stderr: string;
   /** True when the timeout fired and the child was force-terminated. */
   timedOut: boolean;
+  /** True when {@link RunPortInput.signal} fired (ADR-0022). Distinct from `timedOut`. */
+  aborted: boolean;
   /** Wall-clock duration of the run in ms. */
   durationMs: number;
 }
@@ -85,8 +95,9 @@ export class RunPortError extends Error {
 
 /**
  * Spawn one plugin, write `stdin` as a single JSON object, capture stdout/stderr,
- * forward stderr lines to `onStderr`, and enforce `timeoutMs` at the process
- * level (SIGTERM, then SIGKILL after the grace). Resolves once the child closes;
+ * forward stderr lines to `onStderr`, and enforce `timeoutMs` — or an aborted
+ * {@link RunPortInput.signal} — at the process level (SIGTERM, then SIGKILL after
+ * the grace). Resolves once the child closes;
  * rejects with {@link RunPortError} only when the process fails to start. Never
  * throws on a non-zero exit — mapping to pass/fail/error is the caller's job
  * ({@link classifyExit}, D1 §3.1).
@@ -96,6 +107,20 @@ export function runPort(input: RunPortInput): Promise<RunPortResult> {
   const killGraceMs = input.killGraceMs ?? RUN_PORT_DEFAULTS.killGraceMs;
   const maxBufferBytes = input.maxBufferBytes ?? RUN_PORT_DEFAULTS.maxBufferBytes;
   const startedAt = Date.now();
+
+  // Already shutting down: spawning a child only to kill it wastes a process and
+  // muddies the logs. Report the abort without touching the OS (ADR-0022).
+  if (input.signal?.aborted === true) {
+    return Promise.resolve({
+      exitCode: null,
+      signal: null,
+      stdout: '',
+      stderr: '',
+      timedOut: false,
+      aborted: true,
+      durationMs: 0,
+    });
+  }
 
   return new Promise<RunPortResult>((resolve, reject) => {
     let child: SpawnedChild;
@@ -114,20 +139,34 @@ export function runPort(input: RunPortInput): Promise<RunPortResult> {
     let stderr = '';
     let stderrLineBuf = '';
     let timedOut = false;
+    let aborted = false;
     let settled = false;
     let killTimer: NodeJS.Timeout | undefined;
 
-    const timeoutTimer = setTimeout(() => {
-      timedOut = true;
+    /** The single teardown path, shared by the timeout and the abort (D2 §3.3). */
+    const terminate = (): void => {
       killTree(child, 'SIGTERM');
       killTimer = setTimeout(() => killTree(child, 'SIGKILL'), killGraceMs);
       killTimer.unref?.();
+    };
+
+    const timeoutTimer = setTimeout(() => {
+      timedOut = true;
+      terminate();
     }, input.timeoutMs);
     timeoutTimer.unref?.();
+
+    const onAbort = (): void => {
+      if (settled) return;
+      aborted = true;
+      terminate();
+    };
+    input.signal?.addEventListener('abort', onAbort, { once: true });
 
     const cleanup = (): void => {
       clearTimeout(timeoutTimer);
       if (killTimer) clearTimeout(killTimer);
+      input.signal?.removeEventListener('abort', onAbort);
     };
 
     child.stdout.setEncoding('utf8');
@@ -167,6 +206,7 @@ export function runPort(input: RunPortInput): Promise<RunPortResult> {
         stdout,
         stderr,
         timedOut,
+        aborted,
         durationMs: Date.now() - startedAt,
       });
     });

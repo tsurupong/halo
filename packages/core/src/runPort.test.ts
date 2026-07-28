@@ -70,6 +70,53 @@ describe('runPort', () => {
     const r = await runPort({ execPath: p, stdin: { big: 'x'.repeat(1024) }, timeoutMs: 5000 });
     expect(r.exitCode).toBe(0);
   });
+
+  // --- abort (ADR-0022, D2 §3.3) ---------------------------------------------
+
+  it('tears down an in-flight child on abort and reports aborted (ADR-0022)', async () => {
+    const p = fixture('hang-abort.sh', 'sleep 30');
+    const controller = new AbortController();
+    // The timeout is 30x the abort delay: if abort did not kill the child, this
+    // test would take the full timeout and the assertion below would read timedOut.
+    const started = Date.now();
+    const pending = runPort({
+      execPath: p,
+      stdin: {},
+      timeoutMs: 30_000,
+      killGraceMs: 200,
+      signal: controller.signal,
+    });
+    setTimeout(() => controller.abort(), 50);
+    const r = await pending;
+    expect(r.aborted).toBe(true);
+    expect(r.timedOut).toBe(false);
+    // Bounded by the kill grace, not by timeoutMs.
+    expect(Date.now() - started).toBeLessThan(5_000);
+  }, 10_000);
+
+  it('does not spawn at all when the signal is already aborted (ADR-0022)', async () => {
+    // A path that would throw RunPortError if spawn were attempted: proving the
+    // result came back clean is proof no child was launched.
+    const controller = new AbortController();
+    controller.abort();
+    const r = await runPort({
+      execPath: join(dir, 'definitely-not-here.sh'),
+      stdin: {},
+      timeoutMs: 5000,
+      signal: controller.signal,
+    });
+    expect(r.aborted).toBe(true);
+    expect(r.exitCode).toBeNull();
+    expect(r.durationMs).toBe(0);
+  });
+
+  it('leaves aborted false on a normal completion with a signal attached', async () => {
+    const p = fixture('quick.sh', 'echo "{}"');
+    const controller = new AbortController();
+    const r = await runPort({ execPath: p, stdin: {}, timeoutMs: 5000, signal: controller.signal });
+    expect(r.aborted).toBe(false);
+    expect(r.exitCode).toBe(0);
+  });
 });
 
 describe('parseJsonStdout', () => {

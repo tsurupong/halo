@@ -365,6 +365,9 @@ export function makeRunner(
       env: { ...env, ...(plugin.manifest.env ?? {}), HALO_PLUGIN_DIR: plugin.dir },
       stdin,
       timeoutMs: (opts?.timeoutSec ?? DEFAULT_PORT_TIMEOUT_SEC) * 1000,
+      // ADR-0022: 全ポートへ渡す。executor だけに渡すと、gate や sink がハングした
+      // 状態で SIGTERM を受けた時に停止が timeoutSec 待ちになる。
+      ...(ctx.abort !== undefined ? { signal: ctx.abort } : {}),
     });
   };
 }
@@ -485,6 +488,9 @@ export function createRunHooks(seams: RunWiringSeams = nodeRunWiringSeams()): Ru
                   ),
               }
             : {}),
+          // ADR-0022: ループ自身の制御フロー用。runPort へ渡すのとは別に必要
+          // (子プロセスの kill だけでは、次イテレーションの開始を止められない)。
+          ...(ctx.abort !== undefined ? { abort: ctx.abort } : {}),
           isStopPresent: () => isStopFilePresent(ctx.haloDir, seams.logsFs),
           isBudgetOk: async () => !(await isBudgetExhaustedFor(ctx, seams)),
           createWorktree: async (task) => {

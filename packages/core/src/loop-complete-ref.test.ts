@@ -13,6 +13,7 @@ function jsonRes(value: unknown): RunPortResult {
     stdout: JSON.stringify(value),
     stderr: '',
     timedOut: false,
+    aborted: false,
     durationMs: 1,
   };
 }
