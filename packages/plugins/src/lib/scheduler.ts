@@ -21,7 +21,14 @@ const NAME_RE = /^[A-Za-z0-9._-]+$/;
 const SAFE_PATH_RE = /^[A-Za-z0-9/._-]+$/;
 // fireArgv 用: 絶対パスの空白区切り(例: POSIX の `/opt/my app/...`)を許容するため空白のみ追加。
 // `\` と `:` は許容していないため Windows ネイティブパス(`C:\Program Files\...`)は非対応。
-const SAFE_ARGV_RE = /^[A-Za-z0-9/._ -]+$/;
+//
+// `@` は npm スコープパッケージのパス(`node_modules/@tsurupong/halo/dist/index.js`)に必ず
+// 現れる。これを弾いていたため、npm インストール環境では `halo trigger install` /
+// `halo watchdog install` が起動できなかった(モノレポ内のパスには `@` が無いので露見せず)。
+// 注入面は広がらない: 生成コマンドは bash の二重引用符 / schtasks の単一引用符 / cron 行 /
+// launchd plist に埋まるが、いずれでも `@` は非特殊であり、特殊な `$` `` ` `` `\` `%` `&`
+// `<` `>` `"` は引き続き非許容のまま。
+const SAFE_ARGV_RE = /^[A-Za-z0-9/._@ -]+$/;
 
 function isWsl(): boolean {
   const procPath = process.env['HALO_PROC_VERSION'] ?? '/proc/version';

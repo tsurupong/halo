@@ -18,7 +18,13 @@ import { watchdogCommand } from './commands/watchdog.js';
 import { doctorCommand } from './commands/doctor.js';
 import { enableCommand } from './commands/enable.js';
 import { createNodeCliFs } from './core-ext/fs.js';
-import { nodeSpawnAdapter, nodeDoctorProbes, defaultRunHooks, nodeSignalSeam } from './deps.js';
+import {
+  nodeSpawnAdapter,
+  nodeDoctorProbes,
+  defaultRunHooks,
+  nodeSignalSeam,
+  nodeSchedulerSeam,
+} from './deps.js';
 
 export const CLI_VERSION = HALO_CORE_VERSION;
 
@@ -39,6 +45,7 @@ export const VALUE_FLAGS = [
   'days',
   'limit',
   'action',
+  'every',
   // 反復フラグも「値を取る」側に登録しなければ bool 扱いになり、値が positional へ
   // 落ちて黙って無視される。REPEAT_FLAGS への登録だけでは足りない。
   'kind',
@@ -61,6 +68,8 @@ commands:
   status [--days <n>]                 稼働状態・予算残・直近実績 (既定 7 日のサマリ集計・コスト付き)
   history [--days <n>] [--limit <n>]  実行履歴の時系列一覧 (既定 7 日 / 20 件)
   watchdog [--action <mode>]          停滞ループの検知/回収 (report|kill|skip, 既定 report)
+  watchdog install --action <mode>    監督を OS スケジューラへ登録 (--every 5m, --profile)
+  watchdog uninstall                  監督の登録解除 (冪等)
   doctor [--fix]                      環境自己診断
   enable <plugin-name>                同梱プラグインを .halo/ports/<port>.d/ へ有効化 (plugin.json を生成)
 
@@ -142,6 +151,9 @@ export async function run(argv: readonly string[], deps: Deps): Promise<ExitCode
           },
           kill: (pid, signal) => process.kill(pid, signal),
           sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+          scheduler: nodeSchedulerSeam(),
+          // 登録コマンドの先頭: 現在の node と、この CLI 自身の絶対パス。
+          cliArgv: [process.execPath, realpathSync(fileURLToPath(import.meta.url))],
         });
       case 'doctor':
         return await doctorCommand(rest, io, {
