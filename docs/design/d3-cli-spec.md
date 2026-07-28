@@ -2,7 +2,7 @@
 
 | Item | Content |
 |---|---|
-| Document version | 1.1 (2026-07-25: command table extended to history/watchdog/enable, doctor checks 10-13, abnormal loop end reasons mapped to exit 1, `halo enable` no longer generates a launcher) |
+| Document version | 1.2 (2026-07-28: `watchdog` gains `install`/`uninstall` subcommands and §2.7, doctor check 14 (watchdog heartbeat), `ABORTED_SIGNAL` added to the exit-0 set, signal handling of `run` specified in §2.1) — 1.1 (2026-07-25: command table extended to history/watchdog/enable, doctor checks 10-13, abnormal loop end reasons mapped to exit 1, `halo enable` no longer generates a launcher) |
 | Prerequisites | HALO Requirements Specification v1.8 / D1 Contract Specification / D2 Core Detailed Design |
 | Positioning | **Public**. The command definitions of `packages/cli`. The entry point of unattended execution, and the implementation spec of Requirements §4.4 (Launch Layer, CLI-standard safety mechanisms) and §8.2 (zero global state) |
 | Implementation | TypeScript (`packages/cli`, npm-distributed). Installation is `npm i -D halo`, execution is `npx halo <command>` or direct invocation of `node_modules/.bin/halo` from a trigger |
@@ -39,7 +39,7 @@ It takes the form `halo <command> [subcommand] [args] [flags]`, and `project` an
 | 5 | `status` | — | Display the current operation state, remaining daily budget, latest loop actuals, and trigger registration status | `core.budget` / `core.logger` |
 | 6 | `doctor` | — | Self-diagnosis of environment health (trigger liveness, presence of external commands, permissions, injected deny settings) | `core.doctor` |
 | 7 | `history` | — | Time-ordered listing of past iterations from `logs/iter_N.json` (D9 §3) | `core.logger` |
-| 8 | `watchdog` | — | One-shot supervisor: detect a wedged run via `logs/current.json` + the lock, then `report` / `kill` / `skip` (ADR-0013, D9 §2) | `core.watchdog` + `core.lock` |
+| 8 | `watchdog` | — / `install` / `uninstall` | One-shot supervisor: detect a wedged run via `logs/current.json` + the lock, then `report` / `kill` / `skip` (ADR-0013, D9 §2). The subcommands register and unregister that invocation with the host scheduler (ADR-0023, D9 §2.6) | `core.watchdog` + `core.lock` + scheduler abstraction |
 | 9 | `enable <plugin-name>` | — | Materialise a bundled plugin into `.halo/ports/<port>.d/` (D11 §3) | `halo-plugins` registry |
 
 > `stop` / `resume` are syntactic sugar for operating the "kill switch" safety mechanism of Requirements §4.4 from the CLI; internally they are two sides of one command (touch / rm of the STOP file). They correspond to the "stop|resume" notation of D3 in the design document list.
@@ -90,6 +90,19 @@ Values are resolved in the following priority order (higher is stronger). The CL
 - **Safe-side lower bounds cannot be overridden**: STOP checking, flock, and self-modification prevention (loop-audit) are safety invariants (Requirements §11.1) and cannot be disabled by flags. Even if `--max-iter` is increased, the daily budget (`--daily-budget`) and TIMEOUT take effect independently.
 - **Promotion restriction of `--autonomy`**: Raising to an autonomy higher than the profile is possible, but Phase 1 is fixed at `AUTONOMY=L1` (Requirements §9), so `--autonomy L3` against an L1 profile issues a warning (accident prevention in operation; it does not block).
 
+#### Signal Handling (ADR-0022, D9 §5)
+
+`run` is the only command that installs signal handlers, because it is the only one that holds resources needing release (the run lock, a disposable worktree, the phase log).
+
+| Signal | Occurrence | Behaviour |
+|---|---|---|
+| SIGINT / SIGTERM (1st) | Ctrl-C, `systemctl stop`, `schtasks /End`, the `kill` action of `halo watchdog` | Request a cooperative abort: the in-flight port child is terminated through the existing `runPort` kill path (SIGTERM → grace → SIGKILL on the process group), the loop unwinds through its `finally` blocks (worktree removed, phase set to `idle`, lock released), and the run ends `ABORTED_SIGNAL` → **exit 0** |
+| SIGINT / SIGTERM (2nd) | The operator signals again while the first abort is unwinding | Exit immediately with `128 + signum`, no cleanup — an escape hatch for a cleanup that itself wedges |
+
+- The interrupted iteration is recorded **neutrally**: `outcome: "aborted_signal"`, no `retry_count` increment and no `op=fail` to the task-source. A routine scheduler stop must not consume a healthy task's retry budget (D9 §5.3).
+- Stop latency is bounded by the port kill grace (5 s), not by `executorTimeoutSec` (900 s).
+- The handler itself performs no filesystem work — it aborts a controller and prints one line; all cleanup happens on the normal unwind path.
+
 ### 2.2 Arguments of `project init`
 
 | Flag | Type | Default | Description |
@@ -135,6 +148,29 @@ Output items (human-readable mode): presence of STOP, flock hold state (whether 
 |---|---|
 | `--json` | Output the check results as JSON |
 | `--fix` | Attempt to repair only auto-repairable items (supplementing missing `.halo/` skeleton, etc.). Does not re-register triggers (limited to explicit operations) |
+
+### 2.7 Arguments of `watchdog <(none)\|install\|uninstall>` (ADR-0023)
+
+**Bare `halo watchdog`** — one detection pass, as specified in D9 §2.3.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--action <report\|kill\|skip>` | `report` | What to do on a stale verdict. `report` logs only; `kill` terminates the run's process group; `skip` also quarantines the offending task. The **safe default is deliberate** (誤殺より見逃し) — recovery is opted into |
+| `--profile <name>` | (none) | Profile-scoped lock file to supervise (`defaultLockPath(tmpdir, profile)`). Omitted = the unscoped lock |
+
+Timeouts come from the **process environment only** (`WATCHDOG_TIMEOUT_SEC` / `WATCHDOG_EXECUTE_TIMEOUT_SEC` / `WATCHDOG_KILL_GRACE_SEC`); this command does not load a profile (D9 §2.4).
+
+**`halo watchdog install` / `uninstall`** — register the above invocation with the host scheduler (schtasks / systemd / cron / launchd) through the same abstraction `halo trigger install` uses.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--action <report\|kill\|skip>` | **required** | No default on purpose: the failure being fixed is a supervisor that exists and does nothing, and a registration silently defaulting to `report` reproduces it (D9 §2.6) |
+| `--profile <name>` | (none) | The profile to supervise. Written into the registered command verbatim |
+| `--every <N>m` | `5m` | Polling interval → `interval:<N>`. One invocation is a handful of filesystem reads |
+
+- The scheduler entry is keyed `trigger = "watchdog"`, profile key `<profile>-watchdog`. The suffix is required: the schtasks backend names tasks `HALO_${profile}` from the profile alone and deletes an existing task of that name first, so the bare profile would unregister the run trigger on Windows.
+- `uninstall` is idempotent (exit 0 when nothing is registered), matching `trigger uninstall`.
+- `halo trigger list` does **not** show the result — it enumerates `.halo/ports/trigger.d/` plugin directories, not scheduler entries. Use doctor check 14 (§4) instead.
 
 ---
 
@@ -219,9 +255,11 @@ Since `.halo/` is not committed, the following is appended (not appended if it a
 | 11 | **Scheduler backend** | Which of `schtasks` / `systemd` / `cron` / `launchd` was detected, or `HALO_SCHEDULER` if pinned (D10 §3.2). Same probe-injection rule as 10 | FAIL (none detected) |
 | 12 | **Legacy launcher config** | Residue of the pre-ADR-0018 `.sh` launcher layout under `ports/*.d/` (a `.sh` file, or a `plugin.json` referencing one) | WARN (`halo enable <name>` regenerates) |
 | 13 | **Injected deny settings** | Whether the settings file the executor is launched with still contains the whole D4 §2.2 deny standard set and `sandbox.denyRead` (ADR-0019 §Risks drift detection). Repository-declared extras from `protectedPaths` are not drift | WARN (not generated yet — the first `halo run` writes it) / FAIL (present but missing rules, or unparseable) |
+| 14 | **Watchdog heartbeat** | Whether `.halo/logs/watchdog-last.json` exists and `now - ts` is within twice the registered interval (ADR-0023, D9 §2.7). This is the only signal that hang detection is actually *running* — `trigger list` cannot show it, and a healthy supervisor writes nothing to `watchdog.jsonl` | WARN (absent → never scheduled, run `halo watchdog install`; over-age → the schedule is not firing) |
 
 - Checks 4/5/6 report "presence, permissions, response" separately (e.g., the binary exists but is unauthenticated = FAIL, authenticated but over-permissioned = WARN).
-- Checks 10/11 depend on an injected probe and are skipped when it is absent (kept for backward compatibility); everything else always runs. The shipped CLI injects both, so a real `halo doctor` reports 13 items.
+- Checks 10/11 depend on an injected probe and are skipped when it is absent (kept for backward compatibility); everything else always runs. The shipped CLI injects both, so a real `halo doctor` reports 14 items.
+- Check 14 is **WARN, never FAIL**: a suspended WSL2 VM produces a stale heartbeat for entirely benign reasons (D7), so a FAIL here would block runs on a false positive.
 - `doctor` does not perform an external-API credit probe (to avoid billing and rate consumption; that stays with the responsibility of the heavy preflight).
 
 ---
@@ -234,7 +272,7 @@ The CLI's exit code represents "whether execution is possible and the kind of fa
 
 | Exit code | Meaning | Applicable example |
 |---|---|---|
-| `0` | Normal completion | Loop normal completion, `--help`/`--version`, `stop`/`resume` success, doctor all OK, a legitimate immediate termination by preflight (STOP detection / flock concurrent-launch avoidance / zero ready / budget exceeded — iteration count or dollar ceiling (ADR-0021) — are "normal non-execution" as exit 0) |
+| `0` | Normal completion | Loop normal completion, `--help`/`--version`, `stop`/`resume` success, doctor all OK, a legitimate immediate termination by preflight (STOP detection / flock concurrent-launch avoidance / zero ready / budget exceeded — iteration count or dollar ceiling (ADR-0021) — are "normal non-execution" as exit 0). **Also `ABORTED_SIGNAL`** (ADR-0022): a run stopped by SIGINT/SIGTERM that cleaned up successfully is a success from the service manager's point of view, so `systemctl stop` does not report a failed unit |
 | `1` | Runtime error | An unrecoverable error within the loop, heavy preflight failure (git contamination / disk shortage / credit exhaustion), trigger install registration failure, doctor has a FAIL item. **Also the two abnormal loop end reasons**: `TASK_SOURCE_ERROR` (the task source itself is broken — a non-zero exit or unparseable stdout, distinct from a healthy empty queue) and `ABORTED_ENV` (a global environment fault surfaced by the heavy preflight). Both print the detail on the `error:` line |
 | `2` | Reserved (equivalent to plugin fail) | Normally not returned by the CLI itself. Not used for CLI anomalies to avoid collision with D1's plugin fail convention |
 | `3` | Configuration/usage error | Invalid arguments, unknown profile/trigger name, `.harness.yml` absent/invalid, unknown command |
@@ -242,6 +280,8 @@ The CLI's exit code represents "whether execution is possible and the kind of fa
 > **Design decision**: In polling operation, "most fires terminate immediately with zero ready" (Requirements §4.4). To not treat these as anomalies, **immediate termination by preflight is exit 0**. Only true anomalies (heavy preflight failure, error within the loop) are exit 1, so the monitoring side can make only non-zero its alert target.
 >
 > The corollary is that the two categories must stay distinguishable *at the source*. A task-source adapter that swallows its own failure and answers `{"task_id": null}` collapses "broken" into "idle", and no exit-code mapping can recover the difference — which is why D1 §1.1 requires the GitHub adapter to fail loudly on a non-zero `gh`.
+>
+> The same reasoning bounds what exit 0 can tell you about `ABORTED_SIGNAL`: a run stopped by the operator and a run that finished its queue are both exit 0. That distinction is deliberately carried by the iteration log (`outcome: "aborted_signal"`) and, when the signal came from a wedge, by `watchdog.jsonl` — not by the exit code (ADR-0022 §Negative).
 
 ### 5.2 doctor Exit Codes
 
@@ -281,6 +321,8 @@ The correspondence of the core (the 9 modules of D2) functions each command call
 | `stop` / `resume` | `killswitch.set` / `killswitch.clear` | Pass `--reason`, idempotent exit 0 |
 | `status` | `budget.remaining` + `logger.lastRun` + `discovery.listTriggers` | Format the display, `--json` serialization |
 | `doctor` | `doctor.runAll` (each check of §4) + `scaffold.repair` when `--fix` | Aggregate the check results as OK/WARN/FAIL → map to exit code |
+| `watchdog` | `lock.parseLockFile` + `watchdog.isPhaseStale` + `runPort.killProcessTree` | Parse `--action`/`--profile`, read `current.json`, write the heartbeat and `watchdog.jsonl` |
+| `watchdog install` / `uninstall` | `schedulerInstall` / `schedulerUninstall` (`halo-plugins` lib, ADR-0015) | Validate `--action` (required) / `--every`, build the registered command and the `<profile>-watchdog` scheduler key, map the backend failure to exit 1 |
 
 - The CLI receives the **return values (structured results)** of the above functions and does not make determinations. For example, "whether the budget is exceeded" is returned by the core as `budget.remaining <= 0`, and the CLI merely maps it to exit 0 (normal non-execution).
 - The actual processing of the trigger adapters is a JS `aux` entry (`install` / `uninstall`), and the CLI only handles the spawn and the collection of the exit code (D1 §1.9, ADR-0018).
@@ -301,7 +343,9 @@ The correspondence of the core (the 9 modules of D2) functions each command call
 | `halo status` | Operation state, budget, actuals | `--json` `--profile` | 0 |
 | `halo doctor` | Environment self-diagnosis | `--json` `--fix` | 0 (OK/WARN) / 1 (FAIL) |
 | `halo history` | Iteration history from the structured logs | `--days` `--limit` | 0 |
-| `halo watchdog` | Detect / recover a wedged run | `--action report\|kill\|skip` `--profile` | 0 |
+| `halo watchdog` | Detect / recover a wedged run (one pass) | `--action report\|kill\|skip` `--profile` | 0 |
+| `halo watchdog install` | Register the supervisor with the host scheduler | `--action` (**required**) `--profile` `--every <N>m` | 0 / 1 / 3 |
+| `halo watchdog uninstall` | Unregister the supervisor (idempotent) | `--profile` | 0 / 1 |
 | `halo enable <plugin-name>` | Write a `plugin.json` for a bundled plugin into `.halo/ports/<port>.d/`, with `entry`/`aux` absolutised into the installed package's `dist/`. **No launcher file is generated** (ADR-0018 removed them) | — | 0 / 3 |
 
 ## Appendix B. Glossary

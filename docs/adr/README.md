@@ -19,7 +19,7 @@ The current top-level authority is Requirements Specification v1.8, and ADR-0009
 | [0010](0010-typescript-core.md) | TypeScript for Core, CLI, and Contracts (plugins remain any-language) | accepted | 2026-07-11 |
 | [0011](0011-specs-abolition-graph-consolidation.md) | Abolishing specs/ and Consolidating Requirements into the Knowledge Graph | accepted | 2026-07-11 |
 | [0012](0012-no-premature-numeric-fixing.md) | Do Not Fix Numeric Parameters in Advance (mechanism now, numbers from operational measurement) | accepted | 2026-07-11 |
-| [0013](0013-external-watchdog-supervisor.md) | External Watchdog Supervisor Process | accepted | 2026-07-15 |
+| [0013](0013-external-watchdog-supervisor.md) | External Watchdog Supervisor Process | accepted (amended by 0023) | 2026-07-15 |
 | [0014](0014-failure-requeue-and-quarantine.md) | Transient-Failure Requeue and Quarantine | accepted | 2026-07-15 |
 | [0015](0015-posix-portability-and-scheduler-abstraction.md) | POSIX Portability Target and Scheduler Backend Abstraction | accepted (amended by 0017) | 2026-07-16 |
 | [0016](0016-local-commit-sink-and-completion.md) | Local Commit Sink and Generalized Completion Reference | accepted | 2026-07-16 |
@@ -28,3 +28,5 @@ The current top-level authority is Requirements Specification v1.8, and ADR-0009
 | [0019](0019-pre-execution-permission-enforcement.md) | Pre-Execution Permission Enforcement (settings injection by executor) | accepted | 2026-07-18 |
 | [0020](0020-executor-permission-profile.md) | Executor Permission Profile (allowedTools + dontAsk) | accepted | 2026-07-18 |
 | [0021](0021-cost-based-stop-condition.md) | Cost-Based Stop Condition (max budget USD) | accepted | 2026-07-18 |
+| [0022](0022-graceful-shutdown-on-signal.md) | Graceful Shutdown on SIGINT / SIGTERM | accepted | 2026-07-28 |
+| [0023](0023-watchdog-scheduling-and-heartbeat.md) | Watchdog Scheduling and Heartbeat | accepted | 2026-07-28 |

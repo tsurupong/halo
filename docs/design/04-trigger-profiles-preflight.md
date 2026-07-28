@@ -238,6 +238,12 @@ flowchart TD
 | **daily budget** | Uses `DAILY_MAX_ITERATIONS` as the upper limit and computes the day's actuals from logs/ (see next item). Compared at startup and after each iteration; if exceeded, exit/cut off immediately even after startup | Lightweight preflight order 4 + inside the loop | Prevents "it was running all day before I noticed" under high-frequency startup. The primary cost control that replaces TIMEOUT=8h premised on a single nightly run |
 | **TIMEOUT** | Wraps the entire `packages/core` loop with `timeout "$TIMEOUT"`. On reaching it, cut off with SIGTERM and perform cleanup (flock release, logs write) | Loop startup time | Consistency with the polling interval, prevention of resource occupation |
 
+> **Reconciliation with the TypeScript implementation (2026-07-28).** This table describes the shell-era `run.sh`. Two rows now read differently in `packages/core` / `packages/cli`:
+>
+> - **TIMEOUT is not an external wrapper.** There is no `timeout "$TIMEOUT"` process; the elapsed check is `exceededTimeout` evaluated at the iteration boundary inside the loop (D2 §2.7 condition 5), so a TIMEOUT stop is always a clean end — never a signal.
+> - **The SIGTERM cleanup promised here was unimplemented until ADR-0022.** `halo run` had no signal handler at all, so any signal — Ctrl-C, `systemctl stop`, or the `kill` action of `halo watchdog` — skipped the `finally` blocks that release the lock, remove the worktree, and reset the phase log. ADR-0022 implements the promise: the first SIGINT/SIGTERM aborts cooperatively and performs exactly the cleanup this row describes; a second exits immediately. See D9 §5 and D3 §2.1.
+> - **flock is an O_EXCL lock file, not `flock(2)`.** A killed process therefore does leave the file behind; it is reclaimed on the next launch when the recorded pid is dead or the lock exceeds six hours (D7 §5.3).
+
 ### Daily Budget Computation Logic (based on logs/ actuals)
 
 The daily budget does not depend on a fixed counter or external state; it is **computed each time from the day's structured execution logs remaining in logs/**. As a result, even after double startup or a crash, actuals are neither double-counted nor lost (the log is the single source of truth).

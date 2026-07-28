@@ -242,6 +242,7 @@ The main causes are the WSL2 VM's automatic shutdown and Windows path inheritanc
 | 4 | If there is an explicit lock file created by mistake, remove it after confirming the absence of the actual process |
 
 - Principle: because the lock is tied to fd liveness, a "remnant" is rare. Rather than deleting hastily, **first confirm the actual existence of the holding process** (deleting during operation invites a double launch).
+- The HALO lock is a file with an O_EXCL create, not `flock(2)`, so a killed process *does* leave the file. `acquireLock` reclaims it automatically when the recorded pid is dead or the lock is older than six hours, so no manual deletion is normally required. Since ADR-0022, a signal-stopped run releases it on the way out and the remnant does not appear at all (§6.3).
 
 ### 5.4 worktree Remnants
 
@@ -256,6 +257,70 @@ The disposable worktree (`$TMPDIR/halo-wt-issue-<N>/`, D2) is deleted with `git 
 | 5 | If remnants appear regularly, investigate whether there is a bug in the lifecycle's remove path (failure path) (01 failure-path table) |
 
 - For remnants caused by an incident, first audit the "places touched" per the procedure in §1.4 before removal (the sandbox boundary is the worktree, so remnants are audit targets, D4 §1).
+- The dominant historical cause was a signal killing the run before its `finally` ran (Ctrl-C, `systemctl stop`, a watchdog `kill`). ADR-0022 removes that cause; remnants appearing *after* that change are genuine lifecycle bugs and step 5 applies.
+
+---
+
+## 6. Hang Detection Operation (watchdog)
+
+Hang detection does not run unless it is registered with the host scheduler. Until 2026-07-28 nothing registered it and nothing reported its absence, so the feature shipped inert (ADR-0023). This chapter is the procedure that closes that gap.
+
+### 6.1 Registration
+
+```sh
+# Register the supervisor for the profile you actually run unattended.
+# --action is mandatory: a registration that silently defaults to "report" is the failure being fixed.
+halo watchdog install --profile nightly --action report --every 5m
+
+# After tuning the timeouts (§6.2), promote it to recovery:
+halo watchdog install --profile nightly --action kill --every 5m   # re-running is idempotent
+
+# Removal
+halo watchdog uninstall --profile nightly
+```
+
+| Point | Note |
+|---|---|
+| One registration per profile | The lock is profile-scoped, so a supervisor watches exactly one profile |
+| Scheduler entry name | `trigger = watchdog`, profile key `<profile>-watchdog` — **not** `HALO_<profile>`. On Windows the run trigger and the supervisor would otherwise share one schtasks task name and the second install would delete the first (D9 §2.6) |
+| `halo trigger list` does not show it | That command lists plugin directories, not scheduler entries. Verify with §6.2 instead |
+| Timeouts | `WATCHDOG_TIMEOUT_SEC` (1800) / `WATCHDOG_EXECUTE_TIMEOUT_SEC` (3600) / `WATCHDOG_KILL_GRACE_SEC` (10) are read from the **process environment**, not the profile file (D9 §2.4). Export them in the registered command's environment |
+
+### 6.2 Verifying it actually fires
+
+A healthy supervisor writes nothing to `watchdog.jsonl` — that file only gets a line when a wedge is detected. Liveness is therefore read from the heartbeat:
+
+| Step | Operation | Expected |
+|---|---|---|
+| 1 | `halo doctor` | Check 14 (watchdog heartbeat) is OK |
+| 2 | `cat .halo/logs/watchdog-last.json` | `ts` is within twice `--every`; `stale: false` on a healthy system |
+| 3 | `cat .halo/logs/watchdog.jsonl` | Empty or historical only. Every line here is a detected wedge worth reading |
+
+Check 14 is **WARN, never FAIL** — a suspended WSL2 VM produces a stale heartbeat for benign reasons (§5.2 item 3), so it reports and does not block.
+
+### 6.3 Report → kill promotion
+
+Follow D9 §7's rollout order. Run in `report` for at least one full unattended cycle and read every line `watchdog.jsonl` produced:
+
+| Observation | Reading | Action |
+|---|---|---|
+| No lines at all | No wedges occurred, or the phase timeouts are too generous to ever trip | Promote to `kill` |
+| Lines whose `age_sec` barely exceeds `limit_sec` | The timeout is too tight for a legitimately slow phase | Raise `WATCHDOG_*_TIMEOUT_SEC` before promoting; a `kill` here would be a false positive |
+| Lines with a very large `age_sec` | Genuine wedges | Promote to `kill` (or `skip` if the same `task_id` recurs — that task wedges the loop repeatedly) |
+
+Since ADR-0022, the SIGTERM a `kill` sends is caught by the run, which removes its worktree, releases its lock, and sets the phase to `idle` before exiting. The killed iteration is recorded `aborted_signal` and **does not** count against the task's retries, so a kill never escalates a task on its own — escalation stays with the task-source's own failure accounting.
+
+### 6.4 Stopping a run by hand
+
+`halo stop` (kill switch) and a signal are different tools:
+
+| Want | Use | Latency |
+|---|---|---|
+| Stop after the current task finishes cleanly | `halo stop` — checked at the next iteration boundary | Up to one full iteration |
+| Stop now, cleanly | Ctrl-C / `systemctl stop` / SIGTERM | Bounded by the port kill grace (5 s) |
+| Stop now, cleanup be damned | Signal a second time → exits `128 + signum` | Immediate; may leave a worktree and lock |
+
+Prefer `halo stop` for routine pauses — it never interrupts an executor mid-task. Reserve signals for when you need the process gone promptly.
 
 ---
 
@@ -266,6 +331,7 @@ The disposable worktree (`$TMPDIR/halo-wt-issue-<N>/`, D2) is deleted with `git 
 3. Reading the failure-catalog and sign promotion (signs-proposed.md → human judgment for reflecting into PROMPT)
 4. Budget monitoring (how to read status, handling overruns)
 5. Troubleshooting (doctor, trigger misfire, flock remnants, worktree remnants)
+6. Hang detection operation (registering the watchdog, verifying it fires via the heartbeat, report→kill promotion, stopping a run by hand)
 
 ## List of Items to Fill In After Measurement (Undetermined Points of the Skeleton)
 
@@ -277,3 +343,5 @@ The disposable worktree (`$TMPDIR/halo-wt-issue-<N>/`, D2) is deleted with `git 
 | Recurrence-frequency criterion for sign adoption, reflection effect | §3.2 | Phase 2 |
 | Adjusted budget parameters, monthly projection | §4.2 | Phase 2 |
 | Trigger firing success rate | §5.2 | Phase 1 launch test |
+| Watchdog phase timeouts (`WATCHDOG_*_TIMEOUT_SEC`) tuned from `report`-mode observations | §6.3 | After one full unattended cycle in `report` mode |
+| Watchdog polling interval (`--every`) against observed detection latency | §6.1 | Same as above |
