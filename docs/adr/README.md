@@ -8,7 +8,7 @@ The current top-level authority is Requirements Specification v1.8, and ADR-0009
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
 | [0001](0001-ports-and-adapters-unified-contract.md) | Adoption of Ports & Adapters Structure and a Unified Contract | accepted | 2026-07-09 |
-| [0002](0002-disposable-worktree.md) | Adoption of the Disposable Worktree Approach | accepted | 2026-07-09 |
+| [0002](0002-disposable-worktree.md) | Adoption of the Disposable Worktree Approach | accepted (amended by 0024) | 2026-07-09 |
 | [0003](0003-kuzudb-merge-driven-reindex.md) | Adopting KuzuDB and Merge-Driven Reindexing (no watch) | accepted | 2026-07-09 |
 | [0004](0004-self-modification-prohibition.md) | Prohibition of Self-Modification (Safety Invariant) | accepted (amended by 0019) | 2026-07-09 |
 | [0005](0005-knowledge-graph-schema-granularity.md) | Knowledge Graph Schema Granularity (fixed at 5 node types, 5 edge types) | accepted | 2026-07-09 |
@@ -30,3 +30,4 @@ The current top-level authority is Requirements Specification v1.8, and ADR-0009
 | [0021](0021-cost-based-stop-condition.md) | Cost-Based Stop Condition (max budget USD) | accepted | 2026-07-18 |
 | [0022](0022-graceful-shutdown-on-signal.md) | Graceful Shutdown on SIGINT / SIGTERM | accepted | 2026-07-28 |
 | [0023](0023-watchdog-scheduling-and-heartbeat.md) | Watchdog Scheduling and Heartbeat | accepted | 2026-07-28 |
+| [0024](0024-drop-os-level-sandbox.md) | Drop the OS-Level Sandbox (bubblewrap) from the Design | accepted | 2026-07-29 |

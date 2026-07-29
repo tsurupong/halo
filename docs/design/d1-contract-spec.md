@@ -264,7 +264,7 @@ claude -p "$PROMPT" \
 - `--settings "$HALO_SETTINGS_FILE"` injects the HALO-managed deny set at spawn (D4 §2.4, ADR-0019); `--permission-mode dontAsk` makes the allowlist a hard boundary — unlisted tools are denied outright instead of prompting (ADR-0020). Both are executor-adapter behavior; the settings-file *content* is governed by D4, outside this contract.
 - `--strict-mcp-config` reads only the harness-managed `mcp.json` (fixing the visible tool scope = reproducibility and security).
 - `mcp.json` is generated at startup by merging `ports/mcp.d/*.json` (§1.10).
-- The worktree lifecycle (add → runtime detection → setup → execution → remove) follows requirements §4.2③, matching bubblewrap's write permission to `workdir`.
+- The worktree lifecycle (add → runtime detection → setup → execution → remove) follows requirements §4.2③. `workdir` is the executor's working scope (an OS-level sandbox is not adopted, ADR-0024).
 
 **Input/Output JSON Schema**
 

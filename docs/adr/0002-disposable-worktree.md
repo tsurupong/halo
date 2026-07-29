@@ -1,8 +1,10 @@
 # ADR-0002: Adoption of the Disposable Worktree Approach
 
 **Date**: 2026-07-09
-**Status**: accepted
+**Status**: accepted (amended by [ADR-0024](0024-drop-os-level-sandbox.md))
 **Deciders**: Owner (recorded from HALO Requirements Specification v1.5 §4.2③)
+
+> **Amendment note (2026-07-29)**: the worktree lifecycle decision below is unchanged. The bubblewrap references ("clearly delineate the write boundary of the bubblewrap sandbox", "make bubblewrap's write-permission scope match the worktree") described a sandbox that was never implemented; [ADR-0024](0024-drop-os-level-sandbox.md) drops the OS-level sandbox from the design. The worktree remains a *state-contamination* boundary, not a security boundary.
 
 ## Context
 
