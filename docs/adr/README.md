@@ -32,3 +32,4 @@ The current top-level authority is Requirements Specification v1.8, and ADR-0009
 | [0023](0023-watchdog-scheduling-and-heartbeat.md) | Watchdog Scheduling and Heartbeat | accepted | 2026-07-28 |
 | [0024](0024-drop-os-level-sandbox.md) | Drop the OS-Level Sandbox (bubblewrap) from the Design | accepted | 2026-07-29 |
 | [0025](0025-task-source-claim-semantics.md) | task-source 契約への claim/release セマンティクス追加 | proposed | 2026-07-29 |
+| [0026](0026-executor-egress-prohibition.md) | executor の外部送信禁止 (egress deny) | proposed | 2026-07-29 |
