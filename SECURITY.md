@@ -64,10 +64,10 @@ Be explicit about the gaps — they are design boundaries, not oversights:
   specifies moves the boundary outward on purpose.
 - **Repository contents as a whole.** The gate protects a declared set of paths. Ordinary
   source files are the agent's job to change — that is the point of the tool.
-- **OS-level sandboxing.** The bubblewrap mount policy in [D4 §1](./docs/design/d4-security-design.md)
-  is **designed but not implemented** — no released version confines the executor at the
-  kernel level. Today's boundaries are the permission allowlist, the injected deny rules,
-  and the audit gate. Do not rely on process isolation that is not there yet.
+- **OS-level sandboxing.** Kernel-level confinement of the executor is **not adopted**
+  ([ADR-0024](./docs/adr/0024-drop-os-level-sandbox.md)). The enforced boundaries are the
+  permission allowlist, the injected deny rules, and the audit gate. Do not rely on
+  process isolation — there is none by design.
 
 ## Operating recommendations
 

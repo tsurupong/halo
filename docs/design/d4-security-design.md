@@ -7,44 +7,31 @@
 | Positioning | Public (the threat model is directly tied to OSS trustworthiness, so it is a public document) |
 | Constraint | **The safety invariants (§11.1) require this document to exist before the first unattended execution** (in creation order, an outline is required right after D1) |
 | Related documents | [D1 Contract Specification] / [D2 Core Detailed Design] / [03 gate/sink/on-fail](./03-gate-sink-onfail.md) / [ADR-0010 Core TypeScript-ization] / [ADR-0011 Abolishing specs/ and unifying into the graph] |
-| Execution environment | WSL2 / Arch Linux assumed. bubblewrap is a **Linux-specific additional barrier** and is positioned outside the (language-independent) contract |
+| Execution environment | WSL2 / Arch Linux assumed. An OS-level sandbox is **not adopted** ([ADR-0024](../adr/0024-drop-os-level-sandbox.md)); enforcement is deny injection + permission profile + audit gate |
 
 This document reduces the Requirements Specification's non-functional security requirements (§6.1), runaway and cost control (§6.2), and the human gate (§7) to an implementable granularity. Of the numbers, those marked "initial value (tentative)" in §11.2 are treated as **tentative values** in this document as well, maintaining the premise of adjustment after measurement. No constraints not in the Requirements Specification are newly created.
 
 > **Main changes from v1.5 → v1.8 (as handled in this document)**
-> - **Core TypeScript-ization (ADR-0010)**: The bash assumptions of the v1.5 line (`run.sh` / `bin/run.sh` / `core/helpers.sh`, etc.) move to `packages/core` (TypeScript) in v1.8. This document describes the sandbox launch, PATH scrubbing, etc. as "initialization steps of the core," independent of a specific shell implementation. The **plugin bodies** of executor / gate, etc. were originally free-form (language is free as long as they follow the unified contract); since ADR-0018 a plugin activated through `ports/<port>.d/` is spawned as `node <entry>`, so in practice they are JS modules (D1 §0).
+> - **Core TypeScript-ization (ADR-0010)**: The bash assumptions of the v1.5 line (`run.sh` / `bin/run.sh` / `core/helpers.sh`, etc.) move to `packages/core` (TypeScript) in v1.8. This document describes PATH scrubbing, settings injection, etc. as "initialization steps of the core," independent of a specific shell implementation. The **plugin bodies** of executor / gate, etc. were originally free-form (language is free as long as they follow the unified contract); since ADR-0018 a plugin activated through `ports/<port>.d/` is spawned as `node <entry>`, so in practice they are JS modules (D1 §0).
 > - **Abolishing specs/ (ADR-0011)**: The v1.5-line method of "holding a specs/ directory in the worktree and checking spec_refs existence with `test -f`" is abolished. Requirements and specs are centrally managed in the knowledge graph, and immutability is guaranteed by **write control to the graph** (§5). loop-audit's spec_refs check becomes "an existence query of graph nodes," and a hash check of graph files (the 7th check) has been added.
 
 ---
 
-## 1. Sandbox Configuration (bubblewrap)
+## 1. OS-Level Sandbox: Not Adopted (ADR-0024)
 
-### 1.1 Design Policy
+### 1.1 Position
 
-Permit all file operations of the executor (`claude -p` headless) **only inside that task's disposable worktree**. Set **the sandbox boundary = the task's work scope** (§4.2 executor), and by matching the two, "where this task touched" becomes uniquely identifiable for auditing.
+An OS-level sandbox (bubblewrap) around the executor was specified in earlier revisions of this document but **was never implemented and is not adopted** ([ADR-0024](../adr/0024-drop-os-level-sandbox.md)). The executor's enforced boundaries are:
 
-- bubblewrap is a **Linux-specific additional barrier** and is placed outside the unified contract (stdin/stdout JSON + exit code, language-independent). In non-Linux environments or environments without bwrap, the contract holds but the physical isolation of this document degrades (operation in that case follows the pending item of §11.2 and is handled in the D7 Operations Runbook).
-- Write permission is **only** for that worktree (`$TMPDIR/halo-wt-issue-<N>/`, the naming convention is D2).
-- The shared build cache is writable within a range that does not affect correctness (on the premise that corruption is detected by the gate, §4.2 runtime).
-- The graph DB is **shared as a read-only snapshot** during loop execution (§5.1). Writes are only the one re-index at preflight, and this is executed outside the sandbox (normal user privileges) (§5).
-- The MCP server operates outside the sandbox (normal user privileges) (§6.1, details in §7).
+- **Deny injection at spawn** (§2.4, ADR-0019) — including `sandbox.denyRead` for secret directories,
+- **Permission profile** (`--allowedTools` + `--permission-mode dontAsk`, §6, ADR-0020),
+- **Post-hoc audit** (loop-audit 7 checks, §4, ADR-0004).
 
-### 1.2 bwrap Mount Policy (minimal mounts)
+The disposable worktree (ADR-0002) remains the executor's working scope and keeps "where this task touched" identifiable for auditing, but it is a *state-contamination* boundary, not a kernel-enforced one. Protection against the `claude` binary itself bypassing its own permission layer is an explicit non-goal (SECURITY.md). If a future threat model requires kernel-level confinement, it is re-introduced by a new ADR.
 
-The minimal mounts to match the write permission range to the worktree. The principle is that what is not mounted is **invisible (blocked by default)**.
+### 1.2 PATH Scrubbing (WSL2-specific, kept)
 
-| Mount (example) | Target | Mode | Purpose |
-|---|---|---|---|
-| `--ro-bind /usr /usr` and other system-related | `/usr` `/bin` `/lib`, etc. | read-only | Binaries and libraries needed for execution |
-| `--bind <worktree> <worktree>` | That worktree | read-write | **The sole write destination** (the work scope) |
-| `--bind <cache> <cache>` | Shared cache | read-write | Speeding up dependency materialization (on the premise that corruption is detected by the gate) |
-| `--ro-bind <graphs> <graphs>` | Graph DB | read-only | Context reference only (writes are §5) |
-| `--tmpfs /tmp` | Temporary area | volatile | For process work (not persisted) |
-| `--unshare-all --share-net` | Namespaces | — | Share only the network for `gh` / API communication |
-| `--die-with-parent` | Process | — | Reliably die along with the parent (core) when it terminates |
-
-- `~/.ssh` / `~/.aws` / `~/.config/gh` / other worktrees / `$HOME` outside the project are **explicitly not mounted**. In addition, they are doubly blocked with the `sandbox.denyRead` / deny of §2.
-- **PATH scrubbing (WSL2-specific)**: WSL2 by default inherits the Windows-side `PATH` (`/mnt/c/...`), and the mixing-in of Windows executables breaks reproducibility and the sandbox boundary. At loop launch (an initialization step before bwrap launch), the core rebuilds PATH to only `/usr/local/bin:/usr/bin:/bin` + HALO-managed runtime paths and removes all entries including `/mnt/c/`. Dependency materialization (worktree, each store, cache) is fixed to ext4 (under `/home`), and placement under `/mnt/c/` is prohibited (the placement constraint of §4.2 runtime).
+This initialization step never depended on a sandbox and remains in force: WSL2 by default inherits the Windows-side `PATH` (`/mnt/c/...`), and the mixing-in of Windows executables breaks reproducibility. At loop launch, the core rebuilds PATH to only `/usr/local/bin:/usr/bin:/bin` + HALO-managed runtime paths and removes all entries including `/mnt/c/`. Dependency materialization (worktree, each store, cache) is fixed to ext4 (under `/home`), and placement under `/mnt/c/` is prohibited (the placement constraint of §4.2 runtime).
 
 ---
 
@@ -95,7 +82,7 @@ Per §6.1, dangerous operations are blocked in 2 layers: **the PreToolUse hook (
 | 4 | Credential directories | Reading `~/.ssh` / `~/.aws` / `~/.config/gh` | exit 2 | Prevent theft of PATs/keys (duplicated with `sandbox.denyRead`) |
 | 5 | Self-modification | Writing to `CLAUDE.md` / `PROMPT.md` / `.harness.yml` / test files | exit 2 | A safety invariant (§11.1). Defense-in-depth with the gate's loop-audit |
 | 6 | History tampering | `git reset --hard` / `git rebase` / `git commit --amend` (unmanaged branches) | exit 2 | Maintain auditability |
-| 7 | Privilege escalation | `sudo` / `su` / `chmod 777` / `chown` | exit 2 | Prevent bypassing the sandbox boundary |
+| 7 | Privilege escalation | `sudo` / `su` / `chmod 777` / `chown` | exit 2 | Prevent bypassing the permission boundary |
 | 8 | Outbound secret exfiltration | Sending with `curl`/`wget` that includes a secret file in the body | exit 2 | Prevent information leakage (exfiltration via injection) |
 | 9 | Scheduler/persistence | `crontab` / `systemctl` / task scheduler registration | exit 2 | Prevent establishing a launch path other than the trigger (ADR-0008) |
 
@@ -170,7 +157,7 @@ Internally obtain `git -C <workdir> diff --numstat` / `git -C <workdir> diff <ba
 
 | Protected target | Path ①: settings.json deny | Path ②: PreToolUse hook | Path ③: loop-audit gate | Path ④: permission/physical |
 |---|---|---|---|---|
-| `CLAUDE.md` | `Write(**/CLAUDE.md)` | #5 write block | ⑤ post-hoc diff inspection | bwrap write boundary (§1) |
+| `CLAUDE.md` | `Write(**/CLAUDE.md)` | #5 write block | ⑤ post-hoc diff inspection | — (OS-level path not adopted, ADR-0024) |
 | `PROMPT.md` | `Write(**/PROMPT.md)` | #5 | ⑤ | Same as above |
 | `.harness.yml` | `Write(**/.harness.yml)` | #5 | ⑤ | Same as above |
 | Test files | Supplemented on the `.harness.yml` side | #5 | ②⑤ | Same as above |
@@ -188,7 +175,7 @@ In v1.8, requirements and specs are centrally managed in the knowledge graph, an
 
 | Mechanism | Implementation | Corresponding threat |
 |---|---|---|
-| **read-only during execution** | During loop execution, the knowledge MCP opens the graph read-only (reusing the "graph immutable during execution" imposed by the KuzuDB parallelism constraint as a safety requirement). Also `--ro-bind` in bwrap (§1.2) | Rewriting the spec during execution |
+| **read-only during execution** | During loop execution, the knowledge MCP opens the graph read-only (reusing the "graph immutable during execution" imposed by the KuzuDB parallelism constraint as a safety requirement) | Rewriting the spec during execution |
 | **Limiting write paths (only 2)** | (a) **A human's manual work**, (b) **sink 35 (re-index after docs merge = only PR-review-passed changes)**. No write port to the graph is created other than these 2 paths | Goal modification by direct agent writes |
 | **Hash check** | loop-audit ⑦ checks the hash of graph files against the **loop start**, detecting direct modification during execution as fail (§4.2 ⑦) | Post-hoc detection of modifications that bypass read-only |
 
@@ -207,7 +194,7 @@ Because of the configuration of reading public Issues by polling (ADR-0008, webh
 | **Minimizing tool permissions** | Limit `--allowedTools` to the minimum necessary (e.g., `mcp__codegraph__*,mcp__knowledge__*,Read,Glob,Grep,Edit,Write,Bash,Agent,Skill,TodoWrite`), and with `--strict-mcp-config` ignore the in-project `.mcp.json` and user-global settings (§4.2 executor) | Fix the visible tool range, prevent inducing unknown tools |
 | **Permission mode = `dontAsk`** (ADR-0020) | Launch the executor with `--permission-mode dontAsk`: listed tools run without prompting, and **any tool outside the allowlist is denied outright** instead of falling through or prompting (no one can answer a prompt in unattended operation). `HALO_CLAUDE_PERMISSION_MODE` is an explicit operator override for debugging only; `bypassPermissions` is rejected as a default because it approves *all* tools, voiding the allowlist boundary | Make the allowlist a hard boundary rather than a pre-approval list |
 | **Non-automated merge (safe outputs)** | Fix PR merge, production deploy, and external API connection to the human gate (§7). Do not give the PAT merge permission (§3.2) | Even if injection succeeds, it does not reach an irreversible side effect |
-| **Physical separation of the write boundary** | Make outside the worktree unwritable with bubblewrap (§1), and secrets `denyRead` (§2) | Block the conduits of "make it read and steal" / "break another place" |
+| **Write/read boundary via deny rules** | Protected paths compiled into `Write`/`Edit` deny rules and secrets `denyRead`, injected at spawn (§2.4) | Block the conduits of "make it read and steal" / "break another place" |
 | **Definitive blocking of dangerous operations** | The PreToolUse hook (§2.3, especially #8 outbound secret exfiltration) | Stop exfiltration/destruction commands before execution |
 | **Do not create public conduits** | webhook not adopted (ADR-0008). Hold no resident receiver/tunnel | Eliminate the attack surface itself of public input → local execution |
 
@@ -215,32 +202,32 @@ Because of the configuration of reading public Issues by polling (ADR-0008, webh
 
 ---
 
-## 7. MCP Server Permissions (control on the premise of being outside the sandbox)
+## 7. MCP Server Permissions (control on the premise of being outside the executor permission layer)
 
-The MCP server operates **outside** the executor's bubblewrap sandbox (normal user privileges) (§6.1). On the premise that it cannot be isolated by the sandbox, control it by minimizing the MCP-side permissions.
+The MCP server operates as a separate process with normal user privileges (§6.1), outside the executor's permission layer. On the premise that it cannot be confined by that layer, control it by minimizing the MCP-side permissions.
 
 | Control item | Policy | Basis |
 |---|---|---|
 | **knowledge MCP is read-only** | Open the graph read-only. Writes are only the 2 paths of §5 (human / sink 35) at preflight; do not provide a write API via MCP | §6.1 / §5.3 |
-| **codegraph MCP is a read-only snapshot** | Share a main-based read-only snapshot. Writes (re-index) are only the one at preflight, outside the sandbox and outside MCP | §5.1 |
+| **codegraph MCP is a read-only snapshot** | Share a main-based read-only snapshot. Writes (re-index) are only the one at preflight, outside the executor and outside MCP | §5.1 |
 | **Limiting the tool exposure range** | The initially exposed tools are only read-type: `search_docs` / `trace_spec_to_code` (knowledge), `find_code`, etc. (codegraph). Do not expose tools with side effects | §5.2 / §5.4 |
 | **Fixing the configuration with `--strict-mcp-config`** | At executor launch, ignore the in-project `.mcp.json` and user-global settings, and enable only the MCP configuration HALO specifies | §4.2 executor / §6 |
-| **Outside the sandbox but holds no write destination** | MCP is only graph read and query. Structurally give it no side effects of filesystem writes or external sends | §6.1 |
+| **Outside the executor permission layer but holds no write destination** | MCP is only graph read and query. Structurally give it no side effects of filesystem writes or external sends | §6.1 |
 | **Determinism of Agentic RAG** | Make each tool's search step deterministic and entrust only orchestration to the AI (embedding the next move in the return value). Do not put non-deterministic side effects in the MCP layer | §5.4 |
 
-- Since MCP runs outside the sandbox, it is controlled not by "isolation" but by "**giving it no permission itself (read-only, zero side effects)**." Even if injection induces an MCP tool, it cannot do more than read.
+- Since MCP runs outside the executor permission layer, it is controlled not by "isolation" but by "**giving it no permission itself (read-only, zero side effects)**." Even if injection induces an MCP tool, it cannot do more than read.
 
 ---
 
 ## Chapter Summary
 
-1. Sandbox configuration (bubblewrap = Linux-specific barrier, write range = worktree only, PATH scrubbing / WSL2)
+1. OS-level sandbox not adopted (ADR-0024); PATH scrubbing (WSL2) kept as a core initialization step
 2. The settings.json deny standard set + the 9 PreToolUse hook items + the duplication of `sandbox.denyRead`
 3. The minimal-privilege details of the GitHub fine-grained PAT (PR creation + labels only, no merge permission, classic PAT prohibited)
 4. All paths of self-modification prevention (loop-audit **7 checks**, the defense-in-depth table of protected targets × 4 paths)
 5. Graph write control (the 3 mechanisms of read-only during execution / 2 write paths / hash check)
 6. Prompt injection countermeasures (distrusting public Issues, tool minimization, non-automated merge)
-7. MCP server permissions (on the premise of being outside the sandbox, controlled by read-only, zero side effects)
+7. MCP server permissions (on the premise of being outside the executor permission layer, controlled by read-only, zero side effects)
 
 ## Explicit Statement of Pending Items and Initial Values (per §11)
 
@@ -249,5 +236,5 @@ The MCP server operates **outside** the executor's bubblewrap sandbox (normal us
 | The existence of the loop-audit 7 checks, self-modification prohibition, 1500-line diff | **Fixed** (§11.1) | Fixed. Required before the first unattended execution |
 | The **concrete patterns/values** of deny / hook / PAT scope / 90-day expiration | **Initial value (tentative)** | Injected as a standard set at executor spawn (§2.4, ADR-0019) but subject to operational adjustment |
 | The **injection mechanism** (deny set injected via `--settings` at spawn) and **permission mode `dontAsk`** | **Fixed** (ADR-0019 / ADR-0020) | The mechanism is fixed; only pattern contents and the allowlist membership remain tunable |
-| Degraded operation of physical isolation in environments without bwrap | **Pending** | Handled in the D7 Operations Runbook |
+| OS-level sandbox | **Not adopted** ([ADR-0024](../adr/0024-drop-os-level-sandbox.md)) | Re-introduction, if ever needed, requires a new ADR |
 | The exposure range of additional MCP tools | **Initial value (tentative)** | Start with read-type only, decide on expansion after track record |
