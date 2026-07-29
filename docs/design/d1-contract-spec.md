@@ -75,6 +75,9 @@ Responsible for fetching tasks and reporting completion/failure. The input is di
 
 `complete` / `fail` produce only side effects and require no output (exit 0 = success).
 
+> **Note (ADR-0025, proposed)**: `op=next` に claim(占有)の意味論を追加し、`op=release` を
+> 新設する契約変更が提案中。採択されるまで本節の記述が正。
+
 **Example (input op=next / output)**
 
 ```json
