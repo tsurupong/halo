@@ -9,6 +9,68 @@ versioned and released together.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-02
+
+### Upgrading from 0.4.0 — read this first
+
+- **`halo doctor` now really validates `.harness.yml`** (contract validation via
+  `validateHarnessYml` + existence check of every `kinds[].runtimes` entry under
+  `.halo/ports/runtime.d/`). A repository whose `.harness.yml` was silently broken up to
+  0.4.0 will newly FAIL. Fix the file (or regenerate with `halo project init`) before
+  relying on unattended runs.
+- **The executor no longer reads the operator's `~/.claude/settings.json`** — the spawned
+  Claude Code now gets `--setting-sources ''` by default, so effective permissions come
+  only from the injected settings file (ADR-0019) and `--allowedTools` (ADR-0020). If your
+  setup intentionally relied on user-level settings, set `HALO_CLAUDE_SETTING_SOURCES=user`
+  in the executor environment to restore the old behaviour.
+
+### Added
+
+- Graceful shutdown and watchdog scheduling (ADR-0022 / ADR-0023): signal-aware loop
+  abort, `schedulerInstall`-backed watchdog registration, and a heartbeat doctor check
+  (#20).
+- Task-source claim/release semantics (ADR-0025): tasks are claimed before execution and
+  released on failure, closing the double-pickup window (#29).
+- Failure-learning pair enabled by default (ADR-0027): `on-fail-record` +
+  `context-recent-failures` are scaffolded by `project init`, with a `doctor` c16 check
+  (#31).
+- `watchdog` resolves `WATCHDOG_*` limits via `--profile` env files (process env >
+  profile env > defaults), as D9 §2.4 specified (#34).
+
+### Security
+
+- Executor egress prohibition (ADR-0026): `git push`, `gh`, and remote-mutating commands
+  are always denied inside the unattended loop, independent of profile (#28).
+- Executor permission hardening: the deny set covers all of D4 §2.2 (28 rules) from a
+  single authoritative list shared with `doctor` drift detection, `.harness.yml`
+  `protectedPaths` are merged into the deny set, and operator-level settings are excluded
+  from the effective permissions (#19, #34).
+
+### Fixed
+
+- `task-source-github` treats `gh` failures as fatal instead of reporting an empty queue,
+  so an expired token no longer turns into a "successful" idle night (#19).
+- Failures below the retry threshold return tasks to `ready`, letting `needs-human`
+  escalation actually trigger; retry counts survive requeues (#19).
+- `--max-budget-usd` is parsed as a value flag and enforced per launch (#19).
+- Runtime setup failures keep their reason in `diagnostics` instead of vanishing (#30).
+- `gate-loop-audit` coverage-threshold check compares thresholds key-by-key with
+  word-boundary extraction, removing both false alarms and a threshold-lowering blind
+  spot; wholesale threshold-line deletion is surfaced as a warning (#34).
+- `on-fail-requeue` no longer creates orphan retry counters for missing task files (#34).
+- `doctor` placement check generalises to any `/mnt/<drive>` (drvfs) mount and reports
+  the actually detected path (#34).
+- Vitest no longer picks up stray working-tree copies under `.claude/`, stabilising the
+  test baseline (#34).
+
+### Documentation
+
+- ADR-0024 records dropping the OS-level sandbox (bubblewrap) from the design (#22).
+- Design docs D1/D3/D4/D9 realigned with the implementation (setting sources, watchdog
+  profile resolution, placement constraint, coverage-check semantics) (#34).
+- Per-directory `CLAUDE.md` context files across the repository (#33); ADRs scrubbed of
+  machine-specific paths (#35).
+
 ## [0.4.0] - 2026-07-25
 
 ### Upgrading from 0.3.0 — read this first
