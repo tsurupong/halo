@@ -54,12 +54,19 @@ export const DENY_SELF_MODIFICATION: readonly string[] = [
   'Edit(**/.claude/settings.local.json)',
 ];
 
-/** Destructive / privilege-escalating commands (D4 §2.2, mirrors hook items #1/#2/#7). */
+/**
+ * Destructive / privilege-escalating commands (D4 §2.2, mirrors hook items #1/#2/#7),
+ * plus the ADR-0026 egress prohibition: the executor processes tasks in the worktree;
+ * publishing results (push / PR) is the sink's job, regardless of autonomy level.
+ * `git push*` subsumes the old `--force*` / `-f*` patterns. Known layer-1 gap:
+ * `git -c ... push` style slips a prefix glob — that residue is layer 2 (gate) territory.
+ */
 export const DENY_DANGEROUS_COMMANDS: readonly string[] = [
   'Bash(rm -rf*)',
   'Bash(rm -fr*)',
-  'Bash(git push --force*)',
-  'Bash(git push -f*)',
+  'Bash(git push*)',
+  'Bash(gh *)',
+  'Bash(git remote*)',
   'Bash(sudo*)',
 ];
 
