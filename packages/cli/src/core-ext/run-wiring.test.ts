@@ -83,3 +83,44 @@ describe('makeRunner (entry contract, ADR-0018)', () => {
     expect(gateEnv['HALO_SETTINGS_FILE']).toBeUndefined();
   });
 });
+
+// issue #27: setup 失敗時のメッセージから実際の終了理由 (signal / timeout / stderr) が
+// 欠落していた。整形は純関数 describeSetupFailure に切り出し、ここで意味論を固定する。
+describe('describeSetupFailure (issue #27)', () => {
+  const base = { exitCode: null, signal: null, stderr: '', timedOut: false };
+
+  it('exit code はそのまま出す', async () => {
+    const { describeSetupFailure } = await import('./run-wiring.js');
+    expect(describeSetupFailure({ ...base, exitCode: 2 })).toBe('exit 2');
+  });
+
+  it('signal 終了は signal 名を出す', async () => {
+    const { describeSetupFailure } = await import('./run-wiring.js');
+    expect(describeSetupFailure({ ...base, signal: 'SIGKILL' })).toBe('signal SIGKILL');
+  });
+
+  it('timeout は明示される', async () => {
+    const { describeSetupFailure } = await import('./run-wiring.js');
+    expect(describeSetupFailure({ ...base, signal: 'SIGKILL', timedOut: true })).toBe(
+      'signal SIGKILL (timeout)',
+    );
+  });
+
+  it('signal 不明でも unknown で埋める', async () => {
+    const { describeSetupFailure } = await import('./run-wiring.js');
+    expect(describeSetupFailure(base)).toBe('signal unknown');
+  });
+
+  it('stderr 末尾が診断として付く', async () => {
+    const { describeSetupFailure } = await import('./run-wiring.js');
+    const msg = describeSetupFailure({
+      ...base,
+      exitCode: 1,
+      stderr: 'x\n'.repeat(50) + 'pnpm ERR! EACCES: permission denied\n',
+    });
+    expect(msg).toContain('exit 1');
+    expect(msg).toContain('EACCES: permission denied');
+    // 全文ではなく末尾のみ (肥大化防止)
+    expect(msg.length).toBeLessThan(700);
+  });
+});

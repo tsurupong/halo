@@ -54,6 +54,25 @@ const LOOP_PORT_ORDER = ['task-source', 'context', 'executor', 'gate', 'sink', '
 /** manifest に timeoutSec を持たない非 executor プラグインの既定プロセス上限 (秒)。 */
 export const DEFAULT_PORT_TIMEOUT_SEC = 300;
 
+/**
+ * issue #27: setup 失敗の実理由 (exit code / signal 名 / timeout / stderr 末尾) を
+ * 1行に整形する。従来は "exit signal" という定数文字列に潰れ、SIGKILL か timeout か
+ * pnpm のどのエラーかが diagnostics から一切追えなかった。純関数。
+ */
+export function describeSetupFailure(res: {
+  exitCode: number | null;
+  signal: string | null;
+  stderr: string;
+  timedOut: boolean;
+}): string {
+  const reason =
+    res.exitCode !== null
+      ? `exit ${res.exitCode}`
+      : `signal ${res.signal ?? 'unknown'}${res.timedOut ? ' (timeout)' : ''}`;
+  const tail = res.stderr.trim().split('\n').slice(-3).join(' | ').slice(-500);
+  return tail === '' ? reason : `${reason}; stderr: ${tail}`;
+}
+
 /** worktree 生成/破棄シーム (D2 §8 は CLI/createWorktree の責務と規定)。 */
 export interface WorktreeSeam {
   create(cwd: string, taskId: string): Promise<string>;
@@ -520,7 +539,7 @@ export function createRunHooks(seams: RunWiringSeams = nodeRunWiringSeams()): Ru
               });
               if (setupRes.exitCode !== 0) {
                 process.stderr.write(
-                  `[halo] runtime setup failed (exit ${setupRes.exitCode ?? 'signal'}); ` +
+                  `[halo] runtime setup failed (${describeSetupFailure(setupRes)}); ` +
                     `gate will surface missing deps\n`,
                 );
               }
