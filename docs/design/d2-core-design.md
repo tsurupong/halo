@@ -138,6 +138,20 @@ called — a claimed task that reaches `needs-human` stays claimed until a human
 resolves it. `release` is best-effort: a task-source implementation predating
 ADR-0025 exits non-zero for an unknown op, and that failure is swallowed as a
 migration accommodation, exactly like `op=complete` / `op=fail` already are.
+Also best-effort for a subtler reason: the core's `retryCount` is per-run,
+in-memory state (§1.2), while `fail`'s own escalation threshold is derived from
+the task-source's persisted count (§2.4 above); the two can disagree (e.g. a
+trigger that restarts `halo run` between attempts). When they do, `release` may
+target a task the task-source no longer considers claimed (already escalated on
+its own count) and fail with "unknown task" — harmless, since the call is
+best-effort and a task that is not claimed needs no releasing.
+
+The gate-pass-but-no-delivery-reference path (§2.2 Sink/Complete row, D1 §1.5,
+ADR-0016) calls `release` for the same reason: `complete` is skipped when no PR
+URL / commit sha was produced, but the claim must still be returned to ready —
+otherwise the task sits claimed until the task-source's own stale-claim recovery
+(ADR-0025 Decision #4, default 3600s) kicks in, which would block retrying it
+in the meantime.
 
 ### 2.5 The sink autonomy filter
 

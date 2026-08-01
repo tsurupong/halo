@@ -9,7 +9,7 @@ import {
   readFileSync,
   utimesSync,
 } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -28,6 +28,24 @@ function runLauncher(input: string, env: Record<string, string> = {}) {
     encoding: 'utf8',
   });
   return { code: r.status ?? 1, stdout: r.stdout, stderr: r.stderr };
+}
+
+/** Real (async) subprocess spawn, for genuine multi-process races — spawnSync is fully
+ *  serialized within this test process and cannot reproduce a rename race. */
+function runLauncherAsync(
+  input: string,
+  env: Record<string, string> = {},
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [distPath], { env: { ...process.env, ...env } });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d: Buffer) => (stdout += d.toString()));
+    child.stderr.on('data', (d: Buffer) => (stderr += d.toString()));
+    child.on('error', reject);
+    child.on('close', (code) => resolve({ code: code ?? 1, stdout, stderr }));
+    child.stdin.end(input);
+  });
 }
 
 const tmpDirs: string[] = [];
@@ -192,6 +210,38 @@ describe('task-source-local contract', () => {
     const out = JSON.parse(stdout) as { task_id: string };
     expect(out.task_id).toBe('task-other');
     expect(existsSync(join(doingDir, 'task-fresh.md'))).toBe(true);
+  });
+
+  // CRITICAL fix (code review): concurrent op=next racing to recover the same stale
+  // doing/ entry must never crash with an uncaught ENOENT, and exactly one process
+  // must end up claiming the task. Uses real subprocess concurrency (spawn, not
+  // spawnSync) because spawnSync fully serializes within this test process and
+  // cannot reproduce the rename race that crashed 1-of-8 real processes in prod.
+  it('next: N concurrent processes racing a single stale claim never crash, exactly one claims it', async () => {
+    const { tasksDir, queueDir } = setupTasksDir();
+    const doingDir = join(tasksDir, 'doing');
+    mkdirSync(doingDir, { recursive: true });
+    writeFileSync(join(doingDir, 'task-race.md'), '# Race\nbody');
+    const old = new Date(Date.now() - 10 * 60 * 60 * 1000);
+    utimesSync(join(doingDir, 'task-race.md'), old, old);
+
+    const env = baseEnv(tasksDir, { HALO_CLAIM_STALE_SEC: '3600' });
+    const N = 8;
+    const results = await Promise.all(
+      Array.from({ length: N }, () => runLauncherAsync(JSON.stringify({ op: 'next' }), env)),
+    );
+
+    // No crash: every process must exit 0 (either it claimed the task, or it
+    // legitimately found nothing left once a sibling won the race).
+    for (const r of results) {
+      expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+    }
+    const claimed = results
+      .map((r) => (JSON.parse(r.stdout) as { task_id: string | null }).task_id)
+      .filter((id): id is string => id !== null);
+    expect(claimed).toEqual(['task-race']); // exactly one winner, never duplicated
+    expect(existsSync(join(doingDir, 'task-race.md'))).toBe(true);
+    expect(existsSync(join(queueDir, 'task-race.md'))).toBe(false);
   });
 
   it('next: queue empty -> {task_id:null}, exit 0', () => {

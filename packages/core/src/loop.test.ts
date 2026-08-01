@@ -759,6 +759,43 @@ describe('runLoop', () => {
     expect(h.calls.some((c) => c.name === 'log')).toBe(true); // sink still fired
   });
 
+  // H1 (code review, ADR-0025): gate passed but no delivery reference means the task
+  // is not force-completed — but the claim must still be released, or it sits claimed
+  // until the task-source's own stale-claim recovery (default 3600s) kicks in,
+  // effectively blocking a retry in the meantime.
+  it('releases the claim when the gate passes but no PR url was produced (H1)', async () => {
+    const ports = emptyPorts({
+      taskSource: [plug('task-source', 'ts')],
+      executor: [plug('executor', 'ex')],
+      gate: [],
+      sink: [plug('sink', 'log', 'L1')],
+    });
+    let tsNext = 0;
+    const h = harness({
+      ports,
+      config: { autonomy: 'L1' },
+      respond: (name, stdin) => {
+        if (name === 'ts') {
+          const op = (stdin as { op?: string }).op;
+          if (op === 'release') return res();
+          return tsNext++ < 1 ? jsonRes({ task_id: '1' }) : jsonRes({ task_id: null });
+        }
+        if (name === 'ex') return jsonRes({ status: 'done', summary: 'ok' });
+        return res();
+      },
+    });
+    const result = await runLoop(h.deps);
+    expect(result.iterations[0]?.outcome).toBe('passed');
+    expect(
+      h.calls.some((c) => c.name === 'ts' && (c.stdin as { op?: string }).op === 'complete'),
+    ).toBe(false);
+    const releaseCall = h.calls.find(
+      (c) => c.name === 'ts' && (c.stdin as { op?: string }).op === 'release',
+    );
+    expect(releaseCall).toBeDefined();
+    expect(releaseCall?.stdin).toMatchObject({ op: 'release', task_id: '1' });
+  });
+
   // L2: a stuck executor's reason is re-injected into the next attempt's prompt.
   it('re-injects the executor failure reason into the next prompt (L2)', async () => {
     const ports = emptyPorts({

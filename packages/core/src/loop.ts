@@ -689,10 +689,20 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
         );
         // Only report completion when a delivery reference was actually produced
         // (D1 §1.5, ADR-0016): a PR URL, or `commit:<sha>` from a local commit sink.
-        // '' means nothing durable was delivered → the task is left in-progress for
-        // the operator's task-source rather than being force-completed.
+        // '' means nothing durable was delivered — this is not force-completed, but
+        // (ADR-0025 H1) the claim must still be released: otherwise the task stays
+        // claimed until the task-source's own stale-claim recovery kicks in (default
+        // 3600s), which effectively blocks it from being retried in the meantime.
         const prUrl = deps.resolvePrUrl ? await deps.resolvePrUrl(task, workdir) : '';
-        if (prUrl !== '') await runTaskSourceComplete(deps, taskId, prUrl);
+        if (prUrl !== '') {
+          await runTaskSourceComplete(deps, taskId, prUrl);
+        } else {
+          await runTaskSourceRelease(
+            deps,
+            taskId,
+            'gate passed but no delivery reference produced',
+          );
+        }
         taskStates.delete(taskId);
         await record(deps, {
           iter,

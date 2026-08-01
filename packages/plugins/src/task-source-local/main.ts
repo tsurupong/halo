@@ -22,6 +22,7 @@ import {
   existsSync,
   rmSync,
   statSync,
+  utimesSync,
 } from 'node:fs';
 import { join, basename } from 'node:path';
 import { readStdinJson, writeStdoutJson, diag, str } from '../lib/io.js';
@@ -42,21 +43,61 @@ mkdirSync(doneDir, { recursive: true });
 mkdirSync(needsHumanDir, { recursive: true });
 
 /**
+ * mtime を現在時刻に更新する。claim (queue→doing) の直前、まだ queue/ にある間に呼ぶ
+ * ことで、stale 判定の基準時刻を「最後に書かれた時刻」ではなく「claim された時刻」に
+ * する。これをしないと、queue に長時間置かれていた(mtime が古い)タスクを claim した
+ * 直後に、それ自体が stale 判定されて即座に回収対象になってしまう。
+ *
+ * 必ず rename の**前**に呼ぶこと。rename 自体は mtime を更新しないので、
+ * 「rename してから touch する」順だと、doing/ に現れてから touch が効くまでの間、
+ * claim 直後のファイルが古い mtime のまま doing/ に見える窓ができる。この窓を他
+ * プロセスの recoverStaleClaims が stale と誤認して queue/ へ奪い返すと、さらに別の
+ * プロセスがそれを再 claim して同じ task_id が二重に払い出される(レビューで実測)。
+ */
+function touch(path: string): void {
+  const now = new Date();
+  utimesSync(path, now, now);
+}
+
+/** 現在時刻からの経過秒が閾値を超えているか。ファイルが既に無ければ false(他プロセス処理済み)。 */
+function isStale(path: string): boolean {
+  try {
+    return (Date.now() - statSync(path).mtimeMs) / 1000 > claimStaleSec;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * stale な doing/ エントリを queue/ へ回収する(ADR-0025 Decision #4)。claim したまま
  * launch が死んだタスクの回収責務は task-source にある。op=next の都度呼び、通常の
  * queue 先頭選択より前に走らせることで、回収されたタスクもその場で再取得の対象になる。
+ *
+ * 不変条件: この関数がやるのは doing→queue の「戻す」だけであり、queue→doing の claim
+ * は必ず op=next 本体の rename(下の case 'next')を経由する。ここでは claim を新たに
+ * 作らない。
+ *
+ * 複数プロセスが同時にこの関数を呼ぶ(=同時に op=next する)と、同じ stale ファイルを
+ * 複数プロセスが同時に「戻そう」とする。rename は最初の 1 件しか成功しないので、
+ * 2 件目以降は ENOENT になる — これは他プロセスが同じ回収(または並行する
+ * complete/release)を先に済ませたことを意味する無害なレースなので、握り潰して次の
+ * ファイルへ進む(未捕捉のままだと exit 1 でクラッシュする)。
  */
 function recoverStaleClaims(): void {
   for (const file of readdirSync(doingDir)) {
     if (!file.endsWith('.md')) continue;
     const path = join(doingDir, file);
-    let ageSec: number;
+    if (!isStale(path)) continue;
+    // TOCTOU: rename 直前に stale 判定を再確認して競合窓を縮める。この間に他プロセスが
+    // 再 claim していれば touch() で mtime が更新済みのはずなので、ここで stale で
+    // なくなっていれば奪い返さず素通りする。
+    if (!isStale(path)) continue;
     try {
-      ageSec = (Date.now() - statSync(path).mtimeMs) / 1000;
-    } catch {
-      continue; // レース(他プロセスが同時に片付けた等)は無視。
+      renameSync(path, join(queueDir, file));
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+      // 他プロセスが先に処理済み(レース、上記コメント参照)。無視して次へ。
     }
-    if (ageSec > claimStaleSec) renameSync(path, join(queueDir, file));
   }
 }
 
@@ -117,22 +158,46 @@ const op = str(input, 'op');
 switch (op) {
   case 'next': {
     recoverStaleClaims();
-    // queue のファイル名は ASCII 前提(bash sort とのパリティは ASCII 範囲で保証)
-    const file = readdirSync(queueDir)
-      .filter((f) => f.endsWith('.md'))
-      .sort()[0];
-    if (file === undefined) {
-      writeStdoutJson({ task_id: null });
-      process.exit(0);
+    // 複数プロセスが同時に op=next すると、同じ queue 先頭ファイルの claim (rename) を
+    // 取り合うことがある。負けた側は ENOENT を握り潰し、次の候補で readdir をやり直す
+    // (queue のファイル名は ASCII 前提。bash sort とのパリティは ASCII 範囲で保証)。
+    for (;;) {
+      const file = readdirSync(queueDir)
+        .filter((f) => f.endsWith('.md'))
+        .sort()[0];
+      if (file === undefined) {
+        writeStdoutJson({ task_id: null });
+        process.exit(0);
+      }
+      const id = basename(file, '.md');
+      // claim: 同一ファイルシステム内の atomic rename で占有する(ADR-0025)。以後の next
+      // は doing/ にあるこのファイルを二度と返さない。
+      const queuePath = join(queueDir, file);
+      const claimedPath = join(doingDir, file);
+      // touch は必ず rename の**前**、まだ queue/ にある間に行う。rename は mtime を
+      // 更新しないので、rename→touch の順だと「doing/ に現れてから touch が効くまで」の
+      // 間、claim 直後のファイルが古い mtime のまま doing/ に見えてしまう。この窓で他
+      // プロセスの recoverStaleClaims が stale と誤認して queue/ へ奪い返し、さらに
+      // 別プロセスがそれを再 claim すると同じ task_id が二重に払い出される
+      // (レビューで実測: 8 プロセス同時実行で発生)。touch を rename 前に済ませておけば、
+      // ファイルは doing/ に「最初から」新しい mtime で現れるので、この窓が生じない。
+      try {
+        touch(queuePath);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue; // 他プロセスが先に claim
+        throw err;
+      }
+      try {
+        renameSync(queuePath, claimedPath);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue; // 他プロセスが先に claim
+        throw err;
+      }
+      const body = readFileSync(claimedPath, 'utf8');
+      const title = extractTitle(body, id);
+      writeStdoutJson({ task_id: id, title, body, kind: 'code' });
+      break;
     }
-    const id = basename(file, '.md');
-    // claim: 同一ファイルシステム内の atomic rename で占有する(ADR-0025)。以後の next
-    // は doing/ にあるこのファイルを二度と返さない。
-    const claimedPath = join(doingDir, file);
-    renameSync(join(queueDir, file), claimedPath);
-    const body = readFileSync(claimedPath, 'utf8');
-    const title = extractTitle(body, id);
-    writeStdoutJson({ task_id: id, title, body, kind: 'code' });
     break;
   }
   case 'complete': {
