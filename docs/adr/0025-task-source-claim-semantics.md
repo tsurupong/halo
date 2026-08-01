@@ -1,7 +1,7 @@
 # ADR-0025: task-source 契約への claim/release セマンティクス追加
 
 **Date**: 2026-07-29
-**Status**: proposed
+**Status**: accepted (implemented 2026-07-29, PR #29)
 **Deciders**: tsurupong, Claude
 
 ## Context
