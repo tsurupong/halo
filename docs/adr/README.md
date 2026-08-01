@@ -31,6 +31,6 @@ The current top-level authority is Requirements Specification v1.8, and ADR-0009
 | [0022](0022-graceful-shutdown-on-signal.md) | Graceful Shutdown on SIGINT / SIGTERM | accepted | 2026-07-28 |
 | [0023](0023-watchdog-scheduling-and-heartbeat.md) | Watchdog Scheduling and Heartbeat | accepted | 2026-07-28 |
 | [0024](0024-drop-os-level-sandbox.md) | Drop the OS-Level Sandbox (bubblewrap) from the Design | accepted | 2026-07-29 |
-| [0025](0025-task-source-claim-semantics.md) | task-source 契約への claim/release セマンティクス追加 | proposed | 2026-07-29 |
-| [0026](0026-executor-egress-prohibition.md) | executor の外部送信禁止 (egress deny) | proposed | 2026-07-29 |
-| [0027](0027-default-failure-feedback-plugins.md) | `project init` での on-fail-record + context-recent-failures 既定有効化 | proposed | 2026-08-01 |
+| [0025](0025-task-source-claim-semantics.md) | task-source 契約への claim/release セマンティクス追加 | accepted (implemented 2026-07-29, PR #29) | 2026-07-29 |
+| [0026](0026-executor-egress-prohibition.md) | executor の外部送信禁止 (egress deny) | accepted (implemented 2026-07-29, PR #28) | 2026-07-29 |
+| [0027](0027-default-failure-feedback-plugins.md) | `project init` での on-fail-record + context-recent-failures 既定有効化 | accepted (implemented 2026-08-01, PR #31) | 2026-08-01 |

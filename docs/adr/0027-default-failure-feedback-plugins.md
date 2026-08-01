@@ -1,7 +1,7 @@
 # ADR-0027: `project init` での on-fail-record + context-recent-failures 既定有効化
 
 **Date**: 2026-08-01
-**Status**: proposed
+**Status**: accepted (implemented 2026-08-01, PR #31)
 **Deciders**: tsurupong, Claude
 
 ## Context
