@@ -175,10 +175,13 @@ describe('gate-loop-audit (launcher contract)', () => {
 
   it('outlines 混在でも本物の lines の下方改変は見逃さない (check 4, 単語境界)', () => {
     const wt = newRepo(makeTmpRoot());
-    writeFileSync(join(wt, 'vitest.config.txt'), 'coverage:\n  outlines: 5\n  lines: 90\n');
+    // lines も outlines も変更行にし、outlines を lines より後に置く。単語境界が無いと
+    // extractThresholds が outlines 行からも 'lines' キーを誤抽出し、Map の後勝ちで
+    // lines:90->80 の下方改変が outlines:5->8 (非減少) に上書きされて見逃される。
+    writeFileSync(join(wt, 'vitest.config.txt'), 'coverage:\n  lines: 90\n  outlines: 5\n');
     git(wt, ['add', '-A']);
-    git(wt, ['commit', '-qm', 'add outlines + lines']);
-    writeFileSync(join(wt, 'vitest.config.txt'), 'coverage:\n  outlines: 5\n  lines: 80\n');
+    git(wt, ['commit', '-qm', 'add lines + outlines']);
+    writeFileSync(join(wt, 'vitest.config.txt'), 'coverage:\n  lines: 80\n  outlines: 8\n');
     const { code, stdout } = runAudit(wt);
     expect(code).toBe(2);
     const out = JSON.parse(stdout) as { reason: string };
