@@ -229,7 +229,7 @@ This summarizes the "port responsibilities list" of D1 §1 from an implementer's
 
 | # | Port | How it is run | stdout output | Decision | Most important implementation point |
 |---|---|---|---|---|---|
-| ① | task-source | Single (first only) | Yes (`op=next` only) | Exit code | Branch on `op`. No task means `{"task_id":null}`+exit 0 |
+| ① | task-source | Single (first only) | Yes (`op=next` only) | Exit code | Branch on `op` (`next`/`complete`/`fail`/`release`). No task means `{"task_id":null}`+exit 0. `next` claims the task it returns (ADR-0025) |
 | ② | context | Multiple (all run, merged) | Yes (`fragments`) | Always treated as success | Return light summaries only. Do not dig deep |
 | ③ | executor | Single (first only) | Yes (`status`) | stdout `status` + exit code | Declare `done`/`stuck`/`timeout` via `status` |
 | ④ | gate | Multiple (all run, logical AND) | Only on fail | Exit code (0=pass/**2=fail**) | The decision is the **exit code**, not the output |
@@ -243,12 +243,15 @@ The essentials of each port follow.
 
 ### 2.1 ① task-source
 
-Input is a oneOf distinguished by `op` (`next`/`complete`/`fail`). Only when `op=next` does it return task JSON to stdout.
+Input is a oneOf distinguished by `op` (`next`/`complete`/`fail`/`release`). Only when `op=next` does it return task JSON to stdout.
 
 - **Declaring no tasks**: if 0 tasks are ready, output `{"task_id": null}` and **exit 0**. The core sees this and ends the loop immediately. It must not error out here.
-- `complete` / `fail` produce side effects only and require no output (exit 0 = success).
-- Locking to prevent duplicate acquisition of the same task (for GitHub, relabeling `ready` → `in-progress`) is the responsibility of the task-source side.
+- `complete` / `fail` / `release` produce side effects only and require no output (exit 0 = success).
+- **Claim on `next` (ADR-0025)**: `op=next` must **atomically claim** (occupy) the task it returns before replying — the atomic move/relabel that prevents duplicate acquisition (for GitHub, relabeling `ready` → `in-progress`; for a local queue, an atomic rename into a `doing/`-style directory on the same filesystem) is the task-source's own responsibility, not the core's. A claimed task must never be returned by a later `next`.
+- **`release` (ADR-0025)**: releases a claim back to ready **without** recording a failure. The core calls it at the tail of the failure path, after `op=fail`, but only when the retry threshold has not been reached — implement it as the inverse of the claim move/relabel. Do not do this inside `fail` itself; `fail`'s only job below threshold is to record the attempt, leaving the claim in place until `release` arrives (or until `fail` itself escalates at the threshold, which is terminal and needs no `release`).
+- **Ghost-claim recovery**: a claim can be orphaned if the launch that holds it dies mid-run. Recovering it (returning it to ready) is the task-source's own responsibility, typically self-healed inside `op=next` by checking claim age against a staleness threshold before selecting the next task — see task-source-local's `HALO_CLAIM_STALE_SEC` / task-source-github's stale `in-progress` check for the reference pattern. `halo doctor` (c15) reports orphaned claims it can see, but does not recover them itself.
 - The `spec_refs` in the output are **kg:// URIs** (`kg://<type>/<id>`), not file paths (D1 §4). They may be empty in Phases 1–3.
+- A task-source that predates ADR-0025 and does not implement `release` will simply exit non-zero when the core calls it; the core treats that as best-effort and continues (a migration accommodation, not something you need to special-case).
 
 Minimal `op=next` output:
 
@@ -373,9 +376,10 @@ HALO bundles 4 sample plugins. They are the most useful reference as a starting 
 
 An adapter that makes GitHub Issues the source of tasks. It uses the `gh` CLI.
 
-- `op=next`: fetches the head of `gh issue list --label ready` and relabels `ready` → `in-progress` (a lock to prevent duplicate acquisition). It shapes the fetched result into `{ task_id, title, body, kind }` for stdout. If 0 tasks are ready, `{"task_id": null}` + exit 0.
+- `op=next`: before selecting, recovers stale `in-progress` Issues (ghost claims, best-effort) back to `ready`; then fetches the head of `gh issue list --label ready` and relabels `ready` → `in-progress` (the claim, ADR-0025). It shapes the fetched result into `{ task_id, title, body, kind }` for stdout. If 0 tasks are ready, `{"task_id": null}` + exit 0.
 - `op=complete`: records completion. It assumes `Closes #<number>` in the PR body auto-closes the Issue on merge.
-- `op=fail`: records the retry count in an Issue comment. If the same Issue fails **3 times** (initial value), it adds the `needs-human` label and escalates to a human (breaking the infinite loop).
+- `op=fail`: records the retry count in an Issue comment. Does not change the label by itself. If the same Issue fails **3 times** (initial value), it adds the `needs-human` label and removes `in-progress`, escalating to a human (breaking the infinite loop).
+- `op=release`: relabels `in-progress` → `ready` (no comment). The core calls this after `op=fail` when the retry threshold has not been reached — this is what re-supplies the Issue to the next `op=next`.
 - `kind` derives from the Issue's `kind:<name>` label (`code` when unspecified).
 
 Implementation skeleton (bash / `gh` + `jq`):

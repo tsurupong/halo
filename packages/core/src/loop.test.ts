@@ -358,7 +358,7 @@ describe('runLoop', () => {
       respond: (name, stdin, i) => {
         if (name === 'ts') {
           const op = (stdin as { op?: string }).op;
-          if (op === 'complete' || op === 'fail') return res();
+          if (op === 'complete' || op === 'fail' || op === 'release') return res();
           return tsNext++ < 2 ? jsonRes({ task_id: '1' }) : jsonRes({ task_id: null });
         }
         if (name === 'ex') return jsonRes({ status: 'done', summary: 'ok' });
@@ -395,7 +395,7 @@ describe('runLoop', () => {
       respond: (name, stdin) => {
         if (name === 'ts') {
           const op = (stdin as { op?: string }).op;
-          if (op === 'complete' || op === 'fail') return res();
+          if (op === 'complete' || op === 'fail' || op === 'release') return res();
           return tsNext++ < 1 ? jsonRes({ task_id: '1' }) : jsonRes({ task_id: null });
         }
         if (name === 'ex') return jsonRes({ status: 'done', summary: 'ok' });
@@ -411,6 +411,81 @@ describe('runLoop', () => {
     expect(failCall).toBeDefined();
     expect(failCall?.stdin).toMatchObject({ op: 'fail', task_id: '1', retry_count: 1 });
     expect((failCall?.stdin as { reason?: string }).reason).toContain('coverage low');
+  });
+
+  // ADR-0025: the failure path calls op=release at its tail when the retry
+  // threshold has not been reached — the task-source unclaims it back to ready.
+  // On the iteration that reaches the threshold, escalation (op=fail →
+  // needs-human) owns the outcome and release must not be called.
+  it('calls op=release after op=fail when below the retry threshold, but not on escalation', async () => {
+    const ports = emptyPorts({
+      taskSource: [plug('task-source', 'ts')],
+      executor: [plug('executor', 'ex')],
+      gate: [plug('gate', 'g')],
+      onFail: [plug('on-fail', 'rec')],
+    });
+    let tsNext = 0;
+    const h = harness({
+      ports,
+      config: { retryThreshold: 2 },
+      respond: (name, stdin) => {
+        if (name === 'ts') {
+          const op = (stdin as { op?: string }).op;
+          if (op === 'complete' || op === 'fail' || op === 'release') return res();
+          return tsNext++ < 2 ? jsonRes({ task_id: '1' }) : jsonRes({ task_id: null });
+        }
+        if (name === 'ex') return jsonRes({ status: 'done', summary: 'ok' });
+        if (name === 'g')
+          return jsonRes({ reason: 'coverage low', gate: '30-test' }, { exitCode: 2 });
+        return res();
+      },
+    });
+    const result = await runLoop(h.deps);
+    expect(result.iterations[0]?.outcome).toBe('failed');
+    expect(result.iterations[1]?.outcome).toBe('escalated');
+
+    const releaseCalls = h.calls.filter(
+      (c) => c.name === 'ts' && (c.stdin as { op?: string }).op === 'release',
+    );
+    expect(releaseCalls).toHaveLength(1);
+    expect(releaseCalls[0]?.stdin).toMatchObject({ op: 'release', task_id: '1' });
+    expect((releaseCalls[0]?.stdin as { reason?: string }).reason).toContain('coverage low');
+
+    // release only ever follows fail, never precedes/replaces it, and never fires
+    // on the escalating iteration.
+    const opsInOrder = h.calls
+      .filter((c) => c.name === 'ts')
+      .map((c) => (c.stdin as { op?: string }).op);
+    expect(opsInOrder).toEqual(['next', 'fail', 'release', 'next', 'fail', 'next']);
+  });
+
+  it('tolerates a task-source without release support (best-effort, non-zero exit swallowed)', async () => {
+    const ports = emptyPorts({
+      taskSource: [plug('task-source', 'ts')],
+      executor: [plug('executor', 'ex')],
+      gate: [plug('gate', 'g')],
+      onFail: [plug('on-fail', 'rec')],
+    });
+    let tsNext = 0;
+    const h = harness({
+      ports,
+      config: { retryThreshold: 5 },
+      respond: (name, stdin) => {
+        if (name === 'ts') {
+          const op = (stdin as { op?: string }).op;
+          if (op === 'release') return res({ exitCode: 2, stderr: 'unknown op: release' });
+          if (op === 'complete' || op === 'fail' || op === 'release') return res();
+          return tsNext++ < 1 ? jsonRes({ task_id: '1' }) : jsonRes({ task_id: null });
+        }
+        if (name === 'ex') return jsonRes({ status: 'done', summary: 'ok' });
+        if (name === 'g')
+          return jsonRes({ reason: 'coverage low', gate: '30-test' }, { exitCode: 2 });
+        return res();
+      },
+    });
+    // Must not throw / crash the loop even though op=release fails non-zero.
+    const result = await runLoop(h.deps);
+    expect(result.iterations[0]?.outcome).toBe('failed');
   });
 
   it('routes a stuck executor to the failure path (D2 §2.3)', async () => {
@@ -684,6 +759,43 @@ describe('runLoop', () => {
     expect(h.calls.some((c) => c.name === 'log')).toBe(true); // sink still fired
   });
 
+  // H1 (code review, ADR-0025): gate passed but no delivery reference means the task
+  // is not force-completed — but the claim must still be released, or it sits claimed
+  // until the task-source's own stale-claim recovery (default 3600s) kicks in,
+  // effectively blocking a retry in the meantime.
+  it('releases the claim when the gate passes but no PR url was produced (H1)', async () => {
+    const ports = emptyPorts({
+      taskSource: [plug('task-source', 'ts')],
+      executor: [plug('executor', 'ex')],
+      gate: [],
+      sink: [plug('sink', 'log', 'L1')],
+    });
+    let tsNext = 0;
+    const h = harness({
+      ports,
+      config: { autonomy: 'L1' },
+      respond: (name, stdin) => {
+        if (name === 'ts') {
+          const op = (stdin as { op?: string }).op;
+          if (op === 'release') return res();
+          return tsNext++ < 1 ? jsonRes({ task_id: '1' }) : jsonRes({ task_id: null });
+        }
+        if (name === 'ex') return jsonRes({ status: 'done', summary: 'ok' });
+        return res();
+      },
+    });
+    const result = await runLoop(h.deps);
+    expect(result.iterations[0]?.outcome).toBe('passed');
+    expect(
+      h.calls.some((c) => c.name === 'ts' && (c.stdin as { op?: string }).op === 'complete'),
+    ).toBe(false);
+    const releaseCall = h.calls.find(
+      (c) => c.name === 'ts' && (c.stdin as { op?: string }).op === 'release',
+    );
+    expect(releaseCall).toBeDefined();
+    expect(releaseCall?.stdin).toMatchObject({ op: 'release', task_id: '1' });
+  });
+
   // L2: a stuck executor's reason is re-injected into the next attempt's prompt.
   it('re-injects the executor failure reason into the next prompt (L2)', async () => {
     const ports = emptyPorts({
@@ -698,7 +810,7 @@ describe('runLoop', () => {
       respond: (name, stdin, i) => {
         if (name === 'ts') {
           const op = (stdin as { op?: string }).op;
-          if (op === 'complete' || op === 'fail') return res();
+          if (op === 'complete' || op === 'fail' || op === 'release') return res();
           return tsNext++ < 2 ? jsonRes({ task_id: '1' }) : jsonRes({ task_id: null });
         }
         if (name === 'ex')

@@ -14,8 +14,18 @@
     },
     {
       "schema": "task-source.in.json",
+      "expect": "valid",
+      "data": { "op": "release", "task_id": "42", "reason": "below retry threshold" }
+    },
+    {
+      "schema": "task-source.in.json",
       "expect": "invalid",
       "data": { "op": "complete", "task_id": "42" }
+    },
+    {
+      "schema": "task-source.in.json",
+      "expect": "invalid",
+      "data": { "op": "release", "task_id": "42" }
     },
     { "schema": "task-source.in.json", "expect": "invalid", "data": { "op": "bogus" } },
     {

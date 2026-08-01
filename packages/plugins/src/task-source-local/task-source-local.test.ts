@@ -1,7 +1,15 @@
 // task-source-local 契約テスト(旧 run.sh 62 行の挙動を厳密に再現することを検証)。
 import { describe, it, expect, afterEach } from 'vitest';
-import { existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import {
+  existsSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+  mkdirSync,
+  readFileSync,
+  utimesSync,
+} from 'node:fs';
+import { spawnSync, spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,6 +28,24 @@ function runLauncher(input: string, env: Record<string, string> = {}) {
     encoding: 'utf8',
   });
   return { code: r.status ?? 1, stdout: r.stdout, stderr: r.stderr };
+}
+
+/** Real (async) subprocess spawn, for genuine multi-process races — spawnSync is fully
+ *  serialized within this test process and cannot reproduce a rename race. */
+function runLauncherAsync(
+  input: string,
+  env: Record<string, string> = {},
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [distPath], { env: { ...process.env, ...env } });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d: Buffer) => (stdout += d.toString()));
+    child.stderr.on('data', (d: Buffer) => (stderr += d.toString()));
+    child.on('error', reject);
+    child.on('close', (code) => resolve({ code: code ?? 1, stdout, stderr }));
+    child.stdin.end(input);
+  });
 }
 
 const tmpDirs: string[] = [];
@@ -48,6 +74,176 @@ function baseEnv(tasksDir: string, extra: Record<string, string> = {}): Record<s
 }
 
 describe('task-source-local contract', () => {
+  it('next: claims the task by moving it queue -> doing (ADR-0025)', () => {
+    const { tasksDir, queueDir } = setupTasksDir();
+    writeFileSync(join(queueDir, 'task-claim.md'), '# Claim me\nbody');
+    const { code, stdout } = runLauncher(JSON.stringify({ op: 'next' }), baseEnv(tasksDir));
+    expect(code).toBe(0);
+    const out = JSON.parse(stdout) as { task_id: string };
+    expect(out.task_id).toBe('task-claim');
+    // Claimed: no longer in queue/, now sitting in doing/.
+    expect(existsSync(join(queueDir, 'task-claim.md'))).toBe(false);
+    expect(existsSync(join(tasksDir, 'doing', 'task-claim.md'))).toBe(true);
+  });
+
+  it('next: a claimed (doing/) task is never handed out again', () => {
+    const { tasksDir, queueDir } = setupTasksDir();
+    writeFileSync(join(queueDir, 'task-a.md'), '# A\nbody');
+    writeFileSync(join(queueDir, 'task-b.md'), '# B\nbody');
+    const env = baseEnv(tasksDir);
+    const first = JSON.parse(runLauncher(JSON.stringify({ op: 'next' }), env).stdout) as {
+      task_id: string;
+    };
+    const second = JSON.parse(runLauncher(JSON.stringify({ op: 'next' }), env).stdout) as {
+      task_id: string;
+    };
+    expect(first.task_id).toBe('task-a');
+    expect(second.task_id).toBe('task-b');
+    expect(first.task_id).not.toBe(second.task_id);
+  });
+
+  it('release: moves doing -> queue, unclaiming the task without recording a failure', () => {
+    const { tasksDir, queueDir } = setupTasksDir();
+    writeFileSync(join(queueDir, 'task-rel.md'), '# Rel\nbody');
+    const env = baseEnv(tasksDir);
+    runLauncher(JSON.stringify({ op: 'next' }), env);
+    expect(existsSync(join(tasksDir, 'doing', 'task-rel.md'))).toBe(true);
+    const { code, stdout } = runLauncher(
+      JSON.stringify({ op: 'release', task_id: 'task-rel', reason: 'below threshold' }),
+      env,
+    );
+    expect(code).toBe(0);
+    expect(stdout).toBe('');
+    expect(existsSync(join(tasksDir, 'doing', 'task-rel.md'))).toBe(false);
+    expect(existsSync(join(queueDir, 'task-rel.md'))).toBe(true);
+    // release does not touch failures.log / retry count — that is op=fail's job.
+    expect(existsSync(join(tasksDir, 'failures.log'))).toBe(false);
+  });
+
+  it('release: unclaimed (unknown) task_id -> exit 2', () => {
+    const { tasksDir } = setupTasksDir();
+    const { code, stdout } = runLauncher(
+      JSON.stringify({ op: 'release', task_id: 'missing', reason: 'x' }),
+      baseEnv(tasksDir),
+    );
+    expect(code).toBe(2);
+    expect(stdout).toBe('');
+  });
+
+  it('fail: claimed (doing/) task stays claimed below threshold — release is a separate op', () => {
+    // ADR-0025: fail no longer unclaims by itself; the core calls release
+    // explicitly below the threshold. Escalation is still fail's job.
+    const { tasksDir, queueDir } = setupTasksDir();
+    writeFileSync(join(queueDir, 'task-fail.md'), '# F\nbody');
+    const env = baseEnv(tasksDir);
+    runLauncher(JSON.stringify({ op: 'next' }), env);
+    const { code } = runLauncher(
+      JSON.stringify({ op: 'fail', task_id: 'task-fail', reason: 'red', retry_count: 1 }),
+      env,
+    );
+    expect(code).toBe(0);
+    expect(existsSync(join(tasksDir, 'doing', 'task-fail.md'))).toBe(true);
+    expect(existsSync(join(queueDir, 'task-fail.md'))).toBe(false);
+  });
+
+  it('fail: claimed task reaching threshold moves doing -> needs-human', () => {
+    const { tasksDir, queueDir } = setupTasksDir();
+    writeFileSync(join(queueDir, 'task-esc.md'), '# E\nbody');
+    const env = baseEnv(tasksDir);
+    runLauncher(JSON.stringify({ op: 'next' }), env);
+    const { code } = runLauncher(
+      JSON.stringify({ op: 'fail', task_id: 'task-esc', reason: 'still red', retry_count: 3 }),
+      env,
+    );
+    expect(code).toBe(0);
+    expect(existsSync(join(tasksDir, 'doing', 'task-esc.md'))).toBe(false);
+    expect(existsSync(join(tasksDir, 'needs-human', 'task-esc.md'))).toBe(true);
+  });
+
+  it('complete: claimed (doing/) task moves doing -> done', () => {
+    const { tasksDir, queueDir } = setupTasksDir();
+    writeFileSync(join(queueDir, 'task-c.md'), '# C\nbody');
+    const env = baseEnv(tasksDir);
+    runLauncher(JSON.stringify({ op: 'next' }), env);
+    const { code } = runLauncher(
+      JSON.stringify({ op: 'complete', task_id: 'task-c', pr_url: 'commit:abc' }),
+      env,
+    );
+    expect(code).toBe(0);
+    expect(existsSync(join(tasksDir, 'doing', 'task-c.md'))).toBe(false);
+    expect(existsSync(join(tasksDir, 'done', 'task-c.md'))).toBe(true);
+  });
+
+  // ADR-0025 Decision #4 / Risks: claim したまま launch が異常終了したタスクの回収は
+  // task-source の責務。stale (経過時間が閾値超) な doing/ エントリは次の next で queue/
+  // へ自動回収してから通常の queue 先頭選択に入る。
+  it('next: recovers a stale doing/ entry back to queue before selecting (ADR-0025 stale recovery)', () => {
+    const { tasksDir, queueDir } = setupTasksDir();
+    const doingDir = join(tasksDir, 'doing');
+    mkdirSync(doingDir, { recursive: true });
+    writeFileSync(join(doingDir, 'task-stale.md'), '# Stale\nbody');
+    // Backdate mtime well past the default staleness window.
+    const old = new Date(Date.now() - 10 * 60 * 60 * 1000);
+    utimesSync(join(doingDir, 'task-stale.md'), old, old);
+    const { code, stdout } = runLauncher(
+      JSON.stringify({ op: 'next' }),
+      baseEnv(tasksDir, { HALO_CLAIM_STALE_SEC: '3600' }),
+    );
+    expect(code).toBe(0);
+    const out = JSON.parse(stdout) as { task_id: string };
+    // Recovered back to queue, then re-claimed in the same call (queue -> doing).
+    expect(out.task_id).toBe('task-stale');
+    expect(existsSync(join(tasksDir, 'doing', 'task-stale.md'))).toBe(true);
+    expect(existsSync(join(queueDir, 'task-stale.md'))).toBe(false);
+  });
+
+  it('next: a fresh (non-stale) doing/ entry is left alone and not re-handed-out', () => {
+    const { tasksDir, queueDir } = setupTasksDir();
+    const doingDir = join(tasksDir, 'doing');
+    mkdirSync(doingDir, { recursive: true });
+    writeFileSync(join(doingDir, 'task-fresh.md'), '# Fresh\nbody');
+    writeFileSync(join(queueDir, 'task-other.md'), '# Other\nbody');
+    const { stdout } = runLauncher(
+      JSON.stringify({ op: 'next' }),
+      baseEnv(tasksDir, { HALO_CLAIM_STALE_SEC: '3600' }),
+    );
+    const out = JSON.parse(stdout) as { task_id: string };
+    expect(out.task_id).toBe('task-other');
+    expect(existsSync(join(doingDir, 'task-fresh.md'))).toBe(true);
+  });
+
+  // CRITICAL fix (code review): concurrent op=next racing to recover the same stale
+  // doing/ entry must never crash with an uncaught ENOENT, and exactly one process
+  // must end up claiming the task. Uses real subprocess concurrency (spawn, not
+  // spawnSync) because spawnSync fully serializes within this test process and
+  // cannot reproduce the rename race that crashed 1-of-8 real processes in prod.
+  it('next: N concurrent processes racing a single stale claim never crash, exactly one claims it', async () => {
+    const { tasksDir, queueDir } = setupTasksDir();
+    const doingDir = join(tasksDir, 'doing');
+    mkdirSync(doingDir, { recursive: true });
+    writeFileSync(join(doingDir, 'task-race.md'), '# Race\nbody');
+    const old = new Date(Date.now() - 10 * 60 * 60 * 1000);
+    utimesSync(join(doingDir, 'task-race.md'), old, old);
+
+    const env = baseEnv(tasksDir, { HALO_CLAIM_STALE_SEC: '3600' });
+    const N = 8;
+    const results = await Promise.all(
+      Array.from({ length: N }, () => runLauncherAsync(JSON.stringify({ op: 'next' }), env)),
+    );
+
+    // No crash: every process must exit 0 (either it claimed the task, or it
+    // legitimately found nothing left once a sibling won the race).
+    for (const r of results) {
+      expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+    }
+    const claimed = results
+      .map((r) => (JSON.parse(r.stdout) as { task_id: string | null }).task_id)
+      .filter((id): id is string => id !== null);
+    expect(claimed).toEqual(['task-race']); // exactly one winner, never duplicated
+    expect(existsSync(join(doingDir, 'task-race.md'))).toBe(true);
+    expect(existsSync(join(queueDir, 'task-race.md'))).toBe(false);
+  });
+
   it('next: queue empty -> {task_id:null}, exit 0', () => {
     const { tasksDir } = setupTasksDir();
     const { code, stdout } = runLauncher(JSON.stringify({ op: 'next' }), baseEnv(tasksDir));
@@ -92,20 +288,22 @@ describe('task-source-local contract', () => {
     expect(out.title).toBe('empty-first');
   });
 
-  it('complete: moves queue -> done and writes result file', () => {
+  it('complete: moves doing -> done and writes result file (claimed via next)', () => {
     const { tasksDir, queueDir } = setupTasksDir();
     writeFileSync(join(queueDir, 'task-1.md'), '# T1\nbody');
+    const env = baseEnv(tasksDir);
+    runLauncher(JSON.stringify({ op: 'next' }), env);
     const { code, stdout } = runLauncher(
       JSON.stringify({
         op: 'complete',
         task_id: 'task-1',
         pr_url: 'https://github.com/o/r/pull/1',
       }),
-      baseEnv(tasksDir),
+      env,
     );
     expect(code).toBe(0);
     expect(stdout).toBe('');
-    expect(existsSync(join(queueDir, 'task-1.md'))).toBe(false);
+    expect(existsSync(join(tasksDir, 'doing', 'task-1.md'))).toBe(false);
     const donePath = join(tasksDir, 'done', 'task-1.md');
     expect(existsSync(donePath)).toBe(true);
     const result = readFileSync(join(tasksDir, 'done', 'task-1.result'), 'utf8');
@@ -123,16 +321,18 @@ describe('task-source-local contract', () => {
     expect(stdout).toBe('');
   });
 
-  it('fail: retry_count below threshold -> stays in queue, logs failure', () => {
+  it('fail: retry_count below threshold -> stays claimed (doing/), logs failure', () => {
     const { tasksDir, queueDir } = setupTasksDir();
     writeFileSync(join(queueDir, 'task-2.md'), '# T2\nbody');
+    const env = baseEnv(tasksDir);
+    runLauncher(JSON.stringify({ op: 'next' }), env);
     const { code, stdout } = runLauncher(
       JSON.stringify({ op: 'fail', task_id: 'task-2', reason: 'tests red', retry_count: 1 }),
-      baseEnv(tasksDir),
+      env,
     );
     expect(code).toBe(0);
     expect(stdout).toBe('');
-    expect(existsSync(join(queueDir, 'task-2.md'))).toBe(true);
+    expect(existsSync(join(tasksDir, 'doing', 'task-2.md'))).toBe(true);
     const log = readFileSync(join(tasksDir, 'failures.log'), 'utf8');
     expect(log).toContain('fail #1: tests red');
   });
@@ -140,21 +340,25 @@ describe('task-source-local contract', () => {
   it('fail: retry_count >= threshold -> moves to needs-human', () => {
     const { tasksDir, queueDir } = setupTasksDir();
     writeFileSync(join(queueDir, 'task-3.md'), '# T3\nbody');
+    const env = baseEnv(tasksDir);
+    runLauncher(JSON.stringify({ op: 'next' }), env);
     const { code } = runLauncher(
       JSON.stringify({ op: 'fail', task_id: 'task-3', reason: 'still red', retry_count: 3 }),
-      baseEnv(tasksDir),
+      env,
     );
     expect(code).toBe(0);
-    expect(existsSync(join(queueDir, 'task-3.md'))).toBe(false);
+    expect(existsSync(join(tasksDir, 'doing', 'task-3.md'))).toBe(false);
     expect(existsSync(join(tasksDir, 'needs-human', 'task-3.md'))).toBe(true);
   });
 
   it('fail: custom HALO_FAIL_THRESHOLD is respected', () => {
     const { tasksDir, queueDir } = setupTasksDir();
     writeFileSync(join(queueDir, 'task-4.md'), '# T4\nbody');
+    const env = baseEnv(tasksDir, { HALO_FAIL_THRESHOLD: '1' });
+    runLauncher(JSON.stringify({ op: 'next' }), env);
     runLauncher(
       JSON.stringify({ op: 'fail', task_id: 'task-4', reason: 'red', retry_count: 1 }),
-      baseEnv(tasksDir, { HALO_FAIL_THRESHOLD: '1' }),
+      env,
     );
     expect(existsSync(join(tasksDir, 'needs-human', 'task-4.md'))).toBe(true);
   });
@@ -165,6 +369,7 @@ describe('task-source-local contract', () => {
     const { tasksDir, queueDir } = setupTasksDir();
     writeFileSync(join(queueDir, 'task-9.md'), '# T\nbody');
     const env = baseEnv(tasksDir);
+    runLauncher(JSON.stringify({ op: 'next' }), env);
     // 別プロセスの3回の失敗を再現。毎回 retry_count=1 で届く。
     for (const reason of ['first', 'second', 'third']) {
       runLauncher(JSON.stringify({ op: 'fail', task_id: 'task-9', reason, retry_count: 1 }), env);
@@ -174,6 +379,7 @@ describe('task-source-local contract', () => {
     expect(log).toContain('fail #2: second');
     expect(log).toContain('fail #3: third');
     expect(existsSync(join(tasksDir, 'needs-human', 'task-9.md'))).toBe(true);
+    expect(existsSync(join(tasksDir, 'doing', 'task-9.md'))).toBe(false);
     expect(existsSync(join(queueDir, 'task-9.md'))).toBe(false);
     // 隔離まで進んだら計数は片付ける。
     expect(existsSync(join(tasksDir, 'retry', 'task-9.count'))).toBe(false);
@@ -183,6 +389,7 @@ describe('task-source-local contract', () => {
     const { tasksDir, queueDir } = setupTasksDir();
     writeFileSync(join(queueDir, 'task-10.md'), '# T\nbody');
     const env = baseEnv(tasksDir);
+    runLauncher(JSON.stringify({ op: 'next' }), env);
     runLauncher(
       JSON.stringify({ op: 'fail', task_id: 'task-10', reason: 'flaky', retry_count: 1 }),
       env,
