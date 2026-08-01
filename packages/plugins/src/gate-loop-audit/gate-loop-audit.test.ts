@@ -121,6 +121,48 @@ describe('gate-loop-audit (launcher contract)', () => {
     expect(out.gate).toBe('50-loop-audit');
   });
 
+  it('coverage threshold 80->90 (up) -> pass (check 4, キー単位比較)', () => {
+    const wt = newRepo(makeTmpRoot());
+    // newRepo の初期コミットは lines:90 — まず lines:80 で上書きコミットし、
+    // その後 90 へ戻す変更(上げ改変)を HEAD 差分として検査させる。
+    writeFileSync(join(wt, 'vitest.config.txt'), 'coverage:\n  lines: 80\n');
+    git(wt, ['add', '-A']);
+    git(wt, ['commit', '-qm', 'lower to 80']);
+    writeFileSync(join(wt, 'vitest.config.txt'), 'coverage:\n  lines: 90\n');
+    const { code } = runAudit(wt);
+    expect(code).toBe(0);
+  });
+
+  it('別キーどうしの増減は fail にしない (check 4, キー単位比較)', () => {
+    const wt = newRepo(makeTmpRoot());
+    writeFileSync(
+      join(wt, 'vitest.config.txt'),
+      'coverage:\n  branches: 90\n  functions: 70\n',
+    );
+    git(wt, ['add', '-A']);
+    git(wt, ['commit', '-qm', 'add branches/functions']);
+    // branches を削除し、別キー(functions)を増やす — 同一キーの下方改変ではない。
+    writeFileSync(join(wt, 'vitest.config.txt'), 'coverage:\n  functions: 95\n');
+    const { code } = runAudit(wt);
+    expect(code).toBe(0);
+  });
+
+  it('キー内の数値(v8 等)を閾値として誤読しない (check 4)', () => {
+    const wt = newRepo(makeTmpRoot());
+    writeFileSync(
+      join(wt, 'vitest.config.txt'),
+      "coverage:\n  provider: 'v8'\n  lines: 90\n",
+    );
+    git(wt, ['add', '-A']);
+    git(wt, ['commit', '-qm', 'add provider line']);
+    writeFileSync(
+      join(wt, 'vitest.config.txt'),
+      "coverage:\n  provider: 'v9'\n  lines: 90\n",
+    );
+    const { code } = runAudit(wt);
+    expect(code).toBe(0);
+  });
+
   it('PROMPT.md self-modification -> fail (check 5)', () => {
     const wt = newRepo(makeTmpRoot());
     writeFileSync(join(wt, 'PROMPT.md'), '# prompt tampered\n');

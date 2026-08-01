@@ -148,27 +148,38 @@ if (hatchLine !== undefined) {
   fail(`新規エスケープハッチ（${hatch}）が追加された`, '既存維持は可、新規追加はゼロ強制');
 }
 
-// ④ カバレッジ閾値の下方改変(threshold 系キーワード行の数値を比較)
+// ④ カバレッジ閾値の下方改変(threshold 系キーワード行の数値をキー単位で比較)
+// firstNum(行頭の最初の数値)は行頭の連番やキー名内の数値(例: v8)を誤って拾う
+// ことがあるため、キー名の直後に続く数値だけを抽出して Map<key, value> にする。
 const thRe = /coverage|threshold|branches|statements|functions|lines/i;
-const firstNum = (l: string): number | undefined => {
-  const m = /[0-9]+/.exec(l);
-  return m === null ? undefined : Number(m[0]);
-};
+const keyValRe = /(coverage|threshold|branches|statements|functions|lines)\D{0,10}?(-?[0-9]+(?:\.[0-9]+)?)/gi;
+function extractThresholds(lines: readonly string[]): Map<string, number> {
+  const map = new Map<string, number>();
+  for (const l of lines) {
+    keyValRe.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = keyValRe.exec(l)) !== null) {
+      const key = m[1];
+      const val = m[2];
+      if (key !== undefined && val !== undefined) map.set(key.toLowerCase(), Number(val));
+    }
+  }
+  return map;
+}
 const remTh = diff.split('\n').filter((l) => l.startsWith('-') && thRe.test(l) && /[0-9]/.test(l));
 const addTh = diff.split('\n').filter((l) => l.startsWith('+') && thRe.test(l) && /[0-9]/.test(l));
-if (remTh.length > 0 && addTh.length > 0) {
-  let rmax = -1;
-  let amin = 100000;
-  for (const l of remTh) {
-    const n = firstNum(l);
-    if (n !== undefined && n > rmax) rmax = n;
+const remMap = extractThresholds(remTh);
+const addMap = extractThresholds(addTh);
+for (const [key, rVal] of remMap) {
+  const aVal = addMap.get(key);
+  if (aVal === undefined) {
+    // 閾値行そのものが丸ごと削除されたケースは素通しになる(誤検知コストを優先し fail
+    // にはしないが、見落とし防止のため diag で警告だけ出す)。
+    diag(`loop-audit: 閾値行 '${key}' が削除のみで対応する追加行が見当たらない（rmVal=${rVal}）`);
+    continue;
   }
-  for (const l of addTh) {
-    const n = firstNum(l);
-    if (n !== undefined && n < amin) amin = n;
-  }
-  if (rmax >= 0 && amin < 100000 && amin < rmax) {
-    fail(`カバレッジ閾値が ${rmax} → ${amin} に改変された`, '閾値の下方変更は禁止');
+  if (aVal < rVal) {
+    fail(`カバレッジ閾値 '${key}' が ${rVal} → ${aVal} に改変された`, '閾値の下方変更は禁止');
   }
 }
 
