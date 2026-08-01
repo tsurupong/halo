@@ -2,9 +2,11 @@
 // 認証・パス整合) は Probes シームから注入してテスト可能にする。CLI は集計結果を
 // 終了コードへ写像するだけ (D3 §5.2: FAIL あり=1 / WARN のみ=0)。
 //
-// 検査は常時実行の c1-c9 / c12 / c13 に加え、probe を注入した場合のみ走る c10 (必須
-// コマンド, D10 §4) / c11 (スケジューラバックエンド, D10 §3.2) / c14 (watchdog heartbeat,
-// ADR-0023) がある。既定の CLI 配線 (deps.ts) は全て注入するので、実運用では 14 検査になる。
+// 検査は常時実行の c1-c9 / c12 / c13 / c16 (失敗学習ペア, ADR-0027) に加え、probe を
+// 注入した場合のみ走る c10 (必須コマンド, D10 §4) / c11 (スケジューラバックエンド,
+// D10 §3.2) / c14 (watchdog heartbeat, ADR-0023) / c15 (幽霊 claim, ADR-0025) がある。
+// 既定の CLI 配線 (deps.ts) は c10/c11/c14 を注入し c15 は未配線のため、実運用では
+// 15 検査になる。
 import type { CliFs } from './fs.js';
 import { PORT_DIRS } from './scaffold.js';
 import { resolveBinPath, listTriggers, type TriggerContext } from './triggers.js';
