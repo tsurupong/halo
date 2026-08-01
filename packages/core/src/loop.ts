@@ -633,6 +633,10 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
         // threshold (needs-human) — the infinite-loop breaker (要件 §4.2① / §11.2).
         await runTaskSourceFail(deps, taskId, execReason, state.retryCount);
         const outcome = outcomeForFailure(state.retryCount, retryThreshold);
+        // ADR-0025: below the retry threshold the task is released back to ready
+        // (unclaimed) rather than left claimed. On escalation `fail` already owns
+        // the terminal state (needs-human) — release is not called.
+        if (outcome === 'failed') await runTaskSourceRelease(deps, taskId, execReason);
         await record(deps, {
           iter,
           startedAt,
@@ -726,6 +730,10 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
         // threshold (needs-human) — the infinite-loop breaker (要件 §4.2① / §11.2).
         await runTaskSourceFail(deps, taskId, failure.reason, state.retryCount);
         const outcome = outcomeForFailure(state.retryCount, retryThreshold);
+        // ADR-0025: below the retry threshold the task is released back to ready
+        // (unclaimed) rather than left claimed. On escalation `fail` already owns
+        // the terminal state (needs-human) — release is not called.
+        if (outcome === 'failed') await runTaskSourceRelease(deps, taskId, failure.reason);
         await record(deps, {
           iter,
           startedAt,
@@ -819,6 +827,24 @@ async function runTaskSourceFail(
     );
   } catch {
     /* best-effort: a fail-report failure must not crash the loop */
+  }
+}
+
+/**
+ * Release a claimed task back to ready (D1 §1.1 op=release, ADR-0025). Called at
+ * the tail of the failure path once `op=fail` has recorded the attempt, but only
+ * when the retry threshold has not been reached — escalation already leaves the
+ * task-source's own terminal state (needs-human) in place, so release is skipped
+ * there. Best-effort, mirroring runTaskSourceComplete/runTaskSourceFail: a
+ * task-source implementation that predates this op exits non-zero, and that
+ * failure is swallowed as a migration accommodation (ADR-0025 Consequences).
+ */
+async function runTaskSourceRelease(deps: LoopDeps, taskId: string, reason: string): Promise<void> {
+  const ts = deps.ports.taskSource[0]!;
+  try {
+    await deps.runner(ts, { op: 'release', task_id: taskId, reason }, portOpts(ts));
+  } catch {
+    /* best-effort: a release failure must not crash the loop */
   }
 }
 

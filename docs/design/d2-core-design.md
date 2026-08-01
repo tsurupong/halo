@@ -94,7 +94,7 @@ The `loop` module implements the pseudocode of Requirements §4.3 as a TypeScrip
 | State | Processing | Delegated to | Determination |
 |---|---|---|---|
 | PreflightLight | STOP file / lock / ready presence / remaining daily budget (§4.1) | preflight, lock, budget | Immediate termination if a termination condition is met |
-| Next | Send `{"op":"next"}` to the task-source (first single one) | runPort | `task_id == null` → terminate |
+| Next | Send `{"op":"next"}` to the task-source (first single one); the task-source claims (occupies) the task it returns before replying (ADR-0025, §2.4) | runPort | `task_id == null` → terminate |
 | PreflightHeavy | Clean working tree / disk space / graph freshness sync (§4.2) | preflight | On anomaly, do not execute the task and record it |
 | Context | Run all of context.d, concatenate `fragments` in descending priority order, truncate at the token limit (§2.6) | runPort (each), discovery | Always treated as success (individual failures are skipped) |
 | BuildPrompt | Combine task info, concatenated context, and the reason/hint of the previous gate fail to generate a prompt | (pure function) | — |
@@ -125,6 +125,19 @@ A gate fail is re-injected into the next iteration via two paths (the core of th
 2. **Medium-term re-injection via the failure catalog**: on-fail `10-record-failure` appends to `failure-catalog.md`, and context.d (`30-recent-failures`) reads it in subsequent iterations.
 
 **Determination of retry_count**: Management of retry_count (incrementing, threshold-reached determination, granting `needs-human`) is the responsibility of the task-source / on-fail plugins, and the source of truth is GitHub (Issue comments and labels). The core merely passes `retry_count` to the on-fail input and does not itself hold the threshold (**initial value 3**, Requirements §11.2). When the threshold is reached, on-fail `20-escalate` grants `needs-human`, and the task is no longer dispensed at the next `op=next`, which cuts off the re-injection loop (infinite-loop interruption).
+
+**claim/release (ADR-0025)**: `op=next` claims the task it returns (D1 §1.1) — an
+atomic occupation the task-source itself performs (local: `queue/ → doing/` rename,
+github: `ready → in-progress` label). At the tail of the failure path above, after
+`op=fail` has recorded the attempt, the core calls `op=release` **only when the
+retry threshold has not been reached** (`outcome === 'failed'`, not `'escalated'`):
+this unclaims the task back to ready without recording a failure, mirroring the
+`op=fail` call it always follows. When the threshold is reached, `op=fail`'s own
+escalation (`needs-human`) already owns the terminal state, so `release` is not
+called — a claimed task that reaches `needs-human` stays claimed until a human
+resolves it. `release` is best-effort: a task-source implementation predating
+ADR-0025 exits non-zero for an unknown op, and that failure is swallowed as a
+migration accommodation, exactly like `op=complete` / `op=fail` already are.
 
 ### 2.5 The sink autonomy filter
 

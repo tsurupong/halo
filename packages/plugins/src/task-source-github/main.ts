@@ -1,15 +1,21 @@
 // task-source-github(D1 §1.1 / D5 §3.1): GitHub Issues をタスクの源にするアダプタ。
-// stdin の task-source.in JSON(op=next/complete/fail、oneOf)を受け取り、gh CLI を叩く。
-//   next     : ready 先頭 Issue を取得し ready→in-progress へ付け替え、task-source.out を stdout へ。
-//              ready 0 件なら {"task_id":null} + exit 0。
+// stdin の task-source.in JSON(op=next/complete/fail/release、oneOf)を受け取り、gh CLI を叩く。
+//   next     : in-progress の stale 判定 (ADR-0025 Decision #4) で長時間 claim されたまま
+//              の Issue を ready へ回収してから、ready 先頭 Issue を取得し ready→in-progress
+//              へ付け替え(claim)、task-source.out を stdout へ。ready 0 件なら
+//              {"task_id":null} + exit 0。
 //   complete : 完了記録(in-progress→done、PR URL をコメント)。副作用のみ、stdout 空。
-//   fail     : リトライをコメント記録。通算回数が THRESHOLD 未満なら ready へ戻して再供給し、
-//              到達したら needs-human を付与する。副作用のみ。
-// stdout は JSON 契約チャネル。complete/fail では何も出さない(D1 §3.2)。
+//   fail     : リトライをコメント記録するだけ(claim は解除しない)。通算回数が THRESHOLD に
+//              到達したら needs-human へエスカレーションする。副作用のみ。
+//   release  : claim (in-progress) を解除して ready へ戻す(失敗記録はしない、ADR-0025)。
+//              コアは失敗経路の末尾で、閾値未達の時だけこれを呼ぶ。
+// stdout は JSON 契約チャネル。complete/fail/release では何も出さない(D1 §3.2)。
 import { readStdinJson, writeStdoutJson, diag, str } from '../lib/io.js';
 import { run } from '../lib/exec.js';
 
 const failThreshold = Number(process.env['HALO_FAIL_THRESHOLD'] ?? '3');
+// ADR-0025 Decision #4: claim したまま launch が死んだ「幽霊 in-progress」の回収しきい値。
+const claimStaleSec = Number(process.env['HALO_CLAIM_STALE_SEC'] ?? '3600');
 
 function die(msg: string, code = 2): never {
   diag(`task-source-github: ${msg}`);
@@ -55,11 +61,57 @@ function pastFailureCount(num: string): number {
   }
 }
 
+/**
+ * stale な in-progress Issue を ready へ回収する(ADR-0025 Decision #4)。claim したまま
+ * launch が死んだ Issue の回収責務は task-source にある。この一手が失敗しても `next` 本体
+ * の可用性を落とさないよう best-effort とする(緩和策であって必須機能ではない)。
+ */
+function recoverStaleClaims(): void {
+  const r = run('gh', [
+    'issue',
+    'list',
+    '--label',
+    'in-progress',
+    '--state',
+    'open',
+    '--json',
+    'number,updatedAt',
+    '--limit',
+    '100',
+  ]);
+  if (r.code !== 0) return; // best-effort: 認証切れ等は次の通常経路の gh 呼び出しに委ねる。
+  let issues: unknown;
+  try {
+    issues = JSON.parse(r.stdout);
+  } catch {
+    return;
+  }
+  if (!Array.isArray(issues)) return;
+  for (const issue of issues as Record<string, unknown>[]) {
+    const num = issue['number'];
+    const updatedAt = issue['updatedAt'];
+    if (typeof num !== 'number' || typeof updatedAt !== 'string') continue;
+    const ageSec = (Date.now() - Date.parse(updatedAt)) / 1000;
+    if (!(ageSec > claimStaleSec)) continue;
+    const back = run('gh', [
+      'issue',
+      'edit',
+      String(num),
+      '--add-label',
+      'ready',
+      '--remove-label',
+      'in-progress',
+    ]);
+    if (back.code !== 0) diag(`task-source-github: stale claim 回収に失敗 (Issue #${num})`);
+  }
+}
+
 const input = await readStdinJson().catch(() => undefined);
 const op = str(input, 'op');
 
 switch (op) {
   case 'next': {
+    recoverStaleClaims();
     const list = gh(
       [
         'issue',
@@ -142,20 +194,28 @@ switch (op) {
     // 始まり閾値に到達しない (N4)。過去の `fail #N:` コメント数から通算回数を導出する。
     const attempts = Math.max(pastFailureCount(num) + 1, rc);
     gh(['issue', 'comment', num, '--body', `fail #${attempts}: ${reason}`], '失敗コメントの投稿');
+    // ADR-0025: fail は記録のみ。閾値未達なら claim (in-progress) はそのまま保持し、
+    // ready への解除は別 op である release に委ねる。閾値到達時のみ従来通り
+    // needs-human でエスカレーションする(無限ループ遮断)。
     if (attempts >= failThreshold) {
-      // 閾値到達 → needs-human でエスカレーション(無限ループ遮断)。
       gh(
         ['issue', 'edit', num, '--add-label', 'needs-human', '--remove-label', 'in-progress'],
         `Issue #${num} の needs-human エスカレーション`,
       );
-    } else {
-      // C1: 閾値未満なら ready へ戻す。戻さないと op=next (--label ready) が二度と拾わず、
-      // リトライも失敗理由の再注入 (D2 §2.4) も起きないまま in-progress で滞留する。
-      gh(
-        ['issue', 'edit', num, '--add-label', 'ready', '--remove-label', 'in-progress'],
-        `Issue #${num} の再供給 (in-progress→ready)`,
-      );
     }
+    break;
+  }
+  case 'release': {
+    // ADR-0025: claim (in-progress) を解除して ready へ戻す。戻さないと op=next
+    // (--label ready) が二度と拾わず、リトライも失敗理由の再注入 (D2 §2.4) も起きないまま
+    // in-progress で滞留する(旧 fail 閾値未満パスが担っていた役割の移管、C1 相当)。
+    const taskId = str(input, 'task_id');
+    if (taskId === undefined) die('release requires task_id');
+    const num = taskId.replace(/^T-/, '');
+    gh(
+      ['issue', 'edit', num, '--add-label', 'ready', '--remove-label', 'in-progress'],
+      `Issue #${num} の再供給 (in-progress→ready, release)`,
+    );
     break;
   }
   default:

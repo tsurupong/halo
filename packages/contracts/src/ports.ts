@@ -27,8 +27,21 @@ export interface TaskSourceFail {
   retry_count: number;
 }
 
+/**
+ * Release a claimed task back to ready without recording a failure (ADR-0025).
+ * Called by the core at the end of the failure path when the retry threshold
+ * has not been reached yet (release, not escalation). task-source
+ * implementations that predate this op must be tolerated as best-effort by
+ * callers (non-zero exit swallowed) during the migration window.
+ */
+export interface TaskSourceRelease {
+  op: 'release';
+  task_id: string;
+  reason: string;
+}
+
 /** task-source input, discriminated by `op` (D1 §1.1). */
-export type TaskSourceIn = TaskSourceNext | TaskSourceComplete | TaskSourceFail;
+export type TaskSourceIn = TaskSourceNext | TaskSourceComplete | TaskSourceFail | TaskSourceRelease;
 
 /** task-source output for `op=next` (D1 §1.1). */
 export interface TaskSourceOut {
