@@ -151,6 +151,44 @@ describe('後方互換: probe 未注入', () => {
   });
 });
 
+describe('c3 .harness.yml 検査の実体化 (M4)', () => {
+  test('不正な YAML (kinds が空) → FAIL、理由を detail に含む', async () => {
+    const fs = memFs({
+      files: {
+        '/repo/.harness.yml': 'kinds:\n',
+      },
+    });
+    const report = await runAll(baseProbes({ fs }));
+    const c3 = findCheck(report.checks, 3);
+    expect(c3?.status).toBe('FAIL');
+    expect(c3?.detail).toContain('kinds');
+  });
+
+  test('kinds[].runtimes が runtime.d/ に不在 → FAIL', async () => {
+    const fs = memFs({
+      files: {
+        '/repo/.harness.yml': 'kinds:\n  code:\n    runtimes: [node-pnpm]\n    prompt: .halo/prompts/code.md\n',
+      },
+    });
+    const report = await runAll(baseProbes({ fs }));
+    const c3 = findCheck(report.checks, 3);
+    expect(c3?.status).toBe('FAIL');
+    expect(c3?.detail).toContain('node-pnpm');
+  });
+
+  test('正常な .harness.yml + runtime 実在 → OK', async () => {
+    const fs = memFs({
+      files: {
+        '/repo/.harness.yml': 'kinds:\n  code:\n    runtimes: [node-pnpm]\n    prompt: .halo/prompts/code.md\n',
+      },
+      dirs: ['/repo/.halo/ports/runtime.d/node-pnpm'],
+    });
+    const report = await runAll(baseProbes({ fs }));
+    const c3 = findCheck(report.checks, 3);
+    expect(c3?.status).toBe('OK');
+  });
+});
+
 describe('c12 旧ランチャー設定の検出 (entry契約化 Task 6 Step D)', () => {
   test('.sh ファイルが ports 配下に残存 → WARN', async () => {
     const fs = memFs({
