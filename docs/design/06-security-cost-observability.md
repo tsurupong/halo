@@ -61,7 +61,7 @@ Per Requirements Document §6.1, dangerous operations are blocked in two layers:
 | # | Operation category | Detection pattern (example) | Decision | Reason for blocking |
 |---|---|---|---|---|
 | 1 | Recursive deletion | `rm -rf` / `rm -fr` / `rm --recursive --force` | exit 2 | Prevent spillover outside the worktree and destruction of work |
-| 2 | Force push | `git push --force` / `git push -f` / `--force-with-lease` | exit 2 | Prevent history rewriting and destruction of shared branches (PR creation is handled by the sink) |
+| 2 | Egress (push / gh / remote) | `git push` (all forms) / `gh *` / `git remote *` | exit 2 | ADR-0026: publishing results is the sink's job regardless of autonomy level; also prevents history rewriting on shared branches |
 | 3 | Reading sensitive files | Access to `.env` `.env.*` via `cat`/`less`/`head`/`grep` etc. | exit 2 | Prevent exposure of secret values (duplicated with Read(**/.env) deny) |
 | 4 | Credential directories | Reading `~/.ssh` / `~/.aws` / `~/.config/gh` | exit 2 | Prevent theft of PATs and keys (duplicated with sandbox.denyRead) |
 | 5 | Self-modification | Writing to `CLAUDE.md` / `PROMPT.md` / `.harness.yml` / test files | exit 2 | Safety invariant (ADR-0004). Defense in depth with the gate's loop-audit |
@@ -88,8 +88,9 @@ Note: #5 is duplicated between PreToolUse (preemptive, blocking before tool exec
       "Write(**/PROMPT.md)",
       "Write(**/.harness.yml)",
       "Bash(rm -rf*)",
-      "Bash(git push --force*)",
-      "Bash(git push -f*)",
+      "Bash(git push*)",
+      "Bash(gh *)",
+      "Bash(git remote*)",
       "Bash(sudo*)"
     ]
   },
