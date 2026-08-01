@@ -31,7 +31,7 @@ The disposable worktree (ADR-0002) remains the executor's working scope and keep
 
 ### 1.2 PATH Scrubbing (WSL2-specific, kept)
 
-This initialization step never depended on a sandbox and remains in force: WSL2 by default inherits the Windows-side `PATH` (`/mnt/c/...`), and the mixing-in of Windows executables breaks reproducibility. At loop launch, the core rebuilds PATH to only `/usr/local/bin:/usr/bin:/bin` + HALO-managed runtime paths and removes all entries including `/mnt/c/`. Dependency materialization (worktree, each store, cache) is fixed to ext4 (under `/home`), and placement under `/mnt/c/` is prohibited (the placement constraint of §4.2 runtime).
+This initialization step never depended on a sandbox and remains in force: WSL2 by default inherits the Windows-side `PATH` (`/mnt/c/...`), and the mixing-in of Windows executables breaks reproducibility. At loop launch, the core rebuilds PATH to only `/usr/local/bin:/usr/bin:/bin` + HALO-managed runtime paths and removes all entries including `/mnt/<drive>/`. Dependency materialization (worktree, each store, cache) is fixed to ext4 (under `/home`), and placement under any drvfs mount `/mnt/<drive>/` (e.g. `/mnt/c/`, `/mnt/d/`) is a WARN (the placement constraint of §4.2 runtime).
 
 ---
 
@@ -102,6 +102,10 @@ The authoritative pattern list stays the §4.3 table; the injected deny set and 
 
 **Implementation note.** The executable form of the §2.2 list is `packages/core/src/executor-settings.ts`: the injector (`run-wiring`) and the doctor check are generated from that one constant, so they cannot drift apart. `.harness.yml` `protectedPaths` is compiled into `Write`/`Edit` deny rules and appended, which is what keeps layer 1 (deny) and layer 2 (gate `protected_paths`) enforcing the same set. If the settings file cannot be written the run **aborts** rather than continuing on layer 2 alone — ADR-0019 calls both layers mandatory.
 
+### 2.5 Exclusion of Operator User Settings (M6, 2026-08-02)
+
+`executor-claude` invokes `claude -p` with `--setting-sources ''` by default — reading **no** settings source (`user`/`project`/`local`). Previously the executor pinned `--setting-sources user`, which meant the operator's personal `~/.claude/settings.json` (allow rules, hooks, etc.) was folded into the unattended loop's effective permissions — an implicit, per-operator-machine grant that the §2.4 injected deny set does not by itself cancel out (deny wins over allow, but the *allow* surface should not depend on whose machine the loop happens to run on in the first place). The env var `HALO_CLAUDE_SETTING_SOURCES` overrides the value for emergency rollback (e.g. `user` restores the previous behavior). No ADR was filed for this change — it is treated as an operational default within the existing ADR-0019/0020 permission-injection design, not a new architectural decision.
+
 ---
 
 ## 3. The Minimal-Privilege Definition of the GitHub PAT (fine-grained)
@@ -145,14 +149,14 @@ Internally obtain `git -C <workdir> diff --numstat` / `git -C <workdir> diff <ba
 | ①※ | **spec_refs existence** | Query whether the task's `spec_refs` (`kg://` node IDs) **actually exist in the knowledge graph** (read-only). Fail if there is a nonexistent reference. * v1.5's `test -f` is abolished | `spec_refs 'kg://...' does not exist in the graph` |
 | ② | **Test files unchanged** | Match the diff's change targets against test-detection patterns (`*.test.*` / `*_test.*` / `test_*.py` / `tests/**`, etc.). Fail if even one is **deleted or changed** (new additions are permitted) | `Test file src/order.test.ts was changed` |
 | ③ | **Zero new escape hatches** | Whether there is no new appearance of `eslint-disable` / `as any` / `@ts-ignore` in the diff's **added lines** (`+`). Keeping existing ones is permitted; additions are forced to zero | `A new @ts-ignore was added in src/api.ts` |
-| ④ | **Coverage threshold unchanged** | Whether the coverage threshold value in a config file is not **lowered** in the diff | `The coverage threshold was modified from 90 → 80` |
+| ④ | **Coverage threshold unchanged** | Extract `key: number` pairs per threshold keyword (`coverage`/`threshold`/`branches`/`statements`/`functions`/`lines`, word-boundary matched) from added/removed lines and compare **per key**; fail only when the same key's added value is lower than its removed value (M3, 2026-08-02) | `Coverage threshold 'lines' was modified from 90 → 80` |
 | ⑤ | **Self-modification prohibition** | Fail if the diff's change targets include `CLAUDE.md` / `PROMPT.md` / `.harness.yml` / test files (§11.1) | `Self-modification of PROMPT.md was detected` |
 | ⑥ | **1500-line diff limit** | Fail if the total of added + deleted lines exceeds **1500** (the fixed value of §11.1). Forcing task splitting | `diff 1720 lines > 1500. Split the task` |
 | ⑦※ | **Graph modification detection** | Whether the hash of graph files **matches the loop start**. Detect direct modification during execution as fail (§5.3) | `A graph file was modified during loop execution` |
 
 - ※ **①/⑦ are deferred to Phase 4 together with the knowledge graph** (D1 §4.2). Until the graph exists there is nothing to query or hash, so the gate emits a pass-with-warning for those two and enforces ②-⑥. The *set of seven* is what is fixed by §11.1; the two graph-dependent members activate when the graph does.
 - ② and ⑤ overlap on test files, but ② protects "modification of tests in general" and ⑤ protects "self-modification (the rule-set of the harness)"—separate invariants. Held independently, they complement each other.
-- The 1500 lines of ⑥ is the fixed value of §11.1. The coverage threshold value of ④ (e.g., 90%) is an initial value (tentative) of §11.2, but the invariant itself of "**prohibiting modification in the lowering direction**" is fixed.
+- The 1500 lines of ⑥ is the fixed value of §11.1. The coverage threshold value of ④ (e.g., 90%) is an initial value (tentative) of §11.2, but the invariant itself of "**prohibiting modification in the lowering direction**" is fixed. Because the comparison is per-key, a threshold line removed wholesale (no matching key on the added side) is not itself a fail — the risk of false positives on legitimate config restructuring is judged to outweigh the miss — but the gate still emits a `diag` warning so the omission is not silent.
 
 ### 4.3 List of Protected Targets (all paths of self-modification prevention)
 

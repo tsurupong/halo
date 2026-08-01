@@ -40,7 +40,8 @@ function probes(fs: MemFs, command: CommandProbe, over: Partial<DoctorProbes> = 
 function healthyFs(): MemFs {
   return memFs({
     files: {
-      '/repo/.harness.yml': 'kinds:\n  code:\n    runtimes: [node-pnpm]\n',
+      '/repo/.harness.yml':
+        'kinds:\n  code:\n    runtimes: [node-pnpm]\n    prompt: .halo/prompts/code.md\n',
       // ADR-0019 層1 の注入 settings。健全な環境では前回 run が生成済みなので、
       // c13 が OK になる状態を「健全」の定義に含める。
       '/repo/.halo/settings/executor-settings.json':
@@ -52,6 +53,7 @@ function healthyFs(): MemFs {
       '/repo/.halo/ports/executor.d',
       '/repo/.halo/ports/gate.d',
       '/repo/.halo/ports/runtime.d',
+      '/repo/.halo/ports/runtime.d/node-pnpm',
       '/repo/.halo/ports/sink.d',
       '/repo/.halo/ports/on-fail.d',
       '/repo/.halo/ports/trigger.d',

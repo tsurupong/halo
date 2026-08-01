@@ -68,9 +68,7 @@ Interaction with graceful shutdown (§5): the SIGTERM of `kill` is now caught by
 
 ### 2.4 Configuration
 
-Profile env keys, resolved in `packages/core/src/config.ts` alongside existing keys (CLI > profile env > defaults):
-
-> **Not implemented as specified.** `halo watchdog` is a standalone one-shot command and does not load a profile, so it reads these keys from the **process environment only** — `config.ts` has no `WATCHDOG_*` resolution and a value written into `.halo/profiles/<name>.env` has no effect. Export them in the scheduled command until this is wired.
+Profile env keys, resolved in `packages/cli/src/commands/watchdog.ts` (M4, 2026-08-02): **process env > `--profile`'s `.halo/profiles/<name>.env` > defaults**. `resolveWatchdogEnv` reads the profile file with the same `parseEnvFile` used by `status.ts`'s `resolveProfileLimits`, merges it under the process environment, and passes the result to `envInt`. A missing `--profile` or a missing/unreadable profile file both fall back to defaults without failing the run — the watchdog must never abort on a profile-resolution error.
 
 | Key | Default | Meaning |
 |-----|---------|---------|

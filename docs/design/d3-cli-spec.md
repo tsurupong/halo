@@ -158,7 +158,7 @@ Output items (human-readable mode): presence of STOP, flock hold state (whether 
 | `--action <report\|kill\|skip>` | `report` | What to do on a stale verdict. `report` logs only; `kill` terminates the run's process group; `skip` also quarantines the offending task. The **safe default is deliberate** (誤殺より見逃し) — recovery is opted into |
 | `--profile <name>` | (none) | Profile-scoped lock file to supervise (`defaultLockPath(tmpdir, profile)`). Omitted = the unscoped lock |
 
-Timeouts come from the **process environment only** (`WATCHDOG_TIMEOUT_SEC` / `WATCHDOG_EXECUTE_TIMEOUT_SEC` / `WATCHDOG_KILL_GRACE_SEC`); this command does not load a profile (D9 §2.4).
+Timeouts (`WATCHDOG_TIMEOUT_SEC` / `WATCHDOG_EXECUTE_TIMEOUT_SEC` / `WATCHDOG_KILL_GRACE_SEC`) resolve as **process env > `--profile`'s `.halo/profiles/<name>.env` > defaults**; a missing `--profile` or a missing/unreadable profile file both fall back to defaults (D9 §2.4).
 
 **`halo watchdog install` / `uninstall`** — register the above invocation with the host scheduler (schtasks / systemd / cron / launchd) through the same abstraction `halo trigger install` uses.
 
@@ -253,7 +253,7 @@ Since `.halo/` is not committed, the following is appended (not appended if it a
 | 5 | **Presence and executability of `claude`** | The presence of the `claude` binary that the executor adapter invokes and its `--version` response | FAIL |
 | 6 | **Presence of `git` and working tree** | Presence of the `git` binary, whether the target is a repository, `user.name`/`user.email` settings | FAIL |
 | 7 | **flock / STOP residue** | Residue of `$TMPDIR/halo.lock` (an orphan lock after a crash), the unintended persistence of `.halo/STOP` | WARN |
-| 8 | **Placement constraint (WSL2)** | Whether `.halo/` and the worktree destination (`$TMPDIR`) are on the ext4 side (not under `/mnt/c/`) (the placement constraint of D1 §1.7) | WARN |
+| 8 | **Placement constraint (WSL2)** | Whether `.halo/` and the worktree destination (`$TMPDIR`) are on the ext4 side (not under any drvfs mount `/mnt/<drive>/`) (the placement constraint of D1 §1.7) | WARN |
 | 9 | **Disk space** | Free space sufficient for worktree expansion (a prior check of the heavy preflight) | WARN |
 | 10 | **Required commands** | `node` / `git` / `claude` are present on `PATH` (D10 §4). Runs only when the probe is injected — the default CLI wiring always injects it | FAIL |
 | 11 | **Scheduler backend** | Which of `schtasks` / `systemd` / `cron` / `launchd` was detected, or `HALO_SCHEDULER` if pinned (D10 §3.2). Same probe-injection rule as 10 | FAIL (none detected) |

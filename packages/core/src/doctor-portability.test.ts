@@ -126,6 +126,17 @@ describe('c8 配置制約の WSL 条件化', () => {
     expect(checkPlacement(false).status).toBe('WARN');
     expect(checkPlacement(false, false).status).toBe('OK');
   });
+  test('純関数: /mnt/d も /mnt/c と同様に WARN 判定される (drvfs 全般)', async () => {
+    const report = await runAll(
+      baseProbes({ cwd: '/mnt/d/repo', onExt4: async () => false, isWsl: async () => true }),
+    );
+    expect(findCheck(report.checks, 8)?.status).toBe('WARN');
+  });
+  test('純関数: WARN の detail に実測パスを含む', () => {
+    const result = checkPlacement(false, true, '/mnt/d/repo');
+    expect(result.status).toBe('WARN');
+    expect(result.detail).toContain('/mnt/d/repo');
+  });
 });
 
 describe('後方互換: probe 未注入', () => {
@@ -137,6 +148,46 @@ describe('後方互換: probe 未注入', () => {
     expect(findCheck(report.checks, 10)).toBeUndefined();
     expect(findCheck(report.checks, 11)).toBeUndefined();
     expect(findCheck(report.checks, 8)?.status).toBe('WARN');
+  });
+});
+
+describe('c3 .harness.yml 検査の実体化 (M4)', () => {
+  test('不正な YAML (kinds が空) → FAIL、理由を detail に含む', async () => {
+    const fs = memFs({
+      files: {
+        '/repo/.harness.yml': 'kinds:\n',
+      },
+    });
+    const report = await runAll(baseProbes({ fs }));
+    const c3 = findCheck(report.checks, 3);
+    expect(c3?.status).toBe('FAIL');
+    expect(c3?.detail).toContain('kinds');
+  });
+
+  test('kinds[].runtimes が runtime.d/ に不在 → FAIL', async () => {
+    const fs = memFs({
+      files: {
+        '/repo/.harness.yml':
+          'kinds:\n  code:\n    runtimes: [node-pnpm]\n    prompt: .halo/prompts/code.md\n',
+      },
+    });
+    const report = await runAll(baseProbes({ fs }));
+    const c3 = findCheck(report.checks, 3);
+    expect(c3?.status).toBe('FAIL');
+    expect(c3?.detail).toContain('node-pnpm');
+  });
+
+  test('正常な .harness.yml + runtime 実在 → OK', async () => {
+    const fs = memFs({
+      files: {
+        '/repo/.harness.yml':
+          'kinds:\n  code:\n    runtimes: [node-pnpm]\n    prompt: .halo/prompts/code.md\n',
+      },
+      dirs: ['/repo/.halo/ports/runtime.d/node-pnpm'],
+    });
+    const report = await runAll(baseProbes({ fs }));
+    const c3 = findCheck(report.checks, 3);
+    expect(c3?.status).toBe('OK');
   });
 });
 

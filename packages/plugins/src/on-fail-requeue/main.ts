@@ -38,23 +38,8 @@ if (!TRANSIENT_RE.test(reason)) {
   process.exit(0);
 }
 
-// 試行カウンタを +1 して書き戻す(無ければ 0 起点)。
-const countFile = join(requeueDir, `${taskId}.count`);
-let count = 0;
-if (existsSync(countFile)) {
-  const raw = readFileSync(countFile, 'utf8').trim();
-  count = /^[0-9]+$/.test(raw) ? Number(raw) : 0;
-}
-count += 1;
-try {
-  mkdirSync(requeueDir, { recursive: true });
-  writeFileSync(countFile, `${count}\n`);
-} catch {
-  diag(`on-fail-requeue: カウンタ書き込み失敗: ${countFile}`);
-  process.exit(0);
-}
-
 // タスクファイルを tasks 配下(queue/ 以外に退避されている場合も含む)から探す。
+// カウンタ更新より先に行う — 不在なら孤児カウンタを残さず抜ける(N9)。
 let taskFile = '';
 const subdirs = existsSync(tasksDir)
   ? readdirSync(tasksDir, { withFileTypes: true })
@@ -74,6 +59,22 @@ if (taskFile === '' && existsSync(join(tasksDir, `${taskId}.md`))) {
 }
 if (taskFile === '') {
   diag(`on-fail-requeue: タスクファイル不在のためスキップ: ${taskId}`);
+  process.exit(0);
+}
+
+// 試行カウンタを +1 して書き戻す(無ければ 0 起点)。
+const countFile = join(requeueDir, `${taskId}.count`);
+let count = 0;
+if (existsSync(countFile)) {
+  const raw = readFileSync(countFile, 'utf8').trim();
+  count = /^[0-9]+$/.test(raw) ? Number(raw) : 0;
+}
+count += 1;
+try {
+  mkdirSync(requeueDir, { recursive: true });
+  writeFileSync(countFile, `${count}\n`);
+} catch {
+  diag(`on-fail-requeue: カウンタ書き込み失敗: ${countFile}`);
   process.exit(0);
 }
 

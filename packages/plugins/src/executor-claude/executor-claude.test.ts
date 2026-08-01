@@ -242,7 +242,7 @@ describe('executor-claude contract', () => {
     expect(args).not.toContain('--settings');
   });
 
-  it('passes --setting-sources user and --output-format json (S2/S3)', () => {
+  it('passes --setting-sources with empty value by default and --output-format json (S2/S3/M6)', () => {
     const { stubBinDir, workdir } = setupStubBin();
     const argsFile = join(dirname(stubBinDir), 'args-s23');
     const input = JSON.stringify({
@@ -252,10 +252,30 @@ describe('executor-claude contract', () => {
     });
     runLauncher(input, { ...baseEnv(stubBinDir), CLAUDE_ARGS_FILE: argsFile });
     const args = readFileSync(argsFile, 'utf8').split('\n');
-    expect(args).toContain('--setting-sources');
-    expect(args).toContain('user');
+    const idx = args.indexOf('--setting-sources');
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(args[idx + 1]).toBe('');
     expect(args).toContain('--output-format');
     expect(args).toContain('json');
+  });
+
+  it('M6: HALO_CLAUDE_SETTING_SOURCES で --setting-sources の値を上書きできる', () => {
+    const { stubBinDir, workdir } = setupStubBin();
+    const argsFile = join(dirname(stubBinDir), 'args-m6-override');
+    const input = JSON.stringify({
+      prompt: 'x',
+      workdir,
+      budget: { max_turns: 40, timeout_sec: 900 },
+    });
+    runLauncher(input, {
+      ...baseEnv(stubBinDir),
+      CLAUDE_ARGS_FILE: argsFile,
+      HALO_CLAUDE_SETTING_SOURCES: 'user',
+    });
+    const args = readFileSync(argsFile, 'utf8').split('\n');
+    const idx = args.indexOf('--setting-sources');
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(args[idx + 1]).toBe('user');
   });
 
   it('extracts total_cost_usd from a JSON envelope into cost.usd_estimate (S3)', () => {

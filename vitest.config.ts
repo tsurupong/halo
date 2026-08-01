@@ -8,6 +8,7 @@ export default defineConfig({
     // Glob is written so it resolves whether vitest runs from the repo root
     // (`pnpm test`) or from a package dir (`pnpm -r test`).
     include: ['**/src/**/*.test.ts'],
+    exclude: ['**/node_modules/**', '**/.claude/**'],
     passWithNoTests: true,
     coverage: {
       provider: 'v8',

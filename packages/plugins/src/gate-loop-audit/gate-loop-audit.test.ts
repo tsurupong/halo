@@ -121,6 +121,64 @@ describe('gate-loop-audit (launcher contract)', () => {
     expect(out.gate).toBe('50-loop-audit');
   });
 
+  it('coverage threshold 80->90 (up) -> pass (check 4, キー単位比較)', () => {
+    const wt = newRepo(makeTmpRoot());
+    // newRepo の初期コミットは lines:90 — まず lines:80 で上書きコミットし、
+    // その後 90 へ戻す変更(上げ改変)を HEAD 差分として検査させる。
+    writeFileSync(join(wt, 'vitest.config.txt'), 'coverage:\n  lines: 80\n');
+    git(wt, ['add', '-A']);
+    git(wt, ['commit', '-qm', 'lower to 80']);
+    writeFileSync(join(wt, 'vitest.config.txt'), 'coverage:\n  lines: 90\n');
+    const { code } = runAudit(wt);
+    expect(code).toBe(0);
+  });
+
+  it('別キーどうしの増減は fail にしない (check 4, キー単位比較)', () => {
+    const wt = newRepo(makeTmpRoot());
+    writeFileSync(join(wt, 'vitest.config.txt'), 'coverage:\n  branches: 90\n  functions: 70\n');
+    git(wt, ['add', '-A']);
+    git(wt, ['commit', '-qm', 'add branches/functions']);
+    // branches を削除し、別キー(functions)を増やす — 同一キーの下方改変ではない。
+    writeFileSync(join(wt, 'vitest.config.txt'), 'coverage:\n  functions: 95\n');
+    const { code } = runAudit(wt);
+    expect(code).toBe(0);
+  });
+
+  it('キー内の数値(v8 等)を閾値として誤読しない (check 4)', () => {
+    const wt = newRepo(makeTmpRoot());
+    writeFileSync(join(wt, 'vitest.config.txt'), "coverage:\n  provider: 'v8'\n  lines: 90\n");
+    git(wt, ['add', '-A']);
+    git(wt, ['commit', '-qm', 'add provider line']);
+    writeFileSync(join(wt, 'vitest.config.txt'), "coverage:\n  provider: 'v9'\n  lines: 90\n");
+    const { code } = runAudit(wt);
+    expect(code).toBe(0);
+  });
+
+  it('outlines のような部分一致キーでは発火しない (check 4, 単語境界)', () => {
+    const wt = newRepo(makeTmpRoot());
+    writeFileSync(join(wt, 'vitest.config.txt'), 'coverage:\n  outlines: 5\n');
+    git(wt, ['add', '-A']);
+    git(wt, ['commit', '-qm', 'add outlines line']);
+    writeFileSync(join(wt, 'vitest.config.txt'), 'coverage:\n  outlines: 1\n');
+    const { code } = runAudit(wt);
+    expect(code).toBe(0);
+  });
+
+  it('outlines 混在でも本物の lines の下方改変は見逃さない (check 4, 単語境界)', () => {
+    const wt = newRepo(makeTmpRoot());
+    // lines も outlines も変更行にし、outlines を lines より後に置く。単語境界が無いと
+    // extractThresholds が outlines 行からも 'lines' キーを誤抽出し、Map の後勝ちで
+    // lines:90->80 の下方改変が outlines:5->8 (非減少) に上書きされて見逃される。
+    writeFileSync(join(wt, 'vitest.config.txt'), 'coverage:\n  lines: 90\n  outlines: 5\n');
+    git(wt, ['add', '-A']);
+    git(wt, ['commit', '-qm', 'add lines + outlines']);
+    writeFileSync(join(wt, 'vitest.config.txt'), 'coverage:\n  lines: 80\n  outlines: 8\n');
+    const { code, stdout } = runAudit(wt);
+    expect(code).toBe(2);
+    const out = JSON.parse(stdout) as { reason: string };
+    expect(out.reason).toContain('lines');
+  });
+
   it('PROMPT.md self-modification -> fail (check 5)', () => {
     const wt = newRepo(makeTmpRoot());
     writeFileSync(join(wt, 'PROMPT.md'), '# prompt tampered\n');

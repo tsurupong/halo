@@ -15,6 +15,8 @@ import {
   executorSettingsPath,
   type ExecutorSettingsDrift,
 } from './executor-settings.js';
+import { parseHarnessYaml } from './harness.js';
+import { validateHarnessYml, ConfigError } from './config.js';
 
 export type CheckStatus = 'OK' | 'WARN' | 'FAIL';
 
@@ -218,16 +220,17 @@ export function checkLockStop(orphanLock: boolean, stopPresent: boolean): CheckR
   return { id: 7, title: 'flock / STOP 残留', status: 'WARN', detail: issues.join(', ') };
 }
 
-export function checkPlacement(onExt4: boolean, isWsl = true): CheckResult {
+export function checkPlacement(onExt4: boolean, isWsl = true, detectedPath?: string): CheckResult {
   // ext4 配置は WSL 固有の制約。WSL 以外ではスキップ扱い (fail にしない, D10 §4)。
   if (!isWsl)
     return { id: 8, title: '配置制約 (WSL2)', status: 'OK', detail: 'WSL 以外のためスキップ' };
   if (onExt4) return { id: 8, title: '配置制約 (WSL2)', status: 'OK', detail: 'ext4 側に配置' };
+  const where = detectedPath ?? '/mnt/<drive>';
   return {
     id: 8,
     title: '配置制約 (WSL2)',
     status: 'WARN',
-    detail: '/mnt/c 配下の可能性 — ext4 側 (~) への配置を推奨',
+    detail: `${where} は drvfs (/mnt/<drive>) 配下の可能性 — ext4 側 (~) への配置を推奨`,
   };
 }
 
@@ -557,15 +560,32 @@ export async function runAll(probes: DoctorProbes): Promise<DoctorReport> {
   if (!harnessPresent) missing.push('.harness.yml');
   const c2 = checkSkeleton(missing);
 
+  // M4: 正規表現の粗い kinds: 検査を捨て、契約検証(parseHarnessYaml + validateHarnessYml)
+  // で YAML の妥当性を判定し、続けて kinds[].runtimes の各名称が runtime.d/ に実在するかを
+  // 照合する。loadHarnessYml は throw 型で runAll の集計方針(全検査を実行してから集める)
+  // に合わないため使わない。
   let harnessValid = false;
   let harnessReason: string | undefined;
   if (harnessPresent) {
     try {
       const body = await fs.readFile(join(cwd, '.harness.yml'));
-      harnessValid = /kinds\s*:/.test(body);
-      if (!harnessValid) harnessReason = 'kinds: セクションがありません';
+      const parsed = parseHarnessYaml(body);
+      const harness = validateHarnessYml(parsed);
+      const missingRuntimes: string[] = [];
+      for (const kind of Object.values(harness.kinds)) {
+        for (const runtime of kind.runtimes) {
+          if (!(await fs.isDirectory(join(haloDir, 'ports', 'runtime.d', runtime)))) {
+            missingRuntimes.push(runtime);
+          }
+        }
+      }
+      if (missingRuntimes.length > 0) {
+        harnessReason = `未実在の runtime: ${[...new Set(missingRuntimes)].join(', ')}`;
+      } else {
+        harnessValid = true;
+      }
     } catch (err) {
-      harnessReason = (err as Error).message;
+      harnessReason = err instanceof ConfigError ? err.message : (err as Error).message;
     }
   }
   const c3 = checkHarnessValid(harnessPresent, harnessValid, harnessReason);
@@ -577,7 +597,7 @@ export async function runAll(probes: DoctorProbes): Promise<DoctorReport> {
   const stopPresent = await fs.exists(join(haloDir, 'STOP'));
   const c7 = checkLockStop(await probes.orphanLock(), stopPresent);
   // isWsl 未注入時は従来どおり無条件で ext4 検査 (後方互換, D10 §4)。
-  const c8 = checkPlacement(await probes.onExt4(), probes.isWsl ? await probes.isWsl() : true);
+  const c8 = checkPlacement(await probes.onExt4(), probes.isWsl ? await probes.isWsl() : true, cwd);
   const c9 = checkDisk(await probes.diskOk());
 
   const enabledPlugins = await listEnabledPlugins(haloDir, fs);
