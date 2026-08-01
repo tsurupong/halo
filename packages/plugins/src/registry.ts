@@ -20,6 +20,15 @@ export interface BundledPlugin {
   env?: Record<string, string>;
 }
 
+/**
+ * `halo project init` が既定で有効化するプラグイン名の集合 (ADR-0027)。
+ * core の失敗理由再注入 (`lastFailure`, loop.ts, D2 §2.4) はプロセス内 in-memory のため、
+ * trigger が run を都度起動する実運用ではプロセスを跨げない。`.halo/failure-catalog.jsonl`
+ * を読む context-recent-failures が唯一のプロセス跨ぎ経路であり、on-fail-record と対で
+ * 有効化しないと失敗学習ループ (要件§3.2 原則7) が恒常化しない。
+ */
+export const DEFAULT_ENABLED_PLUGINS = ['on-fail-record', 'context-recent-failures'] as const;
+
 export const BUNDLED_PLUGINS: BundledPlugin[] = [
   {
     name: 'context-recent-failures',

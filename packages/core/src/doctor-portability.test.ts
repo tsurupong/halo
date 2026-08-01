@@ -129,10 +129,11 @@ describe('c8 配置制約の WSL 条件化', () => {
 });
 
 describe('後方互換: probe 未注入', () => {
-  test('c10/c11 は実行されず c1-c9/c12/c13 の11検査のまま、c8 は無条件実行', async () => {
+  test('c10/c11 は実行されず c1-c9/c12/c13/c16 の12検査のまま、c8 は無条件実行', async () => {
     const report = await runAll(baseProbes({ onExt4: async () => false }));
-    // c13 (注入 deny 設定, ADR-0019) は probe 注入に依存しないので常に実行される。
-    expect(report.checks).toHaveLength(11);
+    // c13 (注入 deny 設定, ADR-0019) / c16 (失敗フィードバックの対称性, ADR-0027) は
+    // probe 注入に依存しないので常に実行される。
+    expect(report.checks).toHaveLength(12);
     expect(findCheck(report.checks, 10)).toBeUndefined();
     expect(findCheck(report.checks, 11)).toBeUndefined();
     expect(findCheck(report.checks, 8)?.status).toBe('WARN');

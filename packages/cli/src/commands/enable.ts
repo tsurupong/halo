@@ -21,7 +21,7 @@ export interface EnableDeps {
 }
 
 /** `require.resolve('@tsurupong/halo-plugins/package.json')` 相当 (D11 §3 追記)。 */
-function defaultResolvePluginsPackageJson(): string {
+export function defaultResolvePluginsPackageJson(): string {
   const require = createRequire(import.meta.url);
   return require.resolve('@tsurupong/halo-plugins/package.json');
 }
@@ -42,6 +42,31 @@ function resolveEnv(
     resolved[key] = value.replaceAll('{PORTS_DIR}', portsDir);
   }
   return resolved;
+}
+
+/**
+ * 同梱プラグインの manifest を実行時解決した dist の絶対パスへ書き換える (entry契約化)。
+ * `halo enable` と `halo project init`(既定集合の生成)の双方から共有される (ADR-0027)。
+ */
+export function materializeManifest(
+  plugin: BundledPlugin,
+  distRoot: string,
+  portsDir: string,
+): PluginManifest {
+  const resolvedEnv = resolveEnv(plugin.env, portsDir);
+  const absolutize = (rel: string): string => (isAbsolute(rel) ? rel : join(distRoot, rel));
+  return {
+    ...plugin.manifest,
+    entry: absolutize(plugin.manifest.entry),
+    ...(plugin.manifest.aux !== undefined
+      ? {
+          aux: Object.fromEntries(
+            Object.entries(plugin.manifest.aux).map(([k, v]) => [k, absolutize(v)]),
+          ),
+        }
+      : {}),
+    ...(resolvedEnv !== undefined ? { env: resolvedEnv } : {}),
+  };
 }
 
 export async function enableCommand(
@@ -71,20 +96,7 @@ export async function enableCommand(
 
   await deps.fs.mkdir(targetDir, { recursive: true });
 
-  const resolvedEnv = resolveEnv(plugin.env, portsDir);
-  const absolutize = (rel: string): string => (isAbsolute(rel) ? rel : join(distRoot, rel));
-  const manifest: PluginManifest = {
-    ...plugin.manifest,
-    entry: absolutize(plugin.manifest.entry),
-    ...(plugin.manifest.aux !== undefined
-      ? {
-          aux: Object.fromEntries(
-            Object.entries(plugin.manifest.aux).map(([k, v]) => [k, absolutize(v)]),
-          ),
-        }
-      : {}),
-    ...(resolvedEnv !== undefined ? { env: resolvedEnv } : {}),
-  };
+  const manifest = materializeManifest(plugin, distRoot, portsDir);
   await deps.fs.writeFile(`${targetDir}/plugin.json`, `${JSON.stringify(manifest, null, 2)}\n`);
 
   io.streams.err(`enabled ${plugin.name} -> ${targetDir}\n`);

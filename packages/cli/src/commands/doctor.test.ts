@@ -72,7 +72,8 @@ describe('doctor (T28)', () => {
     expect(code).toBe(EXIT.OK);
     const out = JSON.parse(cap.out());
     expect(out.summary.fail).toBe(0);
-    expect(out.checks).toHaveLength(11);
+    // c16 (失敗フィードバックの対称性, ADR-0027) 追加分で 12 件になる。
+    expect(out.checks).toHaveLength(12);
   });
 
   test('injected deny settings missing a D4 §2.2 rule → FAIL (ADR-0019 drift)', async () => {
@@ -139,6 +140,62 @@ describe('doctor (T28)', () => {
     expect(code).toBe(EXIT.RUNTIME);
     const skeleton = JSON.parse(cap.out()).checks.find((c: { id: number }) => c.id === 2);
     expect(skeleton.status).toBe('FAIL');
+  });
+
+  test('c16 (ADR-0027): on-fail-record 有効 + context-recent-failures 無効 → WARN', async () => {
+    const fs = healthyFs();
+    await fs.writeFile(
+      '/repo/.halo/ports/on-fail.d/on-fail-record/plugin.json',
+      JSON.stringify({ name: '@halo/plugin-on-fail-record', entry: '/abs/on-fail-record/main.js' }),
+    );
+    const cap = captureStreams();
+    const code = await doctorCommand(parseArgs([], {}), io(cap, true), {
+      fs,
+      probes: probes(fs, healthyCommand),
+    });
+    expect(code).toBe(EXIT.OK); // WARN は exit 0 のまま (c14/c15 と同基準)
+    const c16 = JSON.parse(cap.out()).checks.find((c: { id: number }) => c.id === 16);
+    expect(c16.status).toBe('WARN');
+    expect(c16.detail).toContain('context-recent-failures');
+  });
+
+  test('c16 (ADR-0027): record + context 両方有効 → OK', async () => {
+    const fs = healthyFs();
+    await fs.writeFile(
+      '/repo/.halo/ports/on-fail.d/on-fail-record/plugin.json',
+      JSON.stringify({ name: '@halo/plugin-on-fail-record', entry: '/abs/on-fail-record/main.js' }),
+    );
+    await fs.writeFile(
+      '/repo/.halo/ports/context.d/context-recent-failures/plugin.json',
+      JSON.stringify({
+        name: '@halo/plugin-context-recent-failures',
+        entry: '/abs/context-recent-failures/main.js',
+      }),
+    );
+    const cap = captureStreams();
+    const code = await doctorCommand(parseArgs([], {}), io(cap, true), {
+      fs,
+      probes: probes(fs, healthyCommand),
+    });
+    expect(code).toBe(EXIT.OK);
+    const c16 = JSON.parse(cap.out()).checks.find((c: { id: number }) => c.id === 16);
+    expect(c16.status).toBe('OK');
+  });
+
+  test('c12 (旧ランチャー設定) は c16 追加後も非退行: .sh 残存を引き続き検出する', async () => {
+    const fs = healthyFs();
+    await fs.writeFile(
+      '/repo/.halo/ports/trigger.d/trigger-polling/plugin.json',
+      JSON.stringify({ entry: './trigger-polling/fire.sh' }),
+    );
+    const cap = captureStreams();
+    await doctorCommand(parseArgs([], {}), io(cap, true), {
+      fs,
+      probes: probes(fs, healthyCommand),
+    });
+    const c12 = JSON.parse(cap.out()).checks.find((c: { id: number }) => c.id === 12);
+    expect(c12.status).toBe('WARN');
+    expect(c12.detail).toContain('trigger-polling');
   });
 
   test('--fix repairs missing skeleton before re-checking', async () => {

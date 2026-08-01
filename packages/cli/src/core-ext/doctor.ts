@@ -17,6 +17,7 @@ export {
   checkPlacement,
   checkDisk,
   checkLegacyLauncherConfig,
+  checkFailureFeedbackPair,
   aggregate,
   runAll,
 } from '@tsurupong/halo-core';

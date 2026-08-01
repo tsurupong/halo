@@ -110,7 +110,9 @@ Rules:
   `dist/` — no launcher file, no `chmod`. The bundled plugin metadata lives in
   `packages/plugins/src/registry.ts` (`BUNDLED_PLUGINS`), one entry per
   enable-able plugin, kept in sync with the `plugins/**/plugin.json` files by a
-  drift test.
+  drift test. `project init` uses the same materialize step to pre-enable
+  `DEFAULT_ENABLED_PLUGINS` (`on-fail-record` + `context-recent-failures`) so
+  every new project starts with failure feedback wired up (ADR-0027, D3 §3.2a).
 
 ## 4. Per-plugin migration notes
 

@@ -2,9 +2,11 @@
 // 認証・パス整合) は Probes シームから注入してテスト可能にする。CLI は集計結果を
 // 終了コードへ写像するだけ (D3 §5.2: FAIL あり=1 / WARN のみ=0)。
 //
-// 検査は常時実行の c1-c9 / c12 / c13 に加え、probe を注入した場合のみ走る c10 (必須
-// コマンド, D10 §4) / c11 (スケジューラバックエンド, D10 §3.2) / c14 (watchdog heartbeat,
-// ADR-0023) がある。既定の CLI 配線 (deps.ts) は全て注入するので、実運用では 14 検査になる。
+// 検査は常時実行の c1-c9 / c12 / c13 / c16 (失敗学習ペア, ADR-0027) に加え、probe を
+// 注入した場合のみ走る c10 (必須コマンド, D10 §4) / c11 (スケジューラバックエンド,
+// D10 §3.2) / c14 (watchdog heartbeat, ADR-0023) / c15 (幽霊 claim, ADR-0025) がある。
+// 既定の CLI 配線 (deps.ts) は c10/c11/c14 を注入し c15 は未配線のため、実運用では
+// 15 検査になる。
 import type { CliFs } from './fs.js';
 import { PORT_DIRS } from './scaffold.js';
 import { resolveBinPath, listTriggers, type TriggerContext } from './triggers.js';
@@ -251,6 +253,48 @@ export function checkRequiredCommands(missing: string[]): CheckResult {
 }
 
 /** 旧 `.sh` ランチャー構成の残存検出 (entry契約化 Task 6 Step D)。 */
+/** `.halo/ports/<port>.d/<name>/` 配下で有効化中と見なせるディレクトリ1件分の事実。 */
+export interface EnabledPluginEntry {
+  port: string;
+  name: string;
+  /** そのプラグインディレクトリ直下のファイル/ディレクトリ名一覧。 */
+  entries: string[];
+}
+
+/**
+ * 有効化中プラグインの一覧を走査する (c12 の旧ランチャー検査 / c16 の失敗フィードバック
+ * ペア検査が共有する)。個別プラグインの `readdir`/`isDirectory` 失敗は「未有効化」として
+ * 無視し、走査自体は継続する。
+ */
+export async function listEnabledPlugins(
+  haloDir: string,
+  fs: CliFs,
+): Promise<EnabledPluginEntry[]> {
+  const result: EnabledPluginEntry[] = [];
+  for (const port of PORT_DIRS) {
+    const portDir = join(haloDir, 'ports', port);
+    let names: string[];
+    try {
+      names = await fs.readdir(portDir);
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      if (name.startsWith('.')) continue;
+      const pluginDir = join(portDir, name);
+      if (!(await fs.isDirectory(pluginDir))) continue;
+      let entries: string[];
+      try {
+        entries = await fs.readdir(pluginDir);
+      } catch {
+        continue;
+      }
+      result.push({ port, name, entries });
+    }
+  }
+  return result;
+}
+
 export function checkLegacyLauncherConfig(offenders: string[]): CheckResult {
   if (offenders.length === 0)
     return { id: 12, title: '旧ランチャー設定', status: 'OK', detail: '.sh 参照なし' };
@@ -379,6 +423,40 @@ export function checkGhostClaims(entries: GhostClaimEntry[], staleAfterSec = 360
   };
 }
 
+/** c16 に渡す事実: on-fail-record / context-recent-failures それぞれの有効化有無。 */
+export interface FailureFeedbackState {
+  record: boolean;
+  context: boolean;
+}
+
+/**
+ * c16: 失敗フィードバック経路の対称性検査 (ADR-0027)。core の失敗理由再注入
+ * (`lastFailure`, loop.ts, D2 §2.4) はプロセス内 in-memory のため、trigger が run を
+ * 都度起動する実運用ではプロセスを跨げない。on-fail-record が書く
+ * `.halo/failure-catalog.jsonl` を context-recent-failures が読むのが唯一のプロセス跨ぎ
+ * 経路であり、record のみ有効で context が無効だと記録だけして再注入されず、同一失敗を
+ * 反復する (2026-08-01 実 GitHub E2E で実証)。
+ *
+ * WARN 止まり: 恒久的に context-recent-failures を使わない構成もあり得るため FAIL にはしない
+ * (c14/c15 と同じ基準)。
+ */
+export function checkFailureFeedbackPair(state: FailureFeedbackState): CheckResult {
+  const id = 16;
+  const title = '失敗フィードバックの対称性';
+  if (state.record && !state.context) {
+    return {
+      id,
+      title,
+      status: 'WARN',
+      detail:
+        'on-fail-record は有効ですが context-recent-failures が無効です — ' +
+        '記録した失敗理由がプロセス跨ぎで再注入されません。' +
+        "'halo enable context-recent-failures' で有効化してください",
+    };
+  }
+  return { id, title, status: 'OK', detail: '記録/再注入のペアに矛盾なし' };
+}
+
 export function checkSchedulerBackend(backend: SchedulerBackend): CheckResult {
   if (backend === 'none')
     return {
@@ -502,44 +580,37 @@ export async function runAll(probes: DoctorProbes): Promise<DoctorReport> {
   const c8 = checkPlacement(await probes.onExt4(), probes.isWsl ? await probes.isWsl() : true);
   const c9 = checkDisk(await probes.diskOk());
 
+  const enabledPlugins = await listEnabledPlugins(haloDir, fs);
+
   const legacyOffenders: string[] = [];
-  for (const port of PORT_DIRS) {
-    const portDir = join(haloDir, 'ports', port);
-    let names: string[];
-    try {
-      names = await fs.readdir(portDir);
-    } catch {
+  for (const { port, name, entries } of enabledPlugins) {
+    if (entries.some((e) => e.endsWith('.sh'))) {
+      legacyOffenders.push(`${port}/${name} (.sh ファイル残存)`);
       continue;
     }
-    for (const name of names) {
-      if (name.startsWith('.')) continue;
-      const pluginDir = join(portDir, name);
-      if (!(await fs.isDirectory(pluginDir))) continue;
-      let entries: string[];
-      try {
-        entries = await fs.readdir(pluginDir);
-      } catch {
-        continue;
+    if (!entries.includes('plugin.json')) continue;
+    try {
+      const content = await fs.readFile(join(haloDir, 'ports', port, name, 'plugin.json'));
+      if (content.includes('.sh')) {
+        legacyOffenders.push(`${port}/${name} (plugin.json が .sh を参照)`);
       }
-      if (entries.some((e) => e.endsWith('.sh'))) {
-        legacyOffenders.push(`${port}/${name} (.sh ファイル残存)`);
-        continue;
-      }
-      if (!entries.includes('plugin.json')) continue;
-      try {
-        const content = await fs.readFile(join(pluginDir, 'plugin.json'));
-        if (content.includes('.sh')) {
-          legacyOffenders.push(`${port}/${name} (plugin.json が .sh を参照)`);
-        }
-      } catch {
-        // plugin.json 読み取り失敗はここでは無視 (他検査の管轄外)。
-      }
+    } catch {
+      // plugin.json 読み取り失敗はここでは無視 (他検査の管轄外)。
     }
   }
   const c12 = checkLegacyLauncherConfig(legacyOffenders);
   const c13 = checkExecutorSettings(await readExecutorSettingsState(haloDir, fs));
 
-  const checks = [c1, c2, c3, c4, c5, c6, c7, c8, c9, c12, c13];
+  const hasEnabledPlugin = (port: string, name: string): boolean =>
+    enabledPlugins.some(
+      (p) => p.port === port && p.name === name && p.entries.includes('plugin.json'),
+    );
+  const c16 = checkFailureFeedbackPair({
+    record: hasEnabledPlugin('on-fail.d', 'on-fail-record'),
+    context: hasEnabledPlugin('context.d', 'context-recent-failures'),
+  });
+
+  const checks = [c1, c2, c3, c4, c5, c6, c7, c8, c9, c12, c13, c16];
 
   if (probes.commandExists) {
     const absent: string[] = [];

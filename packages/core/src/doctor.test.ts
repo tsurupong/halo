@@ -10,6 +10,7 @@ import {
   checkPlacement,
   checkDisk,
   checkLegacyLauncherConfig,
+  checkFailureFeedbackPair,
   aggregate,
 } from './doctor.js';
 
@@ -65,5 +66,17 @@ describe('doctor pure checks (T28)', () => {
     const warn = checkLegacyLauncherConfig(['trigger.d/trigger-polling (.sh ファイル残存)']);
     expect(warn.status).toBe('WARN');
     expect(warn.detail).toContain('trigger-polling');
+  });
+  test('c16 失敗フィードバックの対称性 (ADR-0027): record有効/context無効 → WARN', () => {
+    const warn = checkFailureFeedbackPair({ record: true, context: false });
+    expect(warn.status).toBe('WARN');
+    expect(warn.detail).toContain('context-recent-failures');
+  });
+  test('c16: record/context 両方有効 → OK', () => {
+    expect(checkFailureFeedbackPair({ record: true, context: true }).status).toBe('OK');
+  });
+  test('c16: record無効(context無効/有効いずれも) → OK', () => {
+    expect(checkFailureFeedbackPair({ record: false, context: false }).status).toBe('OK');
+    expect(checkFailureFeedbackPair({ record: false, context: true }).status).toBe('OK');
   });
 });
