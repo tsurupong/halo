@@ -253,7 +253,7 @@ Since `.halo/` is not committed, the following is appended (not appended if it a
 | 5 | **Presence and executability of `claude`** | The presence of the `claude` binary that the executor adapter invokes and its `--version` response | FAIL |
 | 6 | **Presence of `git` and working tree** | Presence of the `git` binary, whether the target is a repository, `user.name`/`user.email` settings | FAIL |
 | 7 | **flock / STOP residue** | Residue of `$TMPDIR/halo.lock` (an orphan lock after a crash), the unintended persistence of `.halo/STOP` | WARN |
-| 8 | **Placement constraint (WSL2)** | Whether `.halo/` and the worktree destination (`$TMPDIR`) are on the ext4 side (not under `/mnt/c/`) (the placement constraint of D1 §1.7) | WARN |
+| 8 | **Placement constraint (WSL2)** | Whether `.halo/` and the worktree destination (`$TMPDIR`) are on the ext4 side (not under any drvfs mount `/mnt/<drive>/`) (the placement constraint of D1 §1.7) | WARN |
 | 9 | **Disk space** | Free space sufficient for worktree expansion (a prior check of the heavy preflight) | WARN |
 | 10 | **Required commands** | `node` / `git` / `claude` are present on `PATH` (D10 §4). Runs only when the probe is injected — the default CLI wiring always injects it | FAIL |
 | 11 | **Scheduler backend** | Which of `schtasks` / `systemd` / `cron` / `launchd` was detected, or `HALO_SCHEDULER` if pinned (D10 §3.2). Same probe-injection rule as 10 | FAIL (none detected) |

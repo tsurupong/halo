@@ -126,6 +126,17 @@ describe('c8 配置制約の WSL 条件化', () => {
     expect(checkPlacement(false).status).toBe('WARN');
     expect(checkPlacement(false, false).status).toBe('OK');
   });
+  test('純関数: /mnt/d も /mnt/c と同様に WARN 判定される (drvfs 全般)', async () => {
+    const report = await runAll(
+      baseProbes({ cwd: '/mnt/d/repo', onExt4: async () => false, isWsl: async () => true }),
+    );
+    expect(findCheck(report.checks, 8)?.status).toBe('WARN');
+  });
+  test('純関数: WARN の detail に実測パスを含む', () => {
+    const result = checkPlacement(false, true, '/mnt/d/repo');
+    expect(result.status).toBe('WARN');
+    expect(result.detail).toContain('/mnt/d/repo');
+  });
 });
 
 describe('後方互換: probe 未注入', () => {

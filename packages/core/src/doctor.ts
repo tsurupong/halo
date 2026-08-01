@@ -218,16 +218,17 @@ export function checkLockStop(orphanLock: boolean, stopPresent: boolean): CheckR
   return { id: 7, title: 'flock / STOP 残留', status: 'WARN', detail: issues.join(', ') };
 }
 
-export function checkPlacement(onExt4: boolean, isWsl = true): CheckResult {
+export function checkPlacement(onExt4: boolean, isWsl = true, detectedPath?: string): CheckResult {
   // ext4 配置は WSL 固有の制約。WSL 以外ではスキップ扱い (fail にしない, D10 §4)。
   if (!isWsl)
     return { id: 8, title: '配置制約 (WSL2)', status: 'OK', detail: 'WSL 以外のためスキップ' };
   if (onExt4) return { id: 8, title: '配置制約 (WSL2)', status: 'OK', detail: 'ext4 側に配置' };
+  const where = detectedPath ?? '/mnt/<drive>';
   return {
     id: 8,
     title: '配置制約 (WSL2)',
     status: 'WARN',
-    detail: '/mnt/c 配下の可能性 — ext4 側 (~) への配置を推奨',
+    detail: `${where} は drvfs (/mnt/<drive>) 配下の可能性 — ext4 側 (~) への配置を推奨`,
   };
 }
 
@@ -577,7 +578,11 @@ export async function runAll(probes: DoctorProbes): Promise<DoctorReport> {
   const stopPresent = await fs.exists(join(haloDir, 'STOP'));
   const c7 = checkLockStop(await probes.orphanLock(), stopPresent);
   // isWsl 未注入時は従来どおり無条件で ext4 検査 (後方互換, D10 §4)。
-  const c8 = checkPlacement(await probes.onExt4(), probes.isWsl ? await probes.isWsl() : true);
+  const c8 = checkPlacement(
+    await probes.onExt4(),
+    probes.isWsl ? await probes.isWsl() : true,
+    cwd,
+  );
   const c9 = checkDisk(await probes.diskOk());
 
   const enabledPlugins = await listEnabledPlugins(haloDir, fs);

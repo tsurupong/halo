@@ -94,7 +94,8 @@ export function nodeDoctorProbes(cwd: string, fs: CliFs, spawn: SpawnAdapter): D
       return fs.exists(`${tmp.replace(/\/$/, '')}/halo.lock`);
     },
     async onExt4() {
-      return !cwd.startsWith('/mnt/c') && !cwd.startsWith('/mnt/d');
+      // WSL の drvfs マウント(/mnt/c, /mnt/d, ...)全般を非 ext4 扱いにする。
+      return !/^\/mnt\/[a-z](\/|$)/.test(cwd);
     },
     async diskOk() {
       return true; // 実測は重量プリフライトの責務 (D3 §4 注記)。doctor は簡易 OK。

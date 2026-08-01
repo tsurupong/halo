@@ -517,7 +517,7 @@ Initial implementations:
 | `rust` | Shared `CARGO_TARGET_DIR` | cargo check / clippy | cargo test |
 | `docs-md` | Mostly noop | markdownlint + broken-link check + ADR template compliance | Glossary consistency check |
 
-> **Placement constraint (WSL2)**: Because link-based dependency sharing works only within the same filesystem, the worktree, each store, and the cache are placed on the WSL2 ext4 side (under `/home`). Placement under `/mnt/c/` is prohibited.
+> **Placement constraint (WSL2)**: Because link-based dependency sharing works only within the same filesystem, the worktree, each store, and the cache are placed on the WSL2 ext4 side (under `/home`). Placement under any drvfs mount (`/mnt/<drive>/`, e.g. `/mnt/c/`, `/mnt/d/`) fails the same-filesystem requirement and triggers a WARN.
 
 **Common input JSON Schema**
 
