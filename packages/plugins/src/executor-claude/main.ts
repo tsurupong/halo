@@ -24,6 +24,10 @@ const allowedTools =
 // ADR-0019: HALO 管理の deny 集合(保護ファイル)を worktree 外の settings で事前強制。
 // 生成はコア/CLI 側の責務。未設定なら注入しない(層2の gate-loop-audit は常に有効)。
 const settingsFile = process.env['HALO_SETTINGS_FILE'];
+// M6(D4 §4.2): 既定は空値でどの設定ソース(user/project/local)も読まない。
+// オペレータ個人の ~/.claude/settings.json の allow/hooks が無人ループの実効権限に
+// 混入するのを排除する。緊急退避は env に 'user' 等を入れれば従来挙動へ戻せる。
+const settingSources = process.env['HALO_CLAUDE_SETTING_SOURCES'] ?? '';
 
 function emit(status: string, summary: string, costUsd?: number): never {
   writeStdoutJson(
@@ -84,10 +88,10 @@ const r = spawnSync(
     '-p',
     prompt,
     '--strict-mcp-config',
-    // S2: 対象リポジトリの project/local 設定 (.claude/settings.json の allow/hooks) を
-    // 無視し、無人ループの実効権限をリポジトリ側ファイルに拡張させない (要件 §6.1 / D4 §2)。
+    // S2/M6: 対象リポジトリの project/local 設定 (.claude/settings.json の allow/hooks) だけでなく
+    // オペレータの user 設定も含め、既定ではどのソースも読まない (要件 §6.1 / D4 §2, §4.2)。
     '--setting-sources',
-    'user',
+    settingSources,
     // ADR-0019 層1: HALO 管理 settings(deny 集合)を spawn 時に注入(存在時のみ)。
     ...(settingsFile !== undefined && settingsFile !== '' && existsSync(settingsFile)
       ? ['--settings', settingsFile]

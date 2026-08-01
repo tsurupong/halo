@@ -102,6 +102,10 @@ The authoritative pattern list stays the §4.3 table; the injected deny set and 
 
 **Implementation note.** The executable form of the §2.2 list is `packages/core/src/executor-settings.ts`: the injector (`run-wiring`) and the doctor check are generated from that one constant, so they cannot drift apart. `.harness.yml` `protectedPaths` is compiled into `Write`/`Edit` deny rules and appended, which is what keeps layer 1 (deny) and layer 2 (gate `protected_paths`) enforcing the same set. If the settings file cannot be written the run **aborts** rather than continuing on layer 2 alone — ADR-0019 calls both layers mandatory.
 
+### 2.5 Exclusion of Operator User Settings (M6, 2026-08-02)
+
+`executor-claude` invokes `claude -p` with `--setting-sources ''` by default — reading **no** settings source (`user`/`project`/`local`). Previously the executor pinned `--setting-sources user`, which meant the operator's personal `~/.claude/settings.json` (allow rules, hooks, etc.) was folded into the unattended loop's effective permissions — an implicit, per-operator-machine grant that the §2.4 injected deny set does not by itself cancel out (deny wins over allow, but the *allow* surface should not depend on whose machine the loop happens to run on in the first place). The env var `HALO_CLAUDE_SETTING_SOURCES` overrides the value for emergency rollback (e.g. `user` restores the previous behavior). No ADR was filed for this change — it is treated as an operational default within the existing ADR-0019/0020 permission-injection design, not a new architectural decision.
+
 ---
 
 ## 3. The Minimal-Privilege Definition of the GitHub PAT (fine-grained)
