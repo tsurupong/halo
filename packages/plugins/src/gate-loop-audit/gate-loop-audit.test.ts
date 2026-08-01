@@ -163,6 +163,28 @@ describe('gate-loop-audit (launcher contract)', () => {
     expect(code).toBe(0);
   });
 
+  it('outlines のような部分一致キーでは発火しない (check 4, 単語境界)', () => {
+    const wt = newRepo(makeTmpRoot());
+    writeFileSync(join(wt, 'vitest.config.txt'), 'coverage:\n  outlines: 5\n');
+    git(wt, ['add', '-A']);
+    git(wt, ['commit', '-qm', 'add outlines line']);
+    writeFileSync(join(wt, 'vitest.config.txt'), 'coverage:\n  outlines: 1\n');
+    const { code } = runAudit(wt);
+    expect(code).toBe(0);
+  });
+
+  it('outlines 混在でも本物の lines の下方改変は見逃さない (check 4, 単語境界)', () => {
+    const wt = newRepo(makeTmpRoot());
+    writeFileSync(join(wt, 'vitest.config.txt'), 'coverage:\n  outlines: 5\n  lines: 90\n');
+    git(wt, ['add', '-A']);
+    git(wt, ['commit', '-qm', 'add outlines + lines']);
+    writeFileSync(join(wt, 'vitest.config.txt'), 'coverage:\n  outlines: 5\n  lines: 80\n');
+    const { code, stdout } = runAudit(wt);
+    expect(code).toBe(2);
+    const out = JSON.parse(stdout) as { reason: string };
+    expect(out.reason).toContain('lines');
+  });
+
   it('PROMPT.md self-modification -> fail (check 5)', () => {
     const wt = newRepo(makeTmpRoot());
     writeFileSync(join(wt, 'PROMPT.md'), '# prompt tampered\n');

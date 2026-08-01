@@ -265,12 +265,14 @@ Prompt execution. The initial adapter is `claude -p` (headless).
 claude -p "$PROMPT" \
   --mcp-config "$HALO_ROOT/.halo/mcp.json" \
   --strict-mcp-config \
+  --setting-sources '' \
   --settings "$HALO_SETTINGS_FILE" \
   --permission-mode dontAsk \
   --allowedTools "mcp__codegraph__*,mcp__knowledge__*,Read,Glob,Grep,Edit,Write,Bash,Agent,Skill,TodoWrite" \
   --max-turns 40
 ```
 
+- `--setting-sources ''` reads no settings source (user/project/local) by default, keeping the operator's personal `~/.claude/settings.json` out of the unattended loop's effective permissions (D4 §2.5, M6). Overridable via `HALO_CLAUDE_SETTING_SOURCES` for emergency rollback.
 - `--settings "$HALO_SETTINGS_FILE"` injects the HALO-managed deny set at spawn (D4 §2.4, ADR-0019); `--permission-mode dontAsk` makes the allowlist a hard boundary — unlisted tools are denied outright instead of prompting (ADR-0020). Both are executor-adapter behavior; the settings-file *content* is governed by D4, outside this contract.
 - `--strict-mcp-config` reads only the harness-managed `mcp.json` (fixing the visible tool scope = reproducibility and security).
 - `mcp.json` is generated at startup by merging `ports/mcp.d/*.json` (§1.10).

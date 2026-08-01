@@ -158,7 +158,7 @@ Output items (human-readable mode): presence of STOP, flock hold state (whether 
 | `--action <report\|kill\|skip>` | `report` | What to do on a stale verdict. `report` logs only; `kill` terminates the run's process group; `skip` also quarantines the offending task. The **safe default is deliberate** (誤殺より見逃し) — recovery is opted into |
 | `--profile <name>` | (none) | Profile-scoped lock file to supervise (`defaultLockPath(tmpdir, profile)`). Omitted = the unscoped lock |
 
-Timeouts come from the **process environment only** (`WATCHDOG_TIMEOUT_SEC` / `WATCHDOG_EXECUTE_TIMEOUT_SEC` / `WATCHDOG_KILL_GRACE_SEC`); this command does not load a profile (D9 §2.4).
+Timeouts (`WATCHDOG_TIMEOUT_SEC` / `WATCHDOG_EXECUTE_TIMEOUT_SEC` / `WATCHDOG_KILL_GRACE_SEC`) resolve as **process env > `--profile`'s `.halo/profiles/<name>.env` > defaults**; a missing `--profile` or a missing/unreadable profile file both fall back to defaults (D9 §2.4).
 
 **`halo watchdog install` / `uninstall`** — register the above invocation with the host scheduler (schtasks / systemd / cron / launchd) through the same abstraction `halo trigger install` uses.
 

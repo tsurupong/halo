@@ -152,7 +152,8 @@ if (hatchLine !== undefined) {
 // firstNum(行頭の最初の数値)は行頭の連番やキー名内の数値(例: v8)を誤って拾う
 // ことがあるため、キー名の直後に続く数値だけを抽出して Map<key, value> にする。
 const thRe = /coverage|threshold|branches|statements|functions|lines/i;
-const keyValRe = /(coverage|threshold|branches|statements|functions|lines)\D{0,10}?(-?[0-9]+(?:\.[0-9]+)?)/gi;
+const keyValRe =
+  /\b(coverage|threshold|branches|statements|functions|lines)\b\D{0,10}?(-?[0-9]+(?:\.[0-9]+)?)/gi;
 function extractThresholds(lines: readonly string[]): Map<string, number> {
   const map = new Map<string, number>();
   for (const l of lines) {
