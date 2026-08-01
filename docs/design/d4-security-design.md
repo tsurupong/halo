@@ -57,8 +57,9 @@ Per §6.1, dangerous operations are blocked in 2 layers: **the PreToolUse hook (
       "Write(**/PROMPT.md)",
       "Write(**/.harness.yml)",
       "Bash(rm -rf*)",
-      "Bash(git push --force*)",
-      "Bash(git push -f*)",
+      "Bash(git push*)",
+      "Bash(gh *)",
+      "Bash(git remote*)",
       "Bash(sudo*)"
     ]
   },
@@ -77,7 +78,7 @@ Per §6.1, dangerous operations are blocked in 2 layers: **the PreToolUse hook (
 | # | Operation category | Detection pattern (example) | Determination | Block reason |
 |---|---|---|---|---|
 | 1 | Recursive deletion | `rm -rf` / `rm -fr` / `rm --recursive --force` | exit 2 | Prevent spillover outside the worktree / destruction of work |
-| 2 | Force push | `git push --force` / `-f` / `--force-with-lease` | exit 2 | Prevent history rewriting / destruction of shared branches (PR creation is handled by the sink) |
+| 2 | Egress (push / gh / remote) | `git push` (all forms) / `gh *` / `git remote *` | exit 2 | ADR-0026: publishing results is the sink's job regardless of autonomy level; also prevents history rewriting on shared branches |
 | 3 | Reading secret files | `cat`/`grep`, etc. against `.env` `.env.*` | exit 2 | Prevent secret-value exposure (duplicated with the `Read(**/.env)` deny) |
 | 4 | Credential directories | Reading `~/.ssh` / `~/.aws` / `~/.config/gh` | exit 2 | Prevent theft of PATs/keys (duplicated with `sandbox.denyRead`) |
 | 5 | Self-modification | Writing to `CLAUDE.md` / `PROMPT.md` / `.harness.yml` / test files | exit 2 | A safety invariant (§11.1). Defense-in-depth with the gate's loop-audit |

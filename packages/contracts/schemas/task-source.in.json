@@ -67,6 +67,28 @@
       ],
       "additionalProperties": false,
       "description": "Record task failure."
+    },
+    {
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "release"
+        },
+        "task_id": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "task_id",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "description": "Release a claimed task back to ready without recording a failure (ADR-0025). Called by the core at the end of the failure path when the retry threshold has not been reached yet (release, not escalation). task-source implementations that predate this op must be tolerated as best-effort by callers (non-zero exit swallowed) during the migration window."
     }
   ]
 }

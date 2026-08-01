@@ -1,7 +1,7 @@
 # ADR-0026: executor の外部送信禁止 (egress deny)
 
 **Date**: 2026-07-29
-**Status**: proposed
+**Status**: accepted
 **Deciders**: tsurupong, Claude
 
 ## Context

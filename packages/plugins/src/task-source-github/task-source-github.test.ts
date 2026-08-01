@@ -40,7 +40,13 @@ if [ -n "\${GH_FAIL_ON:-}" ] && [ "$1 $2" = "\${GH_FAIL_ON}" ]; then
   exit 1
 fi
 case "$1 $2" in
-  "issue list") printf '%s' "\${GH_ISSUE_JSON:-[]}" ;;
+  "issue list")
+    if [[ "$*" == *"in-progress"* ]]; then
+      printf '%s' "\${GH_INPROGRESS_JSON:-[]}"
+    else
+      printf '%s' "\${GH_ISSUE_JSON:-[]}"
+    fi
+    ;;
   "issue view") printf '%s' "\${GH_COMMENTS_JSON:-}" ;;
   "issue edit"|"issue comment") : ;;
 esac
@@ -171,9 +177,10 @@ describe('task-source-github contract', () => {
     expect(stdout).toBe('');
   });
 
-  // C1: 閾値未満の失敗は ready へ戻さないと、op=next (--label ready) が二度と拾わず
-  // リトライもエスカレーションも起きないまま in-progress で滞留する。
-  it('fail (below threshold): comments and returns the issue to ready, no needs-human', () => {
+  // ADR-0025: fail は記録のみ。claim (in-progress) はそのまま保持し、ready への解除は
+  // release (別 op) に委ねる — op=next が二度と拾わず滞留する退行がないことは、
+  // 下の release テストが検証する。
+  it('fail (below threshold): comments only, keeps in-progress, no ready flip, no needs-human', () => {
     const { stubBinDir, ghLog } = setupStubBin();
     const { code, stdout } = runLauncher(
       JSON.stringify({ op: 'fail', task_id: 'T-42', reason: 'tests red', retry_count: 1 }),
@@ -183,7 +190,64 @@ describe('task-source-github contract', () => {
     expect(stdout).toBe('');
     const log = readFileSync(ghLog, 'utf8');
     expect(log).not.toContain('needs-human');
+    expect(log).not.toContain('--add-label ready');
+    expect(log).toContain('fail #1: tests red');
+  });
+
+  // ADR-0025: release は claim (in-progress) を解除して ready へ戻す。コアは失敗経路の
+  // 末尾で、閾値未達の時だけこれを呼ぶ (C1 相当の再供給を release へ移管)。
+  it('release: returns the issue to ready, no comment, no needs-human', () => {
+    const { stubBinDir, ghLog } = setupStubBin();
+    const { code, stdout } = runLauncher(
+      JSON.stringify({ op: 'release', task_id: 'T-42', reason: 'below threshold' }),
+      baseEnv(stubBinDir, ghLog),
+    );
+    expect(code).toBe(0);
+    expect(stdout).toBe('');
+    const log = readFileSync(ghLog, 'utf8');
     expect(log).toContain('issue edit 42 --add-label ready --remove-label in-progress');
+    expect(log).not.toContain('needs-human');
+  });
+
+  it('release: missing task_id -> exit 2', () => {
+    const { stubBinDir, ghLog } = setupStubBin();
+    const { code, stdout } = runLauncher(
+      JSON.stringify({ op: 'release', reason: 'x' }),
+      baseEnv(stubBinDir, ghLog),
+    );
+    expect(code).toBe(2);
+    expect(stdout).toBe('');
+  });
+
+  // ADR-0025 Decision #4: claim したまま launch が死んだ「幽霊 in-progress」を op=next の
+  // 都度、stale 判定で ready へ回収してから通常の ready 取得に入る。
+  it('next: recovers a stale in-progress issue back to ready before selecting (stale claim recovery)', () => {
+    const { stubBinDir, ghLog } = setupStubBin();
+    const staleUpdatedAt = new Date(Date.now() - 10 * 60 * 60 * 1000).toISOString();
+    const inProgressJson = JSON.stringify([{ number: 7, updatedAt: staleUpdatedAt }]);
+    const { code } = runLauncher(JSON.stringify({ op: 'next' }), {
+      ...baseEnv(stubBinDir, ghLog),
+      GH_INPROGRESS_JSON: inProgressJson,
+      GH_ISSUE_JSON: '[]',
+      HALO_CLAIM_STALE_SEC: '3600',
+    });
+    expect(code).toBe(0);
+    const log = readFileSync(ghLog, 'utf8');
+    expect(log).toContain('issue edit 7 --add-label ready --remove-label in-progress');
+  });
+
+  it('next: a fresh in-progress issue is left alone (not recovered)', () => {
+    const { stubBinDir, ghLog } = setupStubBin();
+    const freshUpdatedAt = new Date(Date.now() - 30 * 1000).toISOString();
+    const inProgressJson = JSON.stringify([{ number: 8, updatedAt: freshUpdatedAt }]);
+    runLauncher(JSON.stringify({ op: 'next' }), {
+      ...baseEnv(stubBinDir, ghLog),
+      GH_INPROGRESS_JSON: inProgressJson,
+      GH_ISSUE_JSON: '[]',
+      HALO_CLAIM_STALE_SEC: '3600',
+    });
+    const log = readFileSync(ghLog, 'utf8');
+    expect(log).not.toContain('issue edit 8 --add-label ready');
   });
 
   // N4: 通算回数は GitHub 側の `fail #N:` コメントから導出する。コアの retry_count は

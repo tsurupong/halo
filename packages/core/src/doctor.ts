@@ -72,6 +72,14 @@ export interface DoctorProbes {
   now?(): number;
   /** heartbeat 不在時に想定する登録間隔 (分)。手書き cron 登録への配慮 (D9 §2.6 既定)。 */
   watchdogDefaultEveryMinutes?: number;
+  /**
+   * claim 中 (task-source-local の doing/、task-source-github の in-progress) タスクの
+   * 列挙 (c15, ADR-0025)。未注入なら c15 は実行しない (後方互換)。task-source の種類を
+   * doctor 自身は知らないので、実体の収集は CLI 配線側 (deps.ts) が担う。
+   */
+  ghostClaims?(): Promise<GhostClaimEntry[]>;
+  /** c15 の stale 判定しきい値 (秒)。未指定は 3600 (1 時間)。 */
+  ghostClaimStaleSec?: number;
 }
 
 // --- 個別検査 (純粋: 事実→CheckResult) ------------------------------------
@@ -334,6 +342,43 @@ export function checkWatchdogHeartbeat(state: WatchdogHeartbeatState): CheckResu
   return { id, title, status: 'OK', detail: `${Math.round(state.ageSec)}s 前に実行` };
 }
 
+/** c15 に渡す一件: claim 中 (doing/ 残留 or in-progress ラベル) のタスクと claim 経過秒。 */
+export interface GhostClaimEntry {
+  taskId: string;
+  ageSec: number;
+}
+
+/**
+ * c15: 幽霊 claim (doing/ 残留) の検査 (ADR-0025 Decision #4 / Risks)。claim したまま
+ * launch が異常終了したタスクの回収そのものは task-source 実装の責務 (ADR-0025) なので、
+ * ここでは検知して WARN するだけで、queue/ へは戻さない。
+ *
+ * 必ず WARN 止まりにする: 幽霊 claim はスループットを落とすだけで状態を破壊しないので、
+ * doctor 全体を FAIL で止めるほどの重大度ではない (checkWatchdogHeartbeat と同じ判断)。
+ */
+export function checkGhostClaims(entries: GhostClaimEntry[], staleAfterSec = 3600): CheckResult {
+  const id = 15;
+  const title = '幽霊 claim (doing/ 残留)';
+  const stale = entries.filter((e) => e.ageSec > staleAfterSec);
+  if (stale.length === 0) {
+    return {
+      id,
+      title,
+      status: 'OK',
+      detail:
+        entries.length === 0
+          ? 'claim 中のタスクなし'
+          : `${entries.length} 件 claim 中 (すべて ${staleAfterSec}s 以内)`,
+    };
+  }
+  return {
+    id,
+    title,
+    status: 'WARN',
+    detail: `${stale.length} 件が stale (${staleAfterSec}s 超) — ${stale.map((e) => e.taskId).join(', ')} の回収を確認してください`,
+  };
+}
+
 export function checkSchedulerBackend(backend: SchedulerBackend): CheckResult {
   if (backend === 'none')
     return {
@@ -517,6 +562,9 @@ export async function runAll(probes: DoctorProbes): Promise<DoctorReport> {
         ),
       ),
     );
+  }
+  if (probes.ghostClaims) {
+    checks.push(checkGhostClaims(await probes.ghostClaims(), probes.ghostClaimStaleSec));
   }
 
   return aggregate(checks);

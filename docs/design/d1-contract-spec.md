@@ -58,9 +58,14 @@ Responsible for fetching tasks and reporting completion/failure. The input is di
 
 | op | Additional fields | Meaning |
 |---|---|---|
-| `next` | None | Fetch one next ready task |
-| `complete` | `task_id`, `pr_url` | Record task completion |
-| `fail` | `task_id`, `reason`, `retry_count` | Record task failure |
+| `next` | None | Fetch one next ready task, **claiming** (occupying) it before returning (ADR-0025) |
+| `complete` | `task_id`, `pr_url` | Record task completion (terminal: releases the claim) |
+| `fail` | `task_id`, `reason`, `retry_count` | Record task failure. Does **not** release the claim by itself — below the escalation threshold the claim stays in place until a separate `release` call; at the threshold `fail` escalates (`needs-human`), which is itself a terminal state (ADR-0025) |
+| `release` | `task_id`, `reason` | Release a claimed task back to ready **without** recording a failure (ADR-0025). Called by the core at the tail of the failure path, only when the retry threshold has not been reached |
+
+**Claim/release semantics (ADR-0025)**: `op=next` is the single atomic operation that both selects and occupies a task — implementations MUST make the claim atomic (local: `queue/ → doing/` rename on the same filesystem; github: `ready → in-progress` label swap) and MUST NOT return an already-claimed task from a subsequent `next`. This closes the gap the pre-ADR-0025 contract left for parallel workers (`write_set` is already reserved for Phase 5) and makes "which task is in flight" observable as task-source state rather than an accident of queue ordering. `complete` and `fail`-at-threshold are terminal operations on a claimed task (claim released either as delivered or as escalated); `release` is the third, non-terminal way a claim ends — "not delivered, not yet escalated, back to ready." Recovery of a claim orphaned by a launch that died mid-run (a "ghost claim") is the task-source implementation's own responsibility (local: stale `doing/` entries recovered on the next `op=next`, or reported by `halo doctor`; github: stale `in-progress` labels recovered the same way) — the core takes no part in it.
+
+`release` is a MINOR (additive) contract change: a task-source implementation that predates ADR-0025 does not know the op and exits non-zero, and the core swallows that failure as a best-effort migration accommodation, exactly like `complete` / `fail` failures already are.
 
 **Output (stdout, `op=next` only)**
 
@@ -73,10 +78,7 @@ Responsible for fetching tasks and reporting completion/failure. The input is di
 | `spec_refs` | `string[]` | | References to frozen requirements (**kg:// URI**, §4). loop-audit verifies their existence |
 | `write_set` | `string[]` | | For avoiding parallel conflicts in Phase 5 (optional) |
 
-`complete` / `fail` produce only side effects and require no output (exit 0 = success).
-
-> **Note (ADR-0025, proposed)**: `op=next` に claim(占有)の意味論を追加し、`op=release` を
-> 新設する契約変更が提案中。採択されるまで本節の記述が正。
+`complete` / `fail` / `release` produce only side effects and require no output (exit 0 = success).
 
 **Example (input op=next / output)**
 
@@ -101,9 +103,10 @@ Responsible for fetching tasks and reporting completion/failure. The input is di
 
 **Behavior of the GitHub Issues adapter** (requirements §4.2①):
 
-- `next`: Fetch the first result of `gh issue list --label ready` and relabel it to `in-progress` (a lock to prevent duplicate acquisition). **Every `gh` invocation is checked**: a non-zero exit is a fault (exit 2 → the core's `TASK_SOURCE_ERROR`), never `{"task_id": null}` — otherwise an expired credential is indistinguishable from an empty queue and an idle night gets recorded as a clean run. If the relabel fails the task is **not** handed out, because an unlocked task would be re-fetched every iteration.
-- `complete`: Auto-closed on merge via `Closes #<number>` in the PR body; the adapter records the delivery reference in a comment and moves the label to `done`.
-- `fail`: Record the attempt in an Issue comment (`fail #N: <reason>`). **Below the threshold the Issue is returned to `ready`** so the next iteration re-fetches it — without this the 3-strike escalation is unreachable, since `next` only looks at `ready` and the Issue would sit in `in-progress` forever. On reaching the threshold (**3**, initial value) attach `needs-human` and stop re-supplying it (breaking the infinite loop).
+- `next`: Before selecting, list `in-progress` Issues and recover any whose `updatedAt` is older than the stale-claim threshold (`HALO_CLAIM_STALE_SEC`, default 3600s) back to `ready` — a ghost claim from a launch that died mid-run (ADR-0025 Decision #4); this recovery step is best-effort and never blocks the normal fetch below. Then fetch the first result of `gh issue list --label ready` and relabel it to `in-progress` (the claim; ADR-0025). **Every `gh` invocation in the primary fetch/lock path is checked**: a non-zero exit is a fault (exit 2 → the core's `TASK_SOURCE_ERROR`), never `{"task_id": null}` — otherwise an expired credential is indistinguishable from an empty queue and an idle night gets recorded as a clean run. If the relabel fails the task is **not** handed out, because an unclaimed task would be re-fetched every iteration.
+- `complete`: Auto-closed on merge via `Closes #<number>` in the PR body; the adapter records the delivery reference in a comment and moves the label to `done` (claim released as delivered).
+- `fail`: Record the attempt in an Issue comment (`fail #N: <reason>`). Does **not** move the label by itself (ADR-0025) — the claim (`in-progress`) stays in place. On reaching the threshold (**3**, initial value) attach `needs-human` and remove `in-progress`, escalating and stopping re-supply (breaking the infinite loop).
+- `release`: Relabel `in-progress → ready` with no comment. Called by the core only when `fail` reported below-threshold — **this is what re-supplies the Issue to the next `next`**; without it the 3-strike escalation is unreachable, since `next` only looks at `ready` and the Issue would sit in `in-progress` forever.
 
 > **Where the attempt count lives**: the core's `retry_count` is per-run, in-memory state, so a trigger that starts a fresh `halo run` each time always reports 1 and never reaches the threshold. The GitHub adapter therefore derives the running total from the Issue itself (counting `fail #N:` comments) and uses `max(derived, retry_count)` — the source of truth is GitHub, consistent with ADR-0009 (zero global state). When the history cannot be read it falls back to `retry_count`, i.e. it under-counts and escalates late rather than labelling `needs-human` early. The local adapter persists the same total under `.halo/tasks/retry/<task_id>.count` and clears it on completion.
 
@@ -125,6 +128,10 @@ Responsible for fetching tasks and reporting completion/failure. The input is di
       "properties": { "op": { "const": "fail" },
         "task_id": { "type": "string" }, "reason": { "type": "string" },
         "retry_count": { "type": "integer", "minimum": 0 } },
+      "additionalProperties": false },
+    { "type": "object", "required": ["op", "task_id", "reason"],
+      "properties": { "op": { "const": "release" },
+        "task_id": { "type": "string" }, "reason": { "type": "string" } },
       "additionalProperties": false }
   ]
 }
