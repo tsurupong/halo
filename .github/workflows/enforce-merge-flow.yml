@@ -1,0 +1,22 @@
+# ブランチ運用の強制: main へのマージ元は develop のみ許可する。
+# 開発ブランチは develop に向ける(デフォルトブランチ = develop)。
+name: Enforce Merge Flow
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  check-source-branch:
+    name: source-must-be-develop
+    runs-on: ubuntu-latest
+    env:
+      HEAD_REF: ${{ github.head_ref }}
+    steps:
+      - name: Verify PR source branch
+        run: |
+          if [ "$HEAD_REF" != "develop" ]; then
+            echo "::error::main への PR は develop からのみ許可されています(source: ${HEAD_REF})。開発 PR は develop に向けてください。"
+            exit 1
+          fi
+          echo "OK: develop -> main"
