@@ -116,6 +116,8 @@ describe('on-fail-requeue', () => {
 
     expect(result.code).toBe(0);
     expect(result.stdout).toBe('');
+    // N9: タスクファイル不在時は孤児カウンタを生成しない。
+    expect(existsSync(join(requeueDir, 'ghost.count'))).toBe(false);
   });
 
   it('(e) task_id に不正文字を含む場合は何もせず exit 0', () => {
