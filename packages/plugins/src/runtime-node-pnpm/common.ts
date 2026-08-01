@@ -26,7 +26,13 @@ export async function runRuntime(label: string, cmds: RuntimeCmd[]): Promise<nev
       diag(`runtime-node-pnpm/${label}: 実行失敗: ${cmd} (${r.error.message})`);
       process.exit(2);
     }
-    if (r.status !== 0) process.exit(2);
+    if (r.status !== 0) {
+      // issue #27: signal 終了 (status=null) は理由を stderr に残す — gate/診断が拾える。
+      if (r.status === null && r.signal !== null) {
+        diag(`runtime-node-pnpm/${label}: signal 終了: ${r.signal}`);
+      }
+      process.exit(2);
+    }
   }
   process.exit(0);
 }

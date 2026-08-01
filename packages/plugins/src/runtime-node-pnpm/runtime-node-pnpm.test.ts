@@ -45,7 +45,7 @@ describe('runtime-node-pnpm (launcher contract)', () => {
     mkdirSync(stubBinDir, { recursive: true });
     writeFileSync(
       join(stubBinDir, 'pnpm'),
-      '#!/usr/bin/env bash\necho "pnpm stub: $*" >&2\nexit "${STUB_EXIT:-0}"\n',
+      '#!/usr/bin/env bash\necho "pnpm stub: $*" >&2\nif [ -n "${STUB_SIGNAL:-}" ]; then kill -s "$STUB_SIGNAL" $$; sleep 5; fi\nexit "${STUB_EXIT:-0}"\n',
     );
     chmodSync(join(stubBinDir, 'pnpm'), 0o755);
     workdir = join(stubRoot, 'wt');
@@ -98,6 +98,16 @@ describe('runtime-node-pnpm (launcher contract)', () => {
     const { code, stdout } = runLauncher(testLauncher, input(), stubEnv('1'));
     expect(code).toBe(2);
     expect(stdout).toBe('');
+  });
+
+  it('setup: pnpm killed by signal -> exit 2, 理由が stderr に残る (issue #27)', () => {
+    const { code, stdout, stderr } = runLauncher(setupLauncher, input(), {
+      ...stubEnv('0'),
+      STUB_SIGNAL: 'TERM',
+    });
+    expect(code).toBe(2);
+    expect(stdout).toBe('');
+    expect(stderr).toContain('signal 終了: SIGTERM');
   });
 
   it('missing workdir -> exit 2', () => {
