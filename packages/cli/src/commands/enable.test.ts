@@ -7,7 +7,8 @@ import { expect, test, describe, afterEach } from 'vitest';
 import { parseArgs } from '../args.js';
 import { createIo } from '../io.js';
 import { createNodeCliFs } from '../core-ext/fs.js';
-import { enableCommand } from './enable.js';
+import { enableCommand, materializeManifest } from './enable.js';
+import { BUNDLED_PLUGINS } from '@tsurupong/halo-plugins/registry';
 import { EXIT } from '../exit-codes.js';
 import { memFs, captureStreams } from '../testkit.js';
 
@@ -125,6 +126,25 @@ describe('halo enable (entry契約化 Task 6)', () => {
     expect(after).toBe(before);
     const generated = [...fs.files.keys()].filter((p) => p.startsWith(dir));
     expect(generated).toEqual([`${dir}/plugin.json`]);
+  });
+
+  test('materializeManifest produces the same manifest that enableCommand writes (抽出後も出力同一)', async () => {
+    const fs = memFs();
+    const cap = captureStreams();
+    await enableCommand(parseArgs(['sink-progress-log'], {}), io(cap, '/repo'), {
+      fs,
+      resolvePluginsPackageJson: () => '/fake/node_modules/@tsurupong/halo-plugins/package.json',
+    });
+    const dir = '/repo/.halo/ports/sink.d/sink-progress-log';
+    const written = JSON.parse(fs.files.get(`${dir}/plugin.json`)!);
+
+    const plugin = BUNDLED_PLUGINS.find((p) => p.name === 'sink-progress-log')!;
+    const direct = materializeManifest(
+      plugin,
+      '/fake/node_modules/@tsurupong/halo-plugins/dist',
+      '/repo/.halo/ports',
+    );
+    expect(written).toEqual(direct);
   });
 
   describe('generated plugin.json entry actually runs (real fs + node)', () => {
