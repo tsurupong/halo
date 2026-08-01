@@ -164,4 +164,56 @@ describe('watchdog command (D9 §2)', () => {
       limit_sec: 600,
     });
   });
+
+  describe('WATCHDOG_* の profile 解決 (M4, D9 §2.6)', () => {
+    test('--profile の env にある WATCHDOG_EXECUTE_TIMEOUT_SEC が反映される', async () => {
+      const fs = memFs({
+        files: {
+          '/tmp/halo-nightly.lock': LOCK,
+          // execute フェーズ・60 秒前更新。既定 executeTimeoutSec=3600 なら stale ではないが、
+          // profile が 30 秒に下げるので stale になる。
+          '/repo/.halo/logs/current.json': currentJson({
+            phase: 'execute',
+            updated_at: '2026-07-16T11:59:00Z',
+          }),
+          '/repo/.halo/profiles/nightly.env': 'WATCHDOG_EXECUTE_TIMEOUT_SEC=30\n',
+        },
+      });
+      const deps = makeDeps({ fs });
+      const { code } = await run(deps, ['--action', 'report', '--profile', 'nightly']);
+      expect(code).toBe(EXIT.OK);
+      expect(fs.files.get('/repo/.halo/logs/watchdog.jsonl')).toContain('"limit_sec":30');
+    });
+
+    test('プロセス env が profile env より優先される', async () => {
+      const fs = memFs({
+        files: {
+          '/tmp/halo-nightly.lock': LOCK,
+          '/repo/.halo/logs/current.json': currentJson({
+            phase: 'execute',
+            updated_at: '2026-07-16T11:59:00Z',
+          }),
+          '/repo/.halo/profiles/nightly.env': 'WATCHDOG_EXECUTE_TIMEOUT_SEC=30\n',
+        },
+      });
+      // プロセス env が profile の 30 を上書きして 3600 (実質デフォルト超の値) にする → stale にならない。
+      const deps = makeDeps({ fs, env: { WATCHDOG_EXECUTE_TIMEOUT_SEC: '3600' } });
+      const { code } = await run(deps, ['--action', 'report', '--profile', 'nightly']);
+      expect(code).toBe(EXIT.OK);
+      expect(fs.files.has('/repo/.halo/logs/watchdog.jsonl')).toBe(false);
+    });
+
+    test('profile ファイル不在は既定値で継続する (watchdog は落とさない)', async () => {
+      const fs = memFs({
+        files: {
+          '/tmp/halo-no-such-profile.lock': LOCK,
+          '/repo/.halo/logs/current.json': currentJson(),
+        },
+      });
+      const deps = makeDeps({ fs });
+      const { code } = await run(deps, ['--action', 'kill', '--profile', 'no-such-profile']);
+      expect(code).toBe(EXIT.OK);
+      expect(deps.kill).toHaveBeenCalledWith(-4242, 'SIGTERM');
+    });
+  });
 });

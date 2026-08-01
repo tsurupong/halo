@@ -16,6 +16,7 @@ import {
   parseLockFile,
   isPhaseStale,
   killProcessTree,
+  parseEnvFile,
   type KillFn,
   type LoopPhase,
   type PhaseState,
@@ -87,6 +88,29 @@ function join(a: string, b: string): string {
 function envInt(env: Record<string, string | undefined>, key: string, fallback: number): number {
   const n = Number(env[key]);
   return env[key] !== undefined && Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+/**
+ * WATCHDOG_* の解決順序 (M4, D9 §2.6): プロセス env > `--profile` の
+ * `.halo/profiles/<name>.env` > 既定値。status.ts の resolveProfileLimits と同じく
+ * profile 未指定・ファイル不在・読み取り失敗はすべて既定値継続として扱う
+ * (watchdog は誤殺より見逃しを優先するため、profile 解決の失敗で落ちてはならない)。
+ */
+async function resolveWatchdogEnv(
+  haloDir: string,
+  profile: string | undefined,
+  fs: CliFs,
+  processEnv: Record<string, string | undefined>,
+): Promise<Record<string, string | undefined>> {
+  if (profile === undefined) return processEnv;
+  let profileEnv: Record<string, string> = {};
+  try {
+    const body = await fs.readFile(join(join(haloDir, 'profiles'), `${profile}.env`));
+    profileEnv = parseEnvFile(body);
+  } catch {
+    profileEnv = {};
+  }
+  return { ...profileEnv, ...processEnv };
 }
 
 /** current.json を読み PhaseState として最低限検証する。読めなければ null (何もしない)。 */
@@ -258,14 +282,11 @@ async function detectOnce(
   // 2. current.json の停滞判定 (欠落・破損は誤殺回避のため何もしない)。
   const state = await readPhaseState(logDir, deps.fs);
   if (state === null) return idleBeat();
+  const env = await resolveWatchdogEnv(haloDir, profile, deps.fs, deps.env);
   const timeouts: WatchdogTimeouts = {
-    defaultSec: envInt(deps.env, 'WATCHDOG_TIMEOUT_SEC', WATCHDOG_DEFAULTS.timeoutSec),
+    defaultSec: envInt(env, 'WATCHDOG_TIMEOUT_SEC', WATCHDOG_DEFAULTS.timeoutSec),
     perPhase: {
-      execute: envInt(
-        deps.env,
-        'WATCHDOG_EXECUTE_TIMEOUT_SEC',
-        WATCHDOG_DEFAULTS.executeTimeoutSec,
-      ),
+      execute: envInt(env, 'WATCHDOG_EXECUTE_TIMEOUT_SEC', WATCHDOG_DEFAULTS.executeTimeoutSec),
     },
   };
   const verdict: StaleVerdict = isPhaseStale(state, new Date(deps.now), timeouts);
@@ -284,7 +305,7 @@ async function detectOnce(
 
   // 3. stale → action 実行 + watchdog.jsonl へ記録。
   if (action === 'kill' || action === 'skip') {
-    const graceSec = envInt(deps.env, 'WATCHDOG_KILL_GRACE_SEC', WATCHDOG_DEFAULTS.killGraceSec);
+    const graceSec = envInt(env, 'WATCHDOG_KILL_GRACE_SEC', WATCHDOG_DEFAULTS.killGraceSec);
     await killWedgedRun(lock.pid, deps, graceSec);
   }
   if (action === 'skip') {
