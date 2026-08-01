@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
 import { expect, test, describe } from 'vitest';
 import type { PluginManifest } from '@tsurupong/halo-contracts';
-import { BUNDLED_PLUGINS } from './registry.js';
+import { BUNDLED_PLUGINS, DEFAULT_ENABLED_PLUGINS } from './registry.js';
 
 // packages/plugins/src/registry.test.ts から見た monorepo ルートの plugins/。
 const PLUGINS_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'plugins');
@@ -57,6 +57,15 @@ describe('BUNDLED_PLUGINS drift (D11 §3)', () => {
 
     const registered = new Set(BUNDLED_PLUGINS.map((p) => REPO_DIRS[p.name] ?? p.name));
     expect([...discovered].sort()).toEqual([...registered].sort());
+  });
+});
+
+describe('DEFAULT_ENABLED_PLUGINS (ADR-0027)', () => {
+  test('all elements exist in BUNDLED_PLUGINS', () => {
+    const names = new Set(BUNDLED_PLUGINS.map((p) => p.name));
+    for (const name of DEFAULT_ENABLED_PLUGINS) {
+      expect(names.has(name)).toBe(true);
+    }
   });
 });
 
