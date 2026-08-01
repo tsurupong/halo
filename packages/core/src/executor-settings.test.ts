@@ -31,7 +31,9 @@ describe('deny baseline (D4 §2.2)', () => {
         'Write(**/PROMPT.md)',
         'Write(**/.harness.yml)',
         'Bash(rm -rf*)',
-        'Bash(git push --force*)',
+        'Bash(git push*)',
+        'Bash(gh *)',
+        'Bash(git remote*)',
         'Bash(sudo*)',
       ]),
     );
@@ -50,6 +52,76 @@ describe('deny baseline (D4 §2.2)', () => {
       ...DENY_SELF_MODIFICATION,
       ...DENY_DANGEROUS_COMMANDS,
     ]);
+  });
+});
+
+// Claude Code の Bash deny は「コマンド文字列に対する前方一致 glob」。その意味論を
+// ここで再現し、ADR-0026 の egress deny が実測の迂回経路 (E2E スモーク 2026-07-29 で
+// executor が git push + gh pr create を実行) を塞ぐこと、および既知のすり抜け形
+// (`git -c ... push`) が層1では残ることを明文化する — 後者は層2 (gate) 側の課題。
+function bashDenyMatches(deny: readonly string[], command: string): boolean {
+  return deny.some((rule) => {
+    const m = /^Bash\((.*)\)$/.exec(rule);
+    if (!m) return false;
+    const pattern = m[1]!;
+    const re = new RegExp(`^${pattern.split('*').map(escapeRegExp).join('.*')}`);
+    return re.test(command);
+  });
+}
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+describe('egress deny (ADR-0026)', () => {
+  test('push は force に限らず全面 deny', () => {
+    for (const cmd of [
+      'git push',
+      'git push origin main',
+      'git push --force origin main',
+      'git push -f',
+      'git push --set-upstream origin feat/x',
+    ]) {
+      expect(bashDenyMatches(DENY_DANGEROUS_COMMANDS, cmd)).toBe(true);
+    }
+  });
+
+  test('gh CLI と git remote は全面 deny', () => {
+    for (const cmd of [
+      'gh pr create --fill',
+      'gh auth git-credential fill',
+      'gh issue list',
+      'git remote add mirror https://example.com/x.git',
+      'git remote set-url origin https://example.com/x.git',
+    ]) {
+      expect(bashDenyMatches(DENY_DANGEROUS_COMMANDS, cmd)).toBe(true);
+    }
+  });
+
+  test('worktree 内の正当な操作 (add/commit/fetch 等) は deny されない', () => {
+    for (const cmd of [
+      'git add -A',
+      'git commit -m "feat: x"',
+      'git status',
+      'git fetch origin',
+      'git log --oneline',
+      'echo ghost', // "gh " ではなく "gh" 前方一致だと誤爆する — スペース込みで検証
+      'ghq list',
+    ]) {
+      expect(bashDenyMatches(DENY_DANGEROUS_COMMANDS, cmd)).toBe(false);
+    }
+  });
+
+  test('既知のすり抜け形は層1では残る (層2 gate の守備範囲として明文化)', () => {
+    // 前方一致 glob の限界: これらが deny を通過することは設計上の既知事項。
+    // 塞ぐ場合は gate-loop-audit の事後検査 (push 済みブランチ検出) 側で扱う。
+    for (const cmd of ['git -c credential.helper= push origin main', 'command git push']) {
+      expect(bashDenyMatches(DENY_DANGEROUS_COMMANDS, cmd)).toBe(false);
+    }
+  });
+
+  test('冗長な force 専用パターンは git push* に統合済み', () => {
+    expect(DENY_DANGEROUS_COMMANDS).not.toContain('Bash(git push --force*)');
+    expect(DENY_DANGEROUS_COMMANDS).not.toContain('Bash(git push -f*)');
   });
 });
 
