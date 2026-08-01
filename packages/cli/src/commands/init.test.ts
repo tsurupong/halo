@@ -14,8 +14,7 @@ function io(cap: ReturnType<typeof captureStreams>, opts: { json?: boolean } = {
   });
 }
 
-const RESOLVE_PLUGINS_PKG_JSON = () =>
-  '/fake/node_modules/@tsurupong/halo-plugins/package.json';
+const RESOLVE_PLUGINS_PKG_JSON = () => '/fake/node_modules/@tsurupong/halo-plugins/package.json';
 
 describe('project init (T24)', () => {
   test('generates .harness.yml, skeleton, profiles, prompt, and .gitignore', async () => {
