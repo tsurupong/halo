@@ -135,10 +135,7 @@ describe('gate-loop-audit (launcher contract)', () => {
 
   it('別キーどうしの増減は fail にしない (check 4, キー単位比較)', () => {
     const wt = newRepo(makeTmpRoot());
-    writeFileSync(
-      join(wt, 'vitest.config.txt'),
-      'coverage:\n  branches: 90\n  functions: 70\n',
-    );
+    writeFileSync(join(wt, 'vitest.config.txt'), 'coverage:\n  branches: 90\n  functions: 70\n');
     git(wt, ['add', '-A']);
     git(wt, ['commit', '-qm', 'add branches/functions']);
     // branches を削除し、別キー(functions)を増やす — 同一キーの下方改変ではない。
@@ -149,16 +146,10 @@ describe('gate-loop-audit (launcher contract)', () => {
 
   it('キー内の数値(v8 等)を閾値として誤読しない (check 4)', () => {
     const wt = newRepo(makeTmpRoot());
-    writeFileSync(
-      join(wt, 'vitest.config.txt'),
-      "coverage:\n  provider: 'v8'\n  lines: 90\n",
-    );
+    writeFileSync(join(wt, 'vitest.config.txt'), "coverage:\n  provider: 'v8'\n  lines: 90\n");
     git(wt, ['add', '-A']);
     git(wt, ['commit', '-qm', 'add provider line']);
-    writeFileSync(
-      join(wt, 'vitest.config.txt'),
-      "coverage:\n  provider: 'v9'\n  lines: 90\n",
-    );
+    writeFileSync(join(wt, 'vitest.config.txt'), "coverage:\n  provider: 'v9'\n  lines: 90\n");
     const { code } = runAudit(wt);
     expect(code).toBe(0);
   });

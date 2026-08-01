@@ -167,7 +167,8 @@ describe('c3 .harness.yml 検査の実体化 (M4)', () => {
   test('kinds[].runtimes が runtime.d/ に不在 → FAIL', async () => {
     const fs = memFs({
       files: {
-        '/repo/.harness.yml': 'kinds:\n  code:\n    runtimes: [node-pnpm]\n    prompt: .halo/prompts/code.md\n',
+        '/repo/.harness.yml':
+          'kinds:\n  code:\n    runtimes: [node-pnpm]\n    prompt: .halo/prompts/code.md\n',
       },
     });
     const report = await runAll(baseProbes({ fs }));
@@ -179,7 +180,8 @@ describe('c3 .harness.yml 検査の実体化 (M4)', () => {
   test('正常な .harness.yml + runtime 実在 → OK', async () => {
     const fs = memFs({
       files: {
-        '/repo/.harness.yml': 'kinds:\n  code:\n    runtimes: [node-pnpm]\n    prompt: .halo/prompts/code.md\n',
+        '/repo/.harness.yml':
+          'kinds:\n  code:\n    runtimes: [node-pnpm]\n    prompt: .halo/prompts/code.md\n',
       },
       dirs: ['/repo/.halo/ports/runtime.d/node-pnpm'],
     });
