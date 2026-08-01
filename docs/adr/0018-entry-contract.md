@@ -14,9 +14,9 @@ across platforms compared to a `#!/usr/bin/env node` shebang.
 In practice the launcher layer kept the exact class of environment dependency
 ADR-0017 set out to remove:
 
-- The launcher must carry its executable bit, and this repo lives on NTFS/WSL
-  (`/mnt/d`), where exec-bit and shebang handling of checked-out files has
-  already proven fragile (ADR-0017 §Alternatives considered).
+- The launcher must carry its executable bit, and on NTFS/WSL mounts the
+  exec-bit and shebang handling of checked-out files has already proven
+  fragile (ADR-0017 §Alternatives considered).
 - `runPort` spawns the launcher path directly (`shell: false`), so `sh` itself
   must be resolvable on `PATH` — a dependency Windows-native execution does not
   satisfy at all, and one more moving part on any host.
@@ -70,7 +70,7 @@ entirely:
 - **Pros**: smaller diff; keeps `exec` pointing at a single file.
 - **Cons**: still exec-bit-dependent; ADR-0017 already rejected this same
   approach for the launcher itself, for the same reason (fragile exec-bit /
-  shebang handling on this repo's NTFS/WSL history).
+  shebang handling on NTFS/WSL mounts).
 - **Why not**: doesn't solve the exec-bit problem, only removes `sh` from it.
 
 ## Consequences
