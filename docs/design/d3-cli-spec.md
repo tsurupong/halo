@@ -2,7 +2,7 @@
 
 | Item | Content |
 |---|---|
-| Document version | 1.2 (2026-07-28: `watchdog` gains `install`/`uninstall` subcommands and §2.7, doctor check 14 (watchdog heartbeat), `ABORTED_SIGNAL` added to the exit-0 set, signal handling of `run` specified in §2.1) — 1.1 (2026-07-25: command table extended to history/watchdog/enable, doctor checks 10-13, abnormal loop end reasons mapped to exit 1, `halo enable` no longer generates a launcher) |
+| Document version | 1.3 (2026-08-01: `project init` gains default enablement of `on-fail-record` + `context-recent-failures` (ADR-0027), doctor check 16 (failure-feedback pair symmetry); backfilled doctor check 15 (ghost claims, ADR-0025) into the §4 table, which had been implemented without a doc entry) — 1.2 (2026-07-28: `watchdog` gains `install`/`uninstall` subcommands and §2.7, doctor check 14 (watchdog heartbeat), `ABORTED_SIGNAL` added to the exit-0 set, signal handling of `run` specified in §2.1) — 1.1 (2026-07-25: command table extended to history/watchdog/enable, doctor checks 10-13, abnormal loop end reasons mapped to exit 1, `halo enable` no longer generates a launcher) |
 | Prerequisites | HALO Requirements Specification v1.8 / D1 Contract Specification / D2 Core Detailed Design |
 | Positioning | **Public**. The command definitions of `packages/cli`. The entry point of unattended execution, and the implementation spec of Requirements §4.4 (Launch Layer, CLI-standard safety mechanisms) and §8.2 (zero global state) |
 | Implementation | TypeScript (`packages/cli`, npm-distributed). Installation is `npm i -D halo`, execution is `npx halo <command>` or direct invocation of `node_modules/.bin/halo` from a trigger |
@@ -201,7 +201,7 @@ Generates the `.halo/` structure of Requirements §8.2 as an empty skeleton.
 .halo/
 ├── ports/
 │   ├── task-source.d/  context.d/  executor.d/  gate.d/
-│   ├── runtime.d/  sink.d/  on-fail.d/  trigger.d/  mcp.d/   # each .d is empty (where enablement links are placed)
+│   ├── runtime.d/  sink.d/  on-fail.d/  trigger.d/  mcp.d/   # each .d is empty, except on-fail.d/on-fail-record and context.d/context-recent-failures, which init pre-enables by default (ADR-0027, see §3.2a)
 ├── profiles/
 │   ├── continuous.env      # template of frequency × autonomy × budget (Requirements §4.4 / D2)
 │   ├── daytime-l1.env
@@ -217,6 +217,10 @@ Generates the `.halo/` structure of Requirements §8.2 as an empty skeleton.
 - `profiles/*.env` outputs templates with initial values for the 3 profiles of Requirements §4.4 (continuous / daytime-l1 / nightly) (concrete values are subject to operational tuning, Requirements §11.2).
 - `STOP` / `mcp.json` are volatile/derived artifacts generated at runtime, so init does not create them.
 - The `prompts/` templates are made consistent with the `prompt` path of `.harness.yml`.
+
+### 3.2a Default-Enabled Plugins (ADR-0027)
+
+After scaffolding the skeleton, `project init` also materializes `plugin.json` for `on-fail-record` (`ports/on-fail.d/on-fail-record/`) and `context-recent-failures` (`ports/context.d/context-recent-failures/`), using the same `materializeManifest` helper `halo enable` uses (D11 §3). Rationale: core's failure-reason re-injection (`lastFailure`, D2 §2.4) is in-process only, and in real deployments a trigger launches `run` fresh each time, so `context-recent-failures` reading `.halo/failure-catalog.jsonl` is the only cross-process path for failure learning to persist (Requirements §3.2 Principle 7). Existing `plugin.json` files are left untouched (idempotent, same rule as the rest of §3). If resolving `@tsurupong/halo-plugins`'s dist root fails, this step is skipped with a warning rather than failing `init` as a whole. `doctor` check 16 (§4) detects the case where only `on-fail-record` ends up enabled.
 
 ### 3.3 `.gitignore` Append
 
@@ -256,10 +260,12 @@ Since `.halo/` is not committed, the following is appended (not appended if it a
 | 12 | **Legacy launcher config** | Residue of the pre-ADR-0018 `.sh` launcher layout under `ports/*.d/` (a `.sh` file, or a `plugin.json` referencing one) | WARN (`halo enable <name>` regenerates) |
 | 13 | **Injected deny settings** | Whether the settings file the executor is launched with still contains the whole D4 §2.2 deny standard set and `sandbox.denyRead` (ADR-0019 §Risks drift detection). Repository-declared extras from `protectedPaths` are not drift | WARN (not generated yet — the first `halo run` writes it) / FAIL (present but missing rules, or unparseable) |
 | 14 | **Watchdog heartbeat** | Whether `.halo/logs/watchdog-last.json` exists and `now - ts` is within twice the registered interval (ADR-0023, D9 §2.7). This is the only signal that hang detection is actually *running* — `trigger list` cannot show it, and a healthy supervisor writes nothing to `watchdog.jsonl` | WARN (absent → never scheduled, run `halo watchdog install`; over-age → the schedule is not firing) |
+| 15 | **Ghost claims (`doing/` residue)** | Tasks still claimed (`doing/` residue or an in-progress label) whose claim age exceeds a staleness threshold (default 3600s) (ADR-0025 Decision #4 / Risks). Runs only when the probe is injected — the default CLI wiring always injects it. Recovery back to `queue/` is the task-source's responsibility; `doctor` only detects and reports | WARN (stale claims found — check whether the owning `launch` died) |
+| 16 | **Failure-feedback pair symmetry** | Whether `on-fail-record` is enabled while `context-recent-failures` is not (ADR-0027). Always runs (no probe injection needed — reads `.halo/ports/*.d/` directly) | WARN (`on-fail-record` records failures into `.halo/failure-catalog.jsonl` but nothing re-injects them across process boundaries — run `halo enable context-recent-failures`) |
 
 - Checks 4/5/6 report "presence, permissions, response" separately (e.g., the binary exists but is unauthenticated = FAIL, authenticated but over-permissioned = WARN).
-- Checks 10/11 depend on an injected probe and are skipped when it is absent (kept for backward compatibility); everything else always runs. The shipped CLI injects both, so a real `halo doctor` reports 14 items.
-- Check 14 is **WARN, never FAIL**: a suspended WSL2 VM produces a stale heartbeat for entirely benign reasons (D7), so a FAIL here would block runs on a false positive.
+- Checks 10/11/15 depend on an injected probe and are skipped when it is absent (kept for backward compatibility); everything else always runs. The shipped CLI injects all three, so a real `halo doctor` reports 16 items.
+- Checks 14 and 15 are **WARN, never FAIL**: a suspended WSL2 VM produces a stale heartbeat for entirely benign reasons (D7), and a ghost claim only degrades throughput without corrupting state, so a FAIL here would block runs on a false positive.
 - `doctor` does not perform an external-API credit probe (to avoid billing and rate consumption; that stays with the responsibility of the heavy preflight).
 
 ---
