@@ -678,6 +678,13 @@ Each plugin has a `plugin.json` in its own directory, declaring the metadata the
 }
 ```
 
+> `HALO_GIT_NAME`/`HALO_GIT_EMAIL` (default `halo` / `halo@localhost`) fix the git identity
+> on **both** sides of a commit: `sink-git-commit`'s `git commit` and the `executor`'s own
+> in-worktree commits (injected as `GIT_AUTHOR_*`/`GIT_COMMITTER_*` env vars, which git
+> resolves ahead of `-c user.name/email` — issue #49). If GitHub's email-privacy setting
+> (GH007) rejects the default `@localhost` address on push, point `HALO_GIT_EMAIL` at a
+> GitHub-issued `noreply` address instead.
+
 **Example (trigger bundle, using `aux`)**
 
 ```json
