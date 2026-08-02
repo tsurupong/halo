@@ -62,7 +62,7 @@ afterEach(() => {
 //     exit 0、無ければ「PR無し」を再現して非0 exit + stdout 空にする。
 //   - `gh pr create ...` : GH_PR_CREATE_URL(既定URL)を stdout に返す。
 const ghStub = `#!/usr/bin/env bash
-echo "gh $*" >> "$GH_LOG"
+echo "cwd=$(pwd) gh $*" >> "$GH_LOG"
 case "$1 $2" in
   "pr view")
     if [ -n "\${GH_PR_VIEW_URL:-}" ]; then
@@ -161,6 +161,7 @@ describe('sink-create-pr', () => {
     expect(log).toContain('pr create');
     const createLine = log.split('\n').find((l) => l.includes('pr create'));
     expect(createLine).toContain('--draft');
+    expect(createLine).toContain(`cwd=${workdir} `);
   });
 
   it('(b) AUTONOMY=L3 -> gh pr create に --draft が付与されない', () => {
@@ -195,6 +196,24 @@ describe('sink-create-pr', () => {
     expect(result.code).toBe(0);
     const log = readFileSync(ghLog, 'utf8');
     expect(log).not.toContain('pr create');
+    const viewLine = log.split('\n').find((l) => l.includes('pr view'));
+    expect(viewLine).toContain(`cwd=${workdir} `);
+  });
+
+  it('(c-2) gh pr view 失敗(認証エラー等)-> diag に stderr を出し create へ進む', () => {
+    const { stubBinDir, ghLog } = setupGhStub();
+    const { workdir } = makeOriginAndWorkdir('feature/issue-T-3b');
+    commitFile(workdir, 'impl.txt', 'code');
+
+    const input = JSON.stringify({ task_id: 'T-3b', workdir, summary: 'did it' });
+    // GH_PR_VIEW_URL 未設定なのでスタブは「no pull requests found for branch」を stderr に出し非0 exit する。
+    const result = runLauncher(input, baseEnv(stubBinDir, ghLog, { AUTONOMY: 'L2' }));
+
+    expect(result.code).toBe(0);
+    expect(result.stderr).toContain('gh pr view 失敗');
+    expect(result.stderr).toContain('no pull requests found for branch');
+    const log = readFileSync(ghLog, 'utf8');
+    expect(log).toContain('pr create');
   });
 
   it('(d) push済み・2周目相当(worktree が強制リセットされ remote と分岐)でも --force-with-lease で成功', () => {
@@ -260,6 +279,41 @@ describe('sink-create-pr', () => {
 
     expect(result.code).toBe(0);
     expect(readFileSync(ghLog, 'utf8')).toBe('');
+  });
+
+  it('(e-5) デフォルトブランチを判定できない -> 安全側でスキップし diag を出す', () => {
+    const { stubBinDir, ghLog } = setupGhStub();
+    const tmp = makeTmpDir();
+    const origin = join(tmp, 'origin.git');
+    spawnSync('git', ['init', '-q', '--bare', '-b', 'trunk', origin], { encoding: 'utf8' });
+
+    const seed = join(tmp, 'seed');
+    mkdirSync(seed, { recursive: true });
+    git(seed, ['init', '-q', '-b', 'trunk']);
+    git(seed, ['config', 'user.name', 'seed']);
+    git(seed, ['config', 'user.email', 'seed@x']);
+    writeFileSync(join(seed, 'README.md'), 'seed');
+    git(seed, ['add', '-A']);
+    git(seed, ['commit', '-q', '-m', 'seed']);
+    git(seed, ['remote', 'add', 'origin', origin]);
+    git(seed, ['push', '-q', 'origin', 'trunk']);
+
+    const workdir = join(tmp, 'wt');
+    spawnSync('git', ['clone', '-q', origin, workdir], { encoding: 'utf8' });
+    git(workdir, ['config', 'user.name', 'halo']);
+    git(workdir, ['config', 'user.email', 'halo@localhost']);
+    // origin/HEAD の symbolic-ref を消し、既定ブランチ名も main/master 以外にして
+    // resolveDefaultBranch() が undefined を返す状況を再現する。
+    rmSync(join(workdir, '.git', 'refs', 'remotes', 'origin', 'HEAD'), { force: true });
+    git(workdir, ['checkout', '-q', '-b', 'feature/issue-T-12']);
+    commitFile(workdir, 'impl.txt', 'code');
+
+    const input = JSON.stringify({ task_id: 'T-12', workdir, summary: 'x' });
+    const result = runLauncher(input, baseEnv(stubBinDir, ghLog, { AUTONOMY: 'L2' }));
+
+    expect(result.code).toBe(0);
+    expect(readFileSync(ghLog, 'utf8')).toBe('');
+    expect(result.stderr).toContain('デフォルトブランチを判定できない');
   });
 
   it('(e-4) workdir が不正(git外) -> gh 呼ばれず exit 0', () => {

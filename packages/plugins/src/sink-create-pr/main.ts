@@ -52,7 +52,11 @@ function resolveDefaultBranch(): string | undefined {
 }
 
 const defaultBranch = resolveDefaultBranch();
-if (defaultBranch !== undefined && branch === defaultBranch) {
+if (defaultBranch === undefined) {
+  diag('sink-create-pr: デフォルトブランチを判定できないためスキップ(安全側)');
+  process.exit(0);
+}
+if (branch === defaultBranch) {
   diag(`sink-create-pr: デフォルトブランチ上のためスキップ: ${branch}`);
   process.exit(0);
 }
@@ -93,10 +97,13 @@ function writePrUrl(url: string): void {
   }
 }
 
-const view = run('gh', ['pr', 'view', branch, '--json', 'url', '-q', '.url']);
+const view = run('gh', ['pr', 'view', branch, '--json', 'url', '-q', '.url'], { cwd: workdir });
 if (view.code === 0 && view.stdout.trim() !== '') {
   writePrUrl(view.stdout);
   process.exit(0);
+}
+if (view.code !== 0) {
+  diag(`sink-create-pr: gh pr view 失敗(PR無しとみなし作成へ進む): ${view.stderr}`);
 }
 
 const createArgs = [
@@ -112,7 +119,7 @@ const createArgs = [
 if (process.env['AUTONOMY'] !== 'L3') {
   createArgs.push('--draft');
 }
-const create = run('gh', createArgs);
+const create = run('gh', createArgs, { cwd: workdir });
 if (create.code !== 0) {
   diag(`sink-create-pr: gh pr create 失敗: ${create.stderr}`);
   process.exit(0);
