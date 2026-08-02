@@ -1,6 +1,6 @@
 // runtime node-pnpm: 依存の実体化。pnpm --offline でストアからハードリンク共有し
 // 高速に node_modules を実体化する。store は ext4 側前提(D1 §1.7 / D5 §3.2)。
-import { chmodSync, existsSync, lstatSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import { chmodSync, existsSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { runRuntime } from './common.js';
 
@@ -24,11 +24,20 @@ function ensureExecutable(path: string): void {
 function restoreExecBits(workdir: string): void {
   const nm = join(workdir, 'node_modules');
   if (!existsSync(nm)) return;
+  // pnpm では node_modules/<pkg> は .pnpm 配下実体への symlink なので、判定は
+  // symlink を辿る statSync で行う(壊れた symlink は無視)。
+  const isDir = (p: string): boolean => {
+    try {
+      return statSync(p).isDirectory();
+    } catch {
+      return false;
+    }
+  };
   const binDirs: string[] = [join(nm, '.bin')];
   for (const entry of readdirSync(nm)) {
-    if (entry === '.bin') continue;
+    if (entry === '.bin' || entry === '.pnpm') continue;
     const pkgDir = join(nm, entry);
-    if (!lstatSync(pkgDir).isDirectory()) continue;
+    if (!isDir(pkgDir)) continue;
     if (entry.startsWith('@')) {
       for (const scoped of readdirSync(pkgDir)) binDirs.push(join(pkgDir, scoped, 'bin'));
     } else {

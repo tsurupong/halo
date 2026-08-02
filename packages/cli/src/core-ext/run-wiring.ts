@@ -16,6 +16,7 @@ import type {
   LightDecision,
   HeavyDecision,
   LoopResult,
+  LoopPhase,
 } from '@tsurupong/halo-core';
 import {
   discoverPort,
@@ -496,13 +497,9 @@ export function createRunHooks(seams: RunWiringSeams = nodeRunWiringSeams()): Ru
           onProgress === undefined
             ? basePhaseTracker
             : {
-                set: async (iter: number, taskId: string | null, phase: string) => {
+                set: async (iter: number, taskId: string | null, phase: LoopPhase) => {
                   onProgress(`iter ${iter}: phase=${phase}` + (taskId != null ? ` (task ${taskId})` : ''));
-                  await (basePhaseTracker.set as (i: number, t: string | null, p: string) => Promise<void>)(
-                    iter,
-                    taskId,
-                    phase,
-                  );
+                  await basePhaseTracker.set(iter, taskId, phase);
                 },
               };
         const deps: LoopDeps = {

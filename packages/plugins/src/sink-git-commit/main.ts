@@ -27,7 +27,18 @@ if (run('git', ['-C', workdir, 'rev-parse', '--is-inside-work-tree']).code !== 0
 
 // node_modules 配下はテスト実行で dirty 化する生成物であり成果物ではない。対象リポジトリが
 // node_modules を追跡していても完了コミットに巻き込まない (issue #41)。
-if (run('git', ['-C', workdir, 'add', '-A', '--', '.', ':(exclude)node_modules']).code !== 0) {
+if (
+  run('git', [
+    '-C',
+    workdir,
+    'add',
+    '-A',
+    '--',
+    '.',
+    ':(exclude)node_modules',
+    ':(glob,exclude)**/node_modules/**',
+  ]).code !== 0
+) {
   diag('sink-git-commit: git add 失敗');
   process.exit(0);
 }
