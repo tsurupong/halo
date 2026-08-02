@@ -9,6 +9,20 @@ versioned and released together.
 
 ## [Unreleased]
 
+### Added
+
+- `sink-create-pr` bundled plugin (ADR-0028, issue #45): pushes the worktree branch with
+  `git push --force-with-lease` and creates a GitHub PR via `gh pr create` — a draft PR at
+  `AUTONOMY=L2`, a normal PR at `L3`. Bundled at `minAutonomy: L2`, `order: 30`. The PR URL
+  is written to `<workdir>/.halo-pr-url`, which `resolvePrUrl` now reads first (falling back
+  to the existing `commit:<sha>` scheme). Restores the L2+ external-publication path that
+  ADR-0026 (executor egress deny, PR #24/#44) removed from the executor.
+
+### Changed
+
+- All plugin child processes now receive `AUTONOMY` from the resolved (capped) config value,
+  overriding any stale value inherited from the parent shell environment.
+
 ## [0.5.0] - 2026-08-02
 
 ### Upgrading from 0.4.0 — read this first

@@ -46,9 +46,15 @@ halo doctor
 
 # 1. サンドボックスに ready ラベルの Issue を 1 件用意（GitHub 側で作成）
 
-# 2. 1 周だけ dry-run 実行（L1 = 進捗ログ / draft PR のみ、マージはしない）
+# 2. 1 周だけ dry-run 実行（L1 = ローカルコミット+進捗ログ、L2 = draft PR、L3 = 通常 PR）
 halo run <profile> --dry-run --autonomy L1
 ```
+
+> **注意（ADR-0028）**: `--dry-run` は `MAX_ITER=1` にするだけで、autonomy に応じた sink の
+> 実行そのものは抑止しない。`AUTONOMY=L2` 以上でサンドボックス実行すると、`sink-create-pr` が
+> 実際に `git push`・実際の `gh pr create` を発生させる(draft PR は L2、通常 PR は L3)。
+> `--dry-run` を「安全な素振り」だと誤解しないこと — 本番リポジトリに向けて実行しない
+> (本書冒頭「専用サンドボックスリポジトリを使う」原則は L2+ でこそ重要になる)。
 
 ### 検査項目（D8 §4.2 — 8 点）
 
@@ -59,7 +65,7 @@ halo run <profile> --dry-run --autonomy L1
 | 3 | runtime setup/check/test | setup 実体化、check/test の終了コード（0/2）が伝播 |
 | 4 | executor 実行 | `claude -p` が起動し `status` を返す（1 周） |
 | 5 | gate 判定 | `gate.d` が番号順に実行され論理 AND で合否 |
-| 6 | sink（dry-run 構成） | 自律度に応じた sink のみ実行（L1: 進捗ログ / draft PR） |
+| 6 | sink（dry-run 構成） | 自律度に応じた sink のみ実行（L1: ローカルコミット+進捗ログ、L2: draft PR、L3: 通常 PR） |
 | 7 | ログ・予算 | `iter_1.json` 生成、budget 集計が動く |
 | 8 | doctor | `gh` / `claude` / `git` の存在・権限・トリガー生存を検査 |
 

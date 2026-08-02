@@ -82,6 +82,23 @@ describe('makeRunner (entry contract, ADR-0018)', () => {
     expect(execEnv['HALO_SETTINGS_FILE']).toBe('/repo/.halo/settings/executor-settings.json');
     expect(gateEnv['HALO_SETTINGS_FILE']).toBeUndefined();
   });
+
+  it('sink 子プロセスの env に config の capped AUTONOMY が上書き注入される', async () => {
+    spawnCalls.length = 0;
+    const previousAutonomy = process.env['AUTONOMY'];
+    process.env['AUTONOMY'] = 'L3'; // シェル export 由来の古い値を再現。
+    try {
+      const runner = makeRunner({ ...ctx(), config: { ...ctx().config, autonomy: 'L1' } });
+      await runner(plugin({ port: 'sink' }), {});
+
+      const env = spawnCalls[0]!.options['env'] as Record<string, string>;
+      // config の capped 値(L1)が正であり、process.env の古い値(L3)を上書きする。
+      expect(env['AUTONOMY']).toBe('L1');
+    } finally {
+      if (previousAutonomy === undefined) delete process.env['AUTONOMY'];
+      else process.env['AUTONOMY'] = previousAutonomy;
+    }
+  });
 });
 
 // issue #27: setup 失敗時のメッセージから実際の終了理由 (signal / timeout / stderr) が

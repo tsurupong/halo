@@ -37,6 +37,7 @@ function plugin(
   entry: string,
   body: string,
   env: Record<string, string> = {},
+  extraManifest: Record<string, unknown> = {},
 ): void {
   const dir = join(repo, '.halo', 'ports', `${port}.d`, dirName);
   mkdirSync(dir, { recursive: true });
@@ -46,6 +47,7 @@ function plugin(
     port,
     entry: `./${entry}`,
     ...(Object.keys(env).length ? { env } : {}),
+    ...extraManifest,
   };
   writeFileSync(join(dir, 'plugin.json'), JSON.stringify(manifest, null, 2));
   writeFileSync(join(dir, entry), body, 'utf8');
@@ -129,6 +131,38 @@ const ONFAIL = `
 const fs = require('fs');
 const input = fs.readFileSync(0, 'utf8');
 fs.appendFileSync(process.env.STATE_DIR + '/onfail', input + '\\n');
+process.exit(0);
+`;
+
+// op=complete の pr_url を記録する task-source (ADR-0028: .halo-pr-url 経路の回帰用)。
+const TASK_SOURCE_RECORD_COMPLETE = `
+const fs = require('fs');
+const input = JSON.parse(fs.readFileSync(0, 'utf8') || '{}');
+const op = input.op || 'next';
+const stateDir = process.env.STATE_DIR;
+const mark = stateDir + '/served';
+if (op === 'next') {
+  if (fs.existsSync(mark)) {
+    process.stdout.write(JSON.stringify({ task_id: null }));
+  } else {
+    fs.writeFileSync(mark, '');
+    process.stdout.write(JSON.stringify({ task_id: '7', title: 't', body: 'do it' }));
+  }
+} else {
+  if (op === 'complete') {
+    fs.writeFileSync(stateDir + '/complete-pr-url', String(input.pr_url || ''));
+  }
+  process.stdout.write(JSON.stringify({}));
+}
+process.exit(0);
+`;
+
+// worktree 直下へ .halo-pr-url を書く sink (ADR-0028: sink-create-pr 相当のフィクスチャ)。
+const SINK_WRITE_PR_URL = `
+const fs = require('fs');
+const input = JSON.parse(fs.readFileSync(0, 'utf8') || '{}');
+fs.appendFileSync(process.env.STATE_DIR + '/sink-called', JSON.stringify(input) + '\\n');
+fs.writeFileSync(input.workdir + '/.halo-pr-url', 'https://github.com/o/r/pull/99');
 process.exit(0);
 `;
 
@@ -380,5 +414,24 @@ process.exit(0);
     expect(log.outcome).toBe('failed');
     expect(log.gates.some((g: { result: string }) => g.result === 'fail')).toBe(true);
     expect(existsSync(join(state, 'onfail'))).toBe(true);
+  });
+
+  it('.halo-pr-url がある -> その PR URL が op=complete の pr_url に渡る (ADR-0028)', async () => {
+    const state = join(repo, '.halo', 'state');
+    plugin('task-source', 'ts', 'index.cjs', TASK_SOURCE_RECORD_COMPLETE, { STATE_DIR: state });
+    plugin('executor', 'ex', 'run.cjs', EXEC_DONE);
+    plugin('gate', '10-g', 'run.cjs', GATE_PASS);
+    plugin('sink', '30-pr', 'run.cjs', SINK_WRITE_PR_URL, { STATE_DIR: state }, { minAutonomy: 'L1' });
+    git('add', '-A');
+    git('commit', '-q', '-m', 'fixtures');
+
+    const cap = captureStreams();
+    const code = await runCommand(parseArgs(['p'], RUN_FLAGS), io(cap), deps());
+
+    expect(code).toBe(EXIT.OK);
+    expect(existsSync(join(state, 'sink-called'))).toBe(true);
+    expect(readFileSync(join(state, 'complete-pr-url'), 'utf8')).toBe(
+      'https://github.com/o/r/pull/99',
+    );
   });
 });
