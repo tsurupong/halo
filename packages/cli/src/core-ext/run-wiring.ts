@@ -142,6 +142,24 @@ function executorEnv(base: Record<string, string>): Record<string, string> {
 }
 
 /**
+ * executor が worktree 内で git commit する際の名義 (#49)。executor には `HALO_GIT_NAME/EMAIL`
+ * (未設定なら halo / halo@localhost) を GIT_AUTHOR / GIT_COMMITTER 系の環境変数として明示注入
+ * する — 未設定だと呼び出し元シェルのユーザー名義や、未設定時の git の警告付き既定値が
+ * コミットに混入しうる。sink-git-commit 側にも同名義の明示指定がある(GIT_AUTHOR 系の環境変数は
+ * `-c user.name/email` より優先されるため、二重に守る必要がある)。
+ */
+function executorGitIdentityEnv(): Record<string, string> {
+  const name = process.env['HALO_GIT_NAME'] ?? 'halo';
+  const email = process.env['HALO_GIT_EMAIL'] ?? 'halo@localhost';
+  return {
+    GIT_AUTHOR_NAME: name,
+    GIT_AUTHOR_EMAIL: email,
+    GIT_COMMITTER_NAME: name,
+    GIT_COMMITTER_EMAIL: email,
+  };
+}
+
+/**
  * ADR-0019 層1(事前強制): D4 §2.2 の deny 標準集合と `.harness.yml` の protectedPaths を
  * spawn 時に注入する HALO 管理 settings を生成し、そのパスを返す。worktree 外(haloDir 配下)
  * に置くことでリポジトリ側から書き換え不能にする(D4 §2.4 #4)。パターンの権威は core の
@@ -388,6 +406,8 @@ export function makeRunner(
       env: {
         ...env,
         ...(plugin.manifest.env ?? {}),
+        // #49: manifest env による意図しない上書きを防ぐため、この最終スプレッドより後に置く。
+        ...(plugin.port === 'executor' ? executorGitIdentityEnv() : {}),
         AUTONOMY: ctx.config.autonomy,
         HALO_PLUGIN_DIR: plugin.dir,
       },

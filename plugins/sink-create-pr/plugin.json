@@ -4,5 +4,6 @@
   "port": "sink",
   "entry": "../../packages/plugins/dist/sink-create-pr/main.js",
   "order": 30,
-  "minAutonomy": "L2"
+  "minAutonomy": "L2",
+  "timeoutSec": 120
 }

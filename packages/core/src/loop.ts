@@ -280,6 +280,17 @@ export type PortRunner = (
 /** Sink for one plugin's captured stderr during an iteration (D1 §3.3). */
 type DiagnosticCollector = (port: string, plugin: string, result: RunPortResult) => void;
 
+/**
+ * A timed-out run (`result.timedOut`) is force-terminated: the child may leave no
+ * stderr at all, which previously vanished without a trace (#48). This synthesizes
+ * a diagnostic line so the operator sees *why* the phase produced nothing, distinct
+ * from `aborted` (cooperative shutdown, ADR-0022) which is deliberately not
+ * annotated here — that is expected noise, not a fault. Pure.
+ */
+function timeoutDiagnosticLine(durationMs: number): string {
+  return `timeout after ${Math.round(durationMs / 1000)}s`;
+}
+
 /** Discovered plugins by port (single-port lists carry only their order-first entry). */
 export interface LoopPorts {
   taskSource: readonly DiscoveredPlugin[];
@@ -490,11 +501,27 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
         `accumulated executor cost ${accumulatedCostUsd.toFixed(4)} USD >= max_budget_usd ${cfg.maxBudgetUsd}`,
       );
 
+    // Plugin stderr captured during this iteration (D1 §3.3, D2 §3.4). Sinks and
+    // on-fail plugins are best-effort — without this their failures leave no trace
+    // anywhere, which is precisely what an unattended run cannot afford. Created
+    // ahead of Next (below) so a silent `op=next`/`op=complete` timeout on the
+    // task-source port is captured too (#48), not just gate/executor/sink/on-fail.
+    const diagnostics: PluginDiagnostic[] = [];
+    const collect: DiagnosticCollector = (port, plugin, result) => {
+      const text = result.stderr.trim();
+      if (result.timedOut) {
+        const line = timeoutDiagnosticLine(result.durationMs);
+        diagnostics.push({ port, plugin, stderr: text === '' ? line : `${text} (${line})` });
+        return;
+      }
+      if (text !== '') diagnostics.push({ port, plugin, stderr: text });
+    };
+
     // Next (single strategy, D2 §3.6): the ready check of §4.1 #4. A broken
     // task-source (non-pass exit / garbage stdout / spawn failure) is a distinct
     // terminal condition from a healthy idle `NO_TASK` (M4) — end loudly, not clean.
     await markPhase(null, 'next');
-    const next = await runTaskSourceNext(deps);
+    const next = await runTaskSourceNext(deps, collect);
     if (next.kind === 'error') return finish('TASK_SOURCE_ERROR', next.reason);
     if (next.kind === 'none') return finish('NO_TASK');
     const task = next.task;
@@ -502,15 +529,6 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
     const state = taskStates.get(taskId) ?? { retryCount: 0 };
 
     const startedAt = new Date(deps.now()).toISOString();
-
-    // Plugin stderr captured during this iteration (D1 §3.3, D2 §3.4). Sinks and
-    // on-fail plugins are best-effort — without this their failures leave no trace
-    // anywhere, which is precisely what an unattended run cannot afford.
-    const diagnostics: PluginDiagnostic[] = [];
-    const collect: DiagnosticCollector = (port, plugin, result) => {
-      const text = result.stderr.trim();
-      if (text !== '') diagnostics.push({ port, plugin, stderr: text });
-    };
 
     // PreflightHeavy (D2 §4.2): a failure here (dirty worktree, low disk, stale
     // graph) is a *global* environment fault, not a fault of this task — running on
@@ -553,7 +571,7 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
           onFailInput(taskId, resolved.reason, state.retryCount),
           (plugin, result) => collect('on-fail', plugin, result),
         );
-        await runTaskSourceFail(deps, taskId, resolved.reason, state.retryCount);
+        await runTaskSourceFail(deps, taskId, resolved.reason, state.retryCount, collect);
         await record(deps, {
           iter,
           startedAt,
@@ -631,12 +649,12 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
         );
         // Report to the task-source so it records the failure and escalates at its
         // threshold (needs-human) — the infinite-loop breaker (要件 §4.2① / §11.2).
-        await runTaskSourceFail(deps, taskId, execReason, state.retryCount);
+        await runTaskSourceFail(deps, taskId, execReason, state.retryCount, collect);
         const outcome = outcomeForFailure(state.retryCount, retryThreshold);
         // ADR-0025: below the retry threshold the task is released back to ready
         // (unclaimed) rather than left claimed. On escalation `fail` already owns
         // the terminal state (needs-human) — release is not called.
-        if (outcome === 'failed') await runTaskSourceRelease(deps, taskId, execReason);
+        if (outcome === 'failed') await runTaskSourceRelease(deps, taskId, execReason, collect);
         await record(deps, {
           iter,
           startedAt,
@@ -695,12 +713,13 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
         // 3600s), which effectively blocks it from being retried in the meantime.
         const prUrl = deps.resolvePrUrl ? await deps.resolvePrUrl(task, workdir) : '';
         if (prUrl !== '') {
-          await runTaskSourceComplete(deps, taskId, prUrl);
+          await runTaskSourceComplete(deps, taskId, prUrl, collect);
         } else {
           await runTaskSourceRelease(
             deps,
             taskId,
             'gate passed but no delivery reference produced',
+            collect,
           );
         }
         taskStates.delete(taskId);
@@ -738,12 +757,12 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
         );
         // Report to the task-source so it records the failure and escalates at its
         // threshold (needs-human) — the infinite-loop breaker (要件 §4.2① / §11.2).
-        await runTaskSourceFail(deps, taskId, failure.reason, state.retryCount);
+        await runTaskSourceFail(deps, taskId, failure.reason, state.retryCount, collect);
         const outcome = outcomeForFailure(state.retryCount, retryThreshold);
         // ADR-0025: below the retry threshold the task is released back to ready
         // (unclaimed) rather than left claimed. On escalation `fail` already owns
         // the terminal state (needs-human) — release is not called.
-        if (outcome === 'failed') await runTaskSourceRelease(deps, taskId, failure.reason);
+        if (outcome === 'failed') await runTaskSourceRelease(deps, taskId, failure.reason, collect);
         await record(deps, {
           iter,
           startedAt,
@@ -777,7 +796,10 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
 type NextResult =
   { kind: 'task'; task: TaskSourceOut } | { kind: 'none' } | { kind: 'error'; reason: string };
 
-async function runTaskSourceNext(deps: LoopDeps): Promise<NextResult> {
+async function runTaskSourceNext(
+  deps: LoopDeps,
+  collect: DiagnosticCollector,
+): Promise<NextResult> {
   const ts = deps.ports.taskSource[0]!;
   let res: RunPortResult;
   try {
@@ -786,6 +808,7 @@ async function runTaskSourceNext(deps: LoopDeps): Promise<NextResult> {
     // A spawn failure is a broken task-source, NOT an idle queue (M4).
     return { kind: 'error', reason: `task-source spawn failed: ${errText(err)}` };
   }
+  collect('task-source', ts.name, res);
   // A non-pass exit or unparseable stdout is a fault, distinct from a valid
   // `{task_id:null}` idle — end with TASK_SOURCE_ERROR rather than silent NO_TASK.
   // The adapter's stderr rides along: on a broken task source it is the only
@@ -806,10 +829,20 @@ async function runTaskSourceNext(deps: LoopDeps): Promise<NextResult> {
   return { kind: 'task', task: parsed.value };
 }
 
-async function runTaskSourceComplete(deps: LoopDeps, taskId: string, prUrl: string): Promise<void> {
+async function runTaskSourceComplete(
+  deps: LoopDeps,
+  taskId: string,
+  prUrl: string,
+  collect: DiagnosticCollector,
+): Promise<void> {
   const ts = deps.ports.taskSource[0]!;
   try {
-    await deps.runner(ts, { op: 'complete', task_id: taskId, pr_url: prUrl }, portOpts(ts));
+    const res = await deps.runner(
+      ts,
+      { op: 'complete', task_id: taskId, pr_url: prUrl },
+      portOpts(ts),
+    );
+    collect('task-source', ts.name, res);
   } catch {
     /* best-effort: a complete failure must not crash the loop */
   }
@@ -827,14 +860,16 @@ async function runTaskSourceFail(
   taskId: string,
   reason: string,
   retryCount: number,
+  collect: DiagnosticCollector,
 ): Promise<void> {
   const ts = deps.ports.taskSource[0]!;
   try {
-    await deps.runner(
+    const res = await deps.runner(
       ts,
       { op: 'fail', task_id: taskId, reason, retry_count: retryCount },
       portOpts(ts),
     );
+    collect('task-source', ts.name, res);
   } catch {
     /* best-effort: a fail-report failure must not crash the loop */
   }
@@ -849,10 +884,16 @@ async function runTaskSourceFail(
  * task-source implementation that predates this op exits non-zero, and that
  * failure is swallowed as a migration accommodation (ADR-0025 Consequences).
  */
-async function runTaskSourceRelease(deps: LoopDeps, taskId: string, reason: string): Promise<void> {
+async function runTaskSourceRelease(
+  deps: LoopDeps,
+  taskId: string,
+  reason: string,
+  collect: DiagnosticCollector,
+): Promise<void> {
   const ts = deps.ports.taskSource[0]!;
   try {
-    await deps.runner(ts, { op: 'release', task_id: taskId, reason }, portOpts(ts));
+    const res = await deps.runner(ts, { op: 'release', task_id: taskId, reason }, portOpts(ts));
+    collect('task-source', ts.name, res);
   } catch {
     /* best-effort: a release failure must not crash the loop */
   }

@@ -23,6 +23,26 @@ versioned and released together.
 - All plugin child processes now receive `AUTONOMY` from the resolved (capped) config value,
   overriding any stale value inherited from the parent shell environment.
 
+### Fixed
+
+- A timed-out plugin run (`result.timedOut`) that produced no stderr previously left no
+  trace in the iteration log. `loop.ts` now synthesizes a `timeout after Ns` diagnostic line
+  (appended to existing stderr when present), and the task-source `op=next` / `op=complete` /
+  `op=fail` / `op=release` calls now feed the same diagnostics collector — a silent
+  `op=complete` timeout no longer leaves a task claimed with zero record (issue #48).
+- `sink-create-pr`'s `git push` and `gh pr view`/`gh pr create` now run with
+  `GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never`, and a `BatchMode=yes` `GIT_SSH_COMMAND`,
+  so a credential/host-key prompt fails fast instead of hanging an unattended run. The
+  plugin's `timeoutSec` is also lowered from the 300s port default to 120s (issue #47).
+- The `executor` child process now gets an explicit git identity
+  (`GIT_AUTHOR_NAME`/`EMAIL`, `GIT_COMMITTER_NAME`/`EMAIL`, defaulting to `halo` /
+  `halo@localhost`, overridable via `HALO_GIT_NAME`/`HALO_GIT_EMAIL`) so its own in-worktree
+  commits carry a predictable name instead of whatever the ambient environment happened to
+  supply. `sink-git-commit` now sets the same environment variables explicitly on its
+  `git commit` call, since `GIT_AUTHOR_*`/`GIT_COMMITTER_*` env vars take priority over its
+  existing `-c user.name/email` flags and could otherwise be overridden by a polluted
+  environment (issue #49).
+
 ## [0.5.0] - 2026-08-02
 
 ### Upgrading from 0.4.0 — read this first

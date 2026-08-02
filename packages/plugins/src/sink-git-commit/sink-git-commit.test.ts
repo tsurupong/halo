@@ -101,6 +101,44 @@ describe('sink-git-commit', () => {
     expect(headAfterSecond).toBe(headAfterFirst);
   });
 
+  it('(i) 汚染された GIT_AUTHOR/COMMITTER 環境変数があってもハーネス名義でコミットする (#49)', () => {
+    // GIT_AUTHOR_*/GIT_COMMITTER_* 環境変数は `-c user.name/email` より git の優先順位が
+    // 高い。executor 由来などで環境が汚染されていても、sink-git-commit 自身が明示的に
+    // これらの環境変数をハーネス名義で上書きしていなければ、汚染側が勝ってしまう。
+    const tmp = makeTmpDir();
+    const repo = join(tmp, 'wt');
+    mkdirSync(repo, { recursive: true });
+    git(repo, ['init', '-q', '-b', 'feature/issue-T-9']);
+    git(repo, [
+      '-c',
+      'user.name=seed',
+      '-c',
+      'user.email=seed@x',
+      'commit',
+      '-q',
+      '--allow-empty',
+      '-m',
+      'seed',
+    ]);
+
+    writeFileSync(join(repo, 'impl.txt'), 'new code');
+    const input = JSON.stringify({ task_id: 'T-9', workdir: repo, summary: 'did the thing' });
+    const result = runLauncher(input, {
+      GIT_AUTHOR_NAME: 'evil',
+      GIT_AUTHOR_EMAIL: 'evil@example.com',
+      GIT_COMMITTER_NAME: 'evil',
+      GIT_COMMITTER_EMAIL: 'evil@example.com',
+    });
+
+    expect(result.code).toBe(0);
+    expect(git(repo, ['log', '-1', '--format=%an <%ae>']).stdout.trim()).toBe(
+      'halo <halo@localhost>',
+    );
+    expect(git(repo, ['log', '-1', '--format=%cn <%ce>']).stdout.trim()).toBe(
+      'halo <halo@localhost>',
+    );
+  });
+
   it('(e) node_modules 配下の変更はコミットに巻き込まない (issue #41)', () => {
     const tmp = makeTmpDir();
     const repo = join(tmp, 'wt');

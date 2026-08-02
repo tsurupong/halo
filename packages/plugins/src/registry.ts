@@ -144,6 +144,7 @@ export const BUNDLED_PLUGINS: BundledPlugin[] = [
       entry: './sink-create-pr/main.js',
       order: 30,
       minAutonomy: 'L2',
+      timeoutSec: 120,
     },
   },
   {

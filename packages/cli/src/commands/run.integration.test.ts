@@ -421,7 +421,14 @@ process.exit(0);
     plugin('task-source', 'ts', 'index.cjs', TASK_SOURCE_RECORD_COMPLETE, { STATE_DIR: state });
     plugin('executor', 'ex', 'run.cjs', EXEC_DONE);
     plugin('gate', '10-g', 'run.cjs', GATE_PASS);
-    plugin('sink', '30-pr', 'run.cjs', SINK_WRITE_PR_URL, { STATE_DIR: state }, { minAutonomy: 'L1' });
+    plugin(
+      'sink',
+      '30-pr',
+      'run.cjs',
+      SINK_WRITE_PR_URL,
+      { STATE_DIR: state },
+      { minAutonomy: 'L1' },
+    );
     git('add', '-A');
     git('commit', '-q', '-m', 'fixtures');
 

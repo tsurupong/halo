@@ -98,6 +98,12 @@ pnpm test    # vitest run (all tests)
 
 Global flags: `--cwd <path>`, `--json`, `--quiet`/`-q`, `--verbose`/`-v`, `--version`, `--help`/`-h`.
 
+## Environment variables
+
+| Variable | Default | Effect |
+|---|---|---|
+| `HALO_GIT_NAME` / `HALO_GIT_EMAIL` | `halo` / `halo@localhost` | Git identity used for both `sink-git-commit`'s commit and the `executor`'s own in-worktree commits (D1 §1.4, issue #49). If GitHub's email-privacy setting (GH007) rejects pushes with the default `@localhost` address, point `HALO_GIT_EMAIL` at a GitHub-issued `noreply` address. |
+
 ## Repository layout
 
 ```

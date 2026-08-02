@@ -126,6 +126,11 @@ export const LOGGER_DEFAULTS = {
    * or reason reaches disk. Covers common credential shapes; extend via options.
    */
   secretPatterns: [
+    // GitHub App / installation / OAuth / user-to-server tokens (ghs_/ghu_/ghr_/gho_) and
+    // classic PATs (ghp_) share a `gh[a-z]_<token>` shape; this catches the whole family in
+    // one pattern (レビュー指摘, issue #48) — the specific ghp_/gho_ patterns below are kept
+    // for clarity/overlap, redacting the same text twice is harmless.
+    /gh[a-z]_[A-Za-z0-9]{20,}/g,
     /ghp_[A-Za-z0-9]{20,}/g,
     /github_pat_[A-Za-z0-9_]{20,}/g,
     /gho_[A-Za-z0-9]{20,}/g,
