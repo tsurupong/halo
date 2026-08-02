@@ -177,6 +177,19 @@ describe('c3 .harness.yml 検査の実体化 (M4)', () => {
     expect(c3?.detail).toContain('node-pnpm');
   });
 
+  test('halo enable 生成の runtime-<名> ディレクトリでも OK (issue #40)', async () => {
+    const fs = memFs({
+      files: {
+        '/repo/.harness.yml':
+          'kinds:\n  code:\n    runtimes: [node-pnpm]\n    prompt: .halo/prompts/code.md\n',
+      },
+      dirs: ['/repo/.halo/ports/runtime.d/runtime-node-pnpm'],
+    });
+    const report = await runAll(baseProbes({ fs }));
+    const c3 = findCheck(report.checks, 3);
+    expect(c3?.status).toBe('OK');
+  });
+
   test('正常な .harness.yml + runtime 実在 → OK', async () => {
     const fs = memFs({
       files: {

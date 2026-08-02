@@ -574,9 +574,17 @@ export async function runAll(probes: DoctorProbes): Promise<DoctorReport> {
       const missingRuntimes: string[] = [];
       for (const kind of Object.values(harness.kinds)) {
         for (const runtime of kind.runtimes) {
-          if (!(await fs.isDirectory(join(haloDir, 'ports', 'runtime.d', runtime)))) {
-            missingRuntimes.push(runtime);
+          // halo enable の生成ディレクトリはプラグイン名 `runtime-<名>`(命名規則
+          // <port種別>-<実装名>)であり runtime 名そのものではない。両方を受理する。
+          const candidates = [runtime, `runtime-${runtime}`];
+          let found = false;
+          for (const dir of candidates) {
+            if (await fs.isDirectory(join(haloDir, 'ports', 'runtime.d', dir))) {
+              found = true;
+              break;
+            }
           }
+          if (!found) missingRuntimes.push(runtime);
         }
       }
       if (missingRuntimes.length > 0) {
