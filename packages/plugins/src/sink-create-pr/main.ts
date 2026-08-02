@@ -12,6 +12,15 @@ import { existsSync, writeFileSync } from 'node:fs';
 import { readStdinJson, diag, str } from '../lib/io.js';
 import { run, hasCmd } from '../lib/exec.js';
 
+// 無人稼働で push/gh が対話プロンプトへ落ちて無限にハングしないための環境変数(#47)。
+// credential.helper の無効化(-c credential.helper=)はしない — gh auth git-credential
+// 等の正当な helper まで壊すため。
+const NONINTERACTIVE_ENV = {
+  GIT_TERMINAL_PROMPT: '0',
+  GCM_INTERACTIVE: 'never',
+  GIT_SSH_COMMAND: 'ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new',
+};
+
 const input = await readStdinJson().catch(() => undefined);
 const taskId = str(input, 'task_id');
 const workdir = str(input, 'workdir');
@@ -73,7 +82,9 @@ if (!hasCmd('gh')) {
   process.exit(0);
 }
 
-const push = run('git', ['-C', workdir, 'push', '--force-with-lease', '-u', 'origin', branch]);
+const push = run('git', ['-C', workdir, 'push', '--force-with-lease', '-u', 'origin', branch], {
+  env: NONINTERACTIVE_ENV,
+});
 if (push.code !== 0) {
   diag(`sink-create-pr: push 失敗: ${push.stderr}`);
   process.exit(0);
@@ -89,7 +100,10 @@ function writePrUrl(url: string): void {
   }
 }
 
-const view = run('gh', ['pr', 'view', branch, '--json', 'url', '-q', '.url'], { cwd: workdir });
+const view = run('gh', ['pr', 'view', branch, '--json', 'url', '-q', '.url'], {
+  cwd: workdir,
+  env: NONINTERACTIVE_ENV,
+});
 if (view.code === 0 && view.stdout.trim() !== '') {
   writePrUrl(view.stdout);
   process.exit(0);
@@ -111,7 +125,7 @@ const createArgs = [
 if (process.env['AUTONOMY'] !== 'L3') {
   createArgs.push('--draft');
 }
-const create = run('gh', createArgs, { cwd: workdir });
+const create = run('gh', createArgs, { cwd: workdir, env: NONINTERACTIVE_ENV });
 if (create.code !== 0) {
   diag(`sink-create-pr: gh pr create 失敗: ${create.stderr}`);
   process.exit(0);

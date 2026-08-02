@@ -103,6 +103,39 @@ function pathWithoutGh(): string {
   return bin;
 }
 
+/**
+ * git スタブ: `push` 呼び出しでのみ環境変数(GIT_TERMINAL_PROMPT 等)を GIT_ENV_LOG に記録し、
+ * 実 git へ委譲する(実際の push は成功させる)。それ以外のサブコマンドはそのまま実 git を
+ * 呼ぶだけ。テストヘルパーの `git()`(seed/origin 準備用)は PATH を変更しないので実 git の
+ * ままであり、このスタブの影響を受けない。
+ */
+function setupGitPushEnvStub(): { stubBinDir: string; envLog: string } {
+  const tmp = makeTmpDir();
+  const stubBinDir = join(tmp, 'bin');
+  mkdirSync(stubBinDir, { recursive: true });
+  const realGit = spawnSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).stdout.trim();
+  const gitStub = `#!/usr/bin/env bash
+# main.ts invokes as: git -C <workdir> push ...  -> "push" is not necessarily $1.
+for a in "$@"; do
+  if [ "$a" = "push" ]; then
+    {
+      echo "GIT_TERMINAL_PROMPT=\${GIT_TERMINAL_PROMPT:-<unset>}"
+      echo "GCM_INTERACTIVE=\${GCM_INTERACTIVE:-<unset>}"
+      echo "GIT_SSH_COMMAND=\${GIT_SSH_COMMAND:-<unset>}"
+    } >> "$GIT_ENV_LOG"
+    break
+  fi
+done
+exec "${realGit}" "$@"
+`;
+  const gitPath = join(stubBinDir, 'git');
+  writeFileSync(gitPath, gitStub);
+  chmodSync(gitPath, 0o755);
+  const envLog = join(tmp, 'git-env.log');
+  writeFileSync(envLog, '');
+  return { stubBinDir, envLog };
+}
+
 function baseEnv(
   stubBinDir: string,
   ghLog: string,
@@ -361,6 +394,29 @@ describe('sink-create-pr', () => {
     );
     void baseSha;
     void remoteRefs;
+  });
+
+  it('(i) push は非対話環境変数(GIT_TERMINAL_PROMPT=0 等)付きで実行される (#47)', () => {
+    const { stubBinDir: ghBinDir, ghLog } = setupGhStub();
+    const { stubBinDir: gitBinDir, envLog } = setupGitPushEnvStub();
+    const { workdir } = makeOriginAndWorkdir('feature/issue-T-13');
+    commitFile(workdir, 'impl.txt', 'code');
+
+    const input = JSON.stringify({ task_id: 'T-13', workdir, summary: 'x' });
+    const result = runLauncher(input, {
+      PATH: `${gitBinDir}:${ghBinDir}:${process.env['PATH'] ?? ''}`,
+      GH_LOG: ghLog,
+      GIT_ENV_LOG: envLog,
+      AUTONOMY: 'L2',
+    });
+
+    expect(result.code).toBe(0);
+    const envLines = readFileSync(envLog, 'utf8');
+    expect(envLines).toContain('GIT_TERMINAL_PROMPT=0');
+    expect(envLines).toContain('GCM_INTERACTIVE=never');
+    expect(envLines).toContain(
+      'GIT_SSH_COMMAND=ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new',
+    );
   });
 
   it('(h) PR URL が workdir 直下の .halo-pr-url に書き込まれる', () => {
