@@ -34,6 +34,13 @@ describe('redactSecrets', () => {
   it('returns input unchanged when nothing matches', () => {
     expect(redactSecrets('a perfectly ordinary log line')).toBe('a perfectly ordinary log line');
   });
+
+  it('masks a GitHub App installation token (ghs_...) even without a token= / Bearer prefix (レビュー指摘, #48)', () => {
+    const input = 'remote: ghs_abcdefghijklmnopqrstuvwxyz0123 rejected';
+    const out = redactSecrets(input);
+    expect(out).not.toContain('ghs_abcdefghijklmnopqrstuvwxyz0123');
+    expect(out).toContain(LOGGER_DEFAULTS.redactionMask);
+  });
 });
 
 describe('computeGatePassRate', () => {
