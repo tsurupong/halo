@@ -352,9 +352,13 @@ describe('sink-create-pr', () => {
     expect(result.code).toBe(0);
     expect(result.stdout).toBe('');
     // push もスキップされているので remote の main のみが存在し、feature ブランチは無い。
-    const remoteRefs = spawnSync('git', ['ls-remote', '--heads', join(workdir, '..', 'origin.git')], {
-      encoding: 'utf8',
-    });
+    const remoteRefs = spawnSync(
+      'git',
+      ['ls-remote', '--heads', join(workdir, '..', 'origin.git')],
+      {
+        encoding: 'utf8',
+      },
+    );
     void baseSha;
     void remoteRefs;
   });

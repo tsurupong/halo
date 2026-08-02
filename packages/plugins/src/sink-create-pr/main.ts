@@ -73,15 +73,7 @@ if (!hasCmd('gh')) {
   process.exit(0);
 }
 
-const push = run('git', [
-  '-C',
-  workdir,
-  'push',
-  '--force-with-lease',
-  '-u',
-  'origin',
-  branch,
-]);
+const push = run('git', ['-C', workdir, 'push', '--force-with-lease', '-u', 'origin', branch]);
 if (push.code !== 0) {
   diag(`sink-create-pr: push 失敗: ${push.stderr}`);
   process.exit(0);
