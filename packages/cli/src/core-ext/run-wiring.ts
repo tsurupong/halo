@@ -382,7 +382,15 @@ export function makeRunner(
       execPath: process.execPath,
       args: [plugin.entryPath],
       cwd: ctx.cwd,
-      env: { ...env, ...(plugin.manifest.env ?? {}), HALO_PLUGIN_DIR: plugin.dir },
+      // 全ポートの子プロセスへ config の capped AUTONOMY を上書き注入する。シェル export
+      // 由来の古い値が env に混入していても config 側(capped 値)が正になる。executor の
+      // EXECUTOR_ENV_DENYLIST の挙動はここでは変えない(GH_TOKEN 系のみ除外の対象)。
+      env: {
+        ...env,
+        ...(plugin.manifest.env ?? {}),
+        AUTONOMY: ctx.config.autonomy,
+        HALO_PLUGIN_DIR: plugin.dir,
+      },
       stdin,
       timeoutMs: (opts?.timeoutSec ?? DEFAULT_PORT_TIMEOUT_SEC) * 1000,
       // ADR-0022: 全ポートへ渡す。executor だけに渡すと、gate や sink がハングした
@@ -604,7 +612,16 @@ export function createRunHooks(seams: RunWiringSeams = nodeRunWiringSeams()): Ru
           // ADR-0016: sink (sink-git-commit) が worktree に新規コミットを作った場合のみ
           // `commit:<sha>` を完了参照として返し op=complete を発火させる。コミットが
           // 無ければ '' → タスクは queue に残る (成果の無い passed を完了扱いしない)。
+          // ADR-0028: sink-create-pr が worktree 直下に書く `.halo-pr-url` を優先する
+          // (L2+ で実 PR が作られた場合の完了参照)。無ければ ADR-0016 の commit:<sha>
+          // 判定へフォールバックする。
           resolvePrUrl: async (_task, workdir) => {
+            try {
+              const prUrl = (await readFile(`${workdir}/.halo-pr-url`, 'utf8')).trim();
+              if (prUrl !== '') return prUrl;
+            } catch {
+              // ファイル無し → フォールバックへ。
+            }
             const base = worktreeBase.get(workdir);
             if (base === undefined || base === '') return ''; // 基準不明 → 未完了扱い。
             try {

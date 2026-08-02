@@ -135,6 +135,18 @@ export const BUNDLED_PLUGINS: BundledPlugin[] = [
     },
   },
   {
+    name: 'sink-create-pr',
+    port: 'sink',
+    manifest: {
+      name: '@halo/plugin-sink-create-pr',
+      version: '1.0.0',
+      port: 'sink',
+      entry: './sink-create-pr/main.js',
+      order: 30,
+      minAutonomy: 'L2',
+    },
+  },
+  {
     name: 'sink-git-commit',
     port: 'sink',
     manifest: {

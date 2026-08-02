@@ -408,14 +408,14 @@ Side effects after passing (filtered by autonomy level). Run only after passing;
 | AUTONOMY | Enabled sinks (bundled set as shipped) |
 |---|---|
 | L1 | `sink-git-commit` (`minAutonomy: L1`) + `sink-progress-log` (`minAutonomy: L1`) |
-| L2 | The L1 set + any `minAutonomy: L2` sink (**none is bundled yet** — see below) |
-| L3 | The L2 set + any `minAutonomy: L3` sink, and every sink that declares no `minAutonomy` |
+| L2 | The L1 set + `sink-create-pr` (`minAutonomy: L2`, draft PR) |
+| L3 | The L2 set + every sink that declares no `minAutonomy`; `sink-create-pr` produces a normal (non-draft) PR at this level |
 
 Autonomy levels are cumulative (L3 ⊇ L2 ⊇ L1). A higher level runs all sinks enabled at lower levels.
 
 **Why `sink-git-commit` is L1** (ADR-0016): "report only" is reinterpreted as "no external *publication* (push / PR / deploy)". A commit on the local per-task branch is evidence, not publication, and without it an L1 run passing its gates produced nothing durable — the worktree was removed and the work discarded. This supersedes the v1.8 table that placed `10-git-commit` at L2.
 
-**Current gap**: no sink in the bundled set declares `L2` or `L3`, so raising `AUTONOMY` above L1 currently enables nothing extra. A `create-pr` sink (`minAutonomy: L2`, reading the `AUTONOMY` env to produce **a draft PR at L2 and a normal PR at L3** within a single sink) is **deferred past Phase 1** together with the graph layer — see the phase plan in the Requirements Specification. The mechanism (declaration + core filter, ADR-0006) is in place; only the sink is missing.
+**`sink-create-pr` (ADR-0028, implemented 2026-08-02, issue #45)**: bundled at `minAutonomy: L2`, `order: 30`. It pushes the worktree branch with `git push --force-with-lease -u origin <branch>` and, if no PR already exists for the branch, runs `gh pr create` — passing `--draft` unless `AUTONOMY` is `L3`. The resulting PR URL (new or pre-existing) is written to `<workdir>/.halo-pr-url`, which `resolvePrUrl` reads as the completion reference (falling back to the `commit:<sha>` scheme below when the file is absent). This was implemented ahead of the original Phase 1+ schedule: ADR-0026 (PR #24) closed the executor's own push/PR path, which left L2+ with no external-publication route at all until this sink existed.
 
 Future: `30-reindex-graph` (re-index after merge), `35-reindex-knowledge` (knowledge-graph re-index after a docs merge) — both Phase 4.
 
@@ -690,7 +690,7 @@ Each plugin has a `plugin.json` in its own directory, declaring the metadata the
 }
 ```
 
-> `sink-git-commit` is enabled at `minAutonomy: "L1"` because ADR-0016 reinterprets "report only" as "no external publication": a local branch commit is evidence, not publication. A future `create-pr` sink declares `L2` and reads the `AUTONOMY` env to produce a draft PR at L2 and a normal PR at L3 (branching within a single sink) — see §1.5.
+> `sink-git-commit` is enabled at `minAutonomy: "L1"` because ADR-0016 reinterprets "report only" as "no external publication": a local branch commit is evidence, not publication. The bundled `sink-create-pr` (ADR-0028) declares `minAutonomy: "L2"` and reads the `AUTONOMY` env to produce a draft PR at L2 and a normal PR at L3 (branching within a single sink) — see §1.5.
 
 **`plugin.json` JSON Schema**
 
