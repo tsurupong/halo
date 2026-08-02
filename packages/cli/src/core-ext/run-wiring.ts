@@ -471,7 +471,18 @@ export function createRunHooks(seams: RunWiringSeams = nodeRunWiringSeams()): Ru
         const baseLogger = createLogger({ logDir: logsDir(ctx.haloDir), fs: seams.logsFs });
         // 進捗通知 (issue #43): イテレーション確定時に要約行を CLI へ渡す。
         // loop は logger.writeIteration を確定点で必ず呼ぶので、ここが単一の観測点になる。
-        const onProgress = ctx.onProgress;
+        // 通知は必ずベスト処理の後・例外遮断付きで行う: stderr 書き込みの失敗 (EPIPE 等) が
+        // ループや current.json の更新を巻き込んではならない。
+        const onProgress =
+          ctx.onProgress === undefined
+            ? undefined
+            : (line: string): void => {
+                try {
+                  ctx.onProgress?.(line);
+                } catch {
+                  /* best-effort */
+                }
+              };
         const logger =
           onProgress === undefined
             ? baseLogger
@@ -498,8 +509,10 @@ export function createRunHooks(seams: RunWiringSeams = nodeRunWiringSeams()): Ru
             ? basePhaseTracker
             : {
                 set: async (iter: number, taskId: string | null, phase: LoopPhase) => {
-                  onProgress(`iter ${iter}: phase=${phase}` + (taskId != null ? ` (task ${taskId})` : ''));
                   await basePhaseTracker.set(iter, taskId, phase);
+                  onProgress(
+                    `iter ${iter}: phase=${phase}` + (taskId != null ? ` (task ${taskId})` : ''),
+                  );
                 },
               };
         const deps: LoopDeps = {

@@ -1,18 +1,24 @@
 // runtime node-pnpm: 依存の実体化。pnpm --offline でストアからハードリンク共有し
 // 高速に node_modules を実体化する。store は ext4 側前提(D1 §1.7 / D5 §3.2)。
 import { chmodSync, existsSync, readdirSync, realpathSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { runRuntime } from './common.js';
 
 // ストアは ext4 側(WSL2 制約)。呼び出し側が PNPM_STORE_DIR を注入していれば尊重する。
 const storeDir = process.env['PNPM_STORE_DIR'];
 const storeArgs = storeDir !== undefined && storeDir !== '' ? ['--store-dir', storeDir] : [];
 
-/** ファイルに実行ビットが無ければ付与する(シンボリックリンクは実体に対して)。 */
-function ensureExecutable(path: string): void {
+/**
+ * ファイルに実行ビットが無ければ付与する(シンボリックリンクは実体に対して)。
+ * 封じ込め: 実体が root(workdir)の外を指す symlink は対象外 — 悪意あるリポジトリが
+ * `node_modules/<pkg>/bin/x -> ~/.ssh/id_rsa` 等を仕込んで無人ループに worktree 外の
+ * ファイルモードを書き換えさせる経路を塞ぐ。付与は実行ビット(0o111)のみに限定する。
+ */
+function ensureExecutable(path: string, realRoot: string): void {
   const real = realpathSync(path);
+  if (real !== realRoot && !real.startsWith(realRoot + sep)) return;
   const mode = statSync(real).mode;
-  if ((mode & 0o111) === 0) chmodSync(real, mode | 0o755);
+  if ((mode & 0o111) === 0) chmodSync(real, mode | 0o111);
 }
 
 /**
@@ -44,11 +50,12 @@ function restoreExecBits(workdir: string): void {
       binDirs.push(join(pkgDir, 'bin'));
     }
   }
+  const realRoot = realpathSync(workdir);
   for (const dir of binDirs) {
     if (!existsSync(dir)) continue;
     for (const entry of readdirSync(dir)) {
       try {
-        ensureExecutable(join(dir, entry));
+        ensureExecutable(join(dir, entry), realRoot);
       } catch {
         // 壊れたシンボリックリンク等は無視(ベストエフォート)
       }

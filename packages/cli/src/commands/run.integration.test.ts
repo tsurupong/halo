@@ -217,7 +217,12 @@ describe('run integration (real hooks, zero billing)', () => {
     git('commit', '-q', '-m', 'fixtures');
 
     const cap = captureStreams();
-    const verboseIo = createIo(cap.streams, { cwd: repo, json: false, quiet: false, verbose: true });
+    const verboseIo = createIo(cap.streams, {
+      cwd: repo,
+      json: false,
+      quiet: false,
+      verbose: true,
+    });
     const code = await runCommand(parseArgs(['p'], RUN_FLAGS), verboseIo, deps());
 
     expect(code).toBe(EXIT.OK);

@@ -2,7 +2,16 @@
 // setup.sh / check.sh / test.sh の各ランチャー経由でspawnし、
 // pnpm はPATH上のスタブに差し替えて exit 0=pass / exit 2=fail の契約(stdout空)を検証する。
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { existsSync, mkdtempSync, rmSync, mkdirSync, writeFileSync, chmodSync, statSync, symlinkSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  rmSync,
+  mkdirSync,
+  writeFileSync,
+  chmodSync,
+  statSync,
+  symlinkSync,
+} from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -140,6 +149,20 @@ describe('runtime-node-pnpm (launcher contract)', () => {
     const { code } = runLauncher(setupLauncher, input(), stubEnv('0'));
     expect(code).toBe(0);
     expect(statSync(join(pnpmImpl, 'bin', 'tsx')).mode & 0o111).not.toBe(0);
+  });
+
+  it('setup: workdir 外を指す symlink には chmod しない (封じ込め)', () => {
+    // 悪意あるリポジトリが node_modules/evil/bin/key -> workdir 外の秘密ファイル を仕込むケース
+    const outside = join(stubRoot, 'secret-key');
+    writeFileSync(outside, 'private');
+    chmodSync(outside, 0o600);
+    const evilBin = join(workdir, 'node_modules', 'evil', 'bin');
+    mkdirSync(evilBin, { recursive: true });
+    symlinkSync(outside, join(evilBin, 'key'));
+
+    const { code } = runLauncher(setupLauncher, input(), stubEnv('0'));
+    expect(code).toBe(0);
+    expect(statSync(outside).mode & 0o111).toBe(0);
   });
 
   it('setup: pnpm 失敗時は実行ビット復元を行わない', () => {

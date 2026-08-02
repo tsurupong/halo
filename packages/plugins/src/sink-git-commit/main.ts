@@ -42,6 +42,14 @@ if (
   diag('sink-git-commit: git add 失敗');
   process.exit(0);
 }
+// pathspec 除外は add の対象を絞るだけで、executor が既にステージした node_modules は
+// 索引に残る。コミット前に索引側からも外す(作業ツリーの変更自体は保持される)。
+if (
+  run('git', ['-C', workdir, 'reset', '-q', '--', 'node_modules', ':(glob)**/node_modules/**'])
+    .code !== 0
+) {
+  diag('sink-git-commit: node_modules の索引除外に失敗');
+}
 
 // ステージに変更が無ければコミットしない(成果無し = 完了させない、ADR-0016)。
 if (run('git', ['-C', workdir, 'diff', '--cached', '--quiet']).code === 0) {
