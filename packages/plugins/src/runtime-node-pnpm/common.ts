@@ -9,7 +9,11 @@ export interface RuntimeCmd {
   args: string[];
 }
 
-export async function runRuntime(label: string, cmds: RuntimeCmd[]): Promise<never> {
+export async function runRuntime(
+  label: string,
+  cmds: RuntimeCmd[],
+  after?: (workdir: string) => void,
+): Promise<never> {
   const input = await readStdinJson().catch(() => undefined);
   const workdir = str(input, 'workdir');
   if (workdir === undefined) {
@@ -32,6 +36,14 @@ export async function runRuntime(label: string, cmds: RuntimeCmd[]): Promise<nev
         diag(`runtime-node-pnpm/${label}: signal 終了: ${r.signal}`);
       }
       process.exit(2);
+    }
+  }
+  // 全コマンド成功時のみの後処理(失敗した workdir には触らない)。
+  if (after !== undefined) {
+    try {
+      after(workdir);
+    } catch (err) {
+      diag(`runtime-node-pnpm/${label}: 後処理失敗(続行): ${(err as Error).message}`);
     }
   }
   process.exit(0);

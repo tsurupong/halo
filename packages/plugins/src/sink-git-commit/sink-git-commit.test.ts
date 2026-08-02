@@ -101,6 +101,92 @@ describe('sink-git-commit', () => {
     expect(headAfterSecond).toBe(headAfterFirst);
   });
 
+  it('(e) node_modules 配下の変更はコミットに巻き込まない (issue #41)', () => {
+    const tmp = makeTmpDir();
+    const repo = join(tmp, 'wt');
+    mkdirSync(join(repo, 'node_modules', '.vite'), { recursive: true });
+    git(repo, ['init', '-q', '-b', 'feature/issue-T-1']);
+    // 対象リポジトリが node_modules を追跡しているケースを再現する
+    writeFileSync(join(repo, 'node_modules', '.vite', 'results.json'), '{}');
+    git(repo, ['add', '-A', '-f']);
+    git(repo, ['-c', 'user.name=seed', '-c', 'user.email=seed@x', 'commit', '-q', '-m', 'seed']);
+
+    writeFileSync(join(repo, 'impl.txt'), 'new code');
+    writeFileSync(join(repo, 'node_modules', '.vite', 'results.json'), '{"dirty":true}');
+    const input = JSON.stringify({ task_id: 'T-1', workdir: repo, summary: 'did the thing' });
+    const result = runLauncher(input);
+
+    expect(result.code).toBe(0);
+    const files = git(repo, ['show', '--name-only', '--format=', 'HEAD']).stdout.trim();
+    expect(files).toBe('impl.txt');
+    // node_modules の変更は未ステージのまま残る(成果物に混入しない)
+    expect(git(repo, ['status', '--porcelain']).stdout).toContain(
+      'node_modules/.vite/results.json',
+    );
+  });
+
+  it('(g) ネストした node_modules (monorepo) も巻き込まない', () => {
+    const tmp = makeTmpDir();
+    const repo = join(tmp, 'wt');
+    mkdirSync(join(repo, 'packages', 'foo', 'node_modules'), { recursive: true });
+    git(repo, ['init', '-q', '-b', 'feature/issue-T-1']);
+    writeFileSync(join(repo, 'packages', 'foo', 'node_modules', 'cache.json'), '{}');
+    git(repo, ['add', '-A', '-f']);
+    git(repo, ['-c', 'user.name=seed', '-c', 'user.email=seed@x', 'commit', '-q', '-m', 'seed']);
+
+    writeFileSync(join(repo, 'impl.txt'), 'new code');
+    writeFileSync(join(repo, 'packages', 'foo', 'node_modules', 'cache.json'), '{"dirty":true}');
+    const input = JSON.stringify({ task_id: 'T-1', workdir: repo, summary: 'x' });
+    const result = runLauncher(input);
+
+    expect(result.code).toBe(0);
+    const files = git(repo, ['show', '--name-only', '--format=', 'HEAD']).stdout.trim();
+    expect(files).toBe('impl.txt');
+  });
+
+  it('(h) executor が既にステージした node_modules も巻き込まない', () => {
+    const tmp = makeTmpDir();
+    const repo = join(tmp, 'wt');
+    mkdirSync(join(repo, 'node_modules', '.vite'), { recursive: true });
+    mkdirSync(join(repo, 'packages', 'foo', 'node_modules'), { recursive: true });
+    git(repo, ['init', '-q', '-b', 'feature/issue-T-1']);
+    writeFileSync(join(repo, 'node_modules', '.vite', 'results.json'), '{}');
+    writeFileSync(join(repo, 'packages', 'foo', 'node_modules', 'cache.json'), '{}');
+    git(repo, ['add', '-A', '-f']);
+    git(repo, ['-c', 'user.name=seed', '-c', 'user.email=seed@x', 'commit', '-q', '-m', 'seed']);
+
+    // executor 相当が実装と node_modules をまとめてステージ済みの状態を再現
+    writeFileSync(join(repo, 'impl.txt'), 'new code');
+    writeFileSync(join(repo, 'node_modules', '.vite', 'results.json'), '{"dirty":true}');
+    writeFileSync(join(repo, 'packages', 'foo', 'node_modules', 'cache.json'), '{"dirty":true}');
+    git(repo, ['add', '-A', '-f']);
+
+    const input = JSON.stringify({ task_id: 'T-1', workdir: repo, summary: 'x' });
+    const result = runLauncher(input);
+
+    expect(result.code).toBe(0);
+    const files = git(repo, ['show', '--name-only', '--format=', 'HEAD']).stdout.trim();
+    expect(files).toBe('impl.txt');
+  });
+
+  it('(f) 変更が node_modules 配下のみならコミットしない', () => {
+    const tmp = makeTmpDir();
+    const repo = join(tmp, 'wt');
+    mkdirSync(join(repo, 'node_modules'), { recursive: true });
+    git(repo, ['init', '-q', '-b', 'feature/issue-T-1']);
+    writeFileSync(join(repo, 'node_modules', 'cache.json'), '{}');
+    git(repo, ['add', '-A', '-f']);
+    git(repo, ['-c', 'user.name=seed', '-c', 'user.email=seed@x', 'commit', '-q', '-m', 'seed']);
+    const base = git(repo, ['rev-parse', 'HEAD']).stdout.trim();
+
+    writeFileSync(join(repo, 'node_modules', 'cache.json'), '{"dirty":true}');
+    const input = JSON.stringify({ task_id: 'T-1', workdir: repo, summary: 'x' });
+    const result = runLauncher(input);
+
+    expect(result.code).toBe(0);
+    expect(git(repo, ['rev-parse', 'HEAD']).stdout.trim()).toBe(base);
+  });
+
   it('(c) git 外の workdir は exit 0・stdout 空でスキップ', () => {
     const tmp = makeTmpDir();
     const plain = join(tmp, 'plain');

@@ -16,6 +16,7 @@ import type {
   LightDecision,
   HeavyDecision,
   LoopResult,
+  LoopPhase,
 } from '@tsurupong/halo-core';
 import {
   discoverPort,
@@ -467,13 +468,53 @@ export function createRunHooks(seams: RunWiringSeams = nodeRunWiringSeams()): Ru
         // repo HEAD と比較すると、run 中にオペレータがコミットしただけで差分が出て
         // 成果ゼロの偽 complete が発火する (2026-07-16 に実際に発生)。
         const worktreeBase = new Map<string, string>();
-        const logger = createLogger({ logDir: logsDir(ctx.haloDir), fs: seams.logsFs });
+        const baseLogger = createLogger({ logDir: logsDir(ctx.haloDir), fs: seams.logsFs });
+        // 進捗通知 (issue #43): イテレーション確定時に要約行を CLI へ渡す。
+        // loop は logger.writeIteration を確定点で必ず呼ぶので、ここが単一の観測点になる。
+        // 通知は必ずベスト処理の後・例外遮断付きで行う: stderr 書き込みの失敗 (EPIPE 等) が
+        // ループや current.json の更新を巻き込んではならない。
+        const onProgress =
+          ctx.onProgress === undefined
+            ? undefined
+            : (line: string): void => {
+                try {
+                  ctx.onProgress?.(line);
+                } catch {
+                  /* best-effort */
+                }
+              };
+        const logger =
+          onProgress === undefined
+            ? baseLogger
+            : {
+                writeIteration: async (input: Parameters<typeof baseLogger.writeIteration>[0]) => {
+                  const res = await baseLogger.writeIteration(input);
+                  onProgress(
+                    `iter ${input.iter}: outcome=${input.outcome}` +
+                      (input.task?.taskId != null ? ` (task ${input.task.taskId})` : ''),
+                  );
+                  return res;
+                },
+              };
         // ハング検知: 各工程境界で logs/current.json を上書き (task md: phase-boundary-log)。
-        const phaseTracker = createPhaseTracker({
+        const basePhaseTracker = createPhaseTracker({
           logDir: logsDir(ctx.haloDir),
           fs: seams.logsFs,
           now: seams.now,
         });
+        // 進捗通知 (issue #43): loop は全フェーズ境界で phaseTracker.set を呼ぶので、
+        // ラップするだけでフェーズ遷移が観測できる (core の API 変更なし)。
+        const phaseTracker =
+          onProgress === undefined
+            ? basePhaseTracker
+            : {
+                set: async (iter: number, taskId: string | null, phase: LoopPhase) => {
+                  await basePhaseTracker.set(iter, taskId, phase);
+                  onProgress(
+                    `iter ${iter}: phase=${phase}` + (taskId != null ? ` (task ${taskId})` : ''),
+                  );
+                },
+              };
         const deps: LoopDeps = {
           config: {
             autonomy: ctx.config.autonomy,

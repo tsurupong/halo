@@ -2,7 +2,16 @@
 // setup.sh / check.sh / test.sh の各ランチャー経由でspawnし、
 // pnpm はPATH上のスタブに差し替えて exit 0=pass / exit 2=fail の契約(stdout空)を検証する。
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { existsSync, mkdtempSync, rmSync, mkdirSync, writeFileSync, chmodSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  rmSync,
+  mkdirSync,
+  writeFileSync,
+  chmodSync,
+  statSync,
+  symlinkSync,
+} from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -108,6 +117,63 @@ describe('runtime-node-pnpm (launcher contract)', () => {
     expect(code).toBe(2);
     expect(stdout).toBe('');
     expect(stderr).toContain('signal 終了: SIGTERM');
+  });
+
+  it('setup: node_modules の bin 実行ビットを復元する (issue #42)', () => {
+    const statMode = (p: string): number => statSync(p).mode & 0o111;
+    const binDir = join(workdir, 'node_modules', '.bin');
+    const esbuildBin = join(workdir, 'node_modules', '@esbuild', 'linux-x64', 'bin');
+    mkdirSync(binDir, { recursive: true });
+    mkdirSync(esbuildBin, { recursive: true });
+    writeFileSync(join(binDir, 'vitest'), '#!/usr/bin/env node\n');
+    writeFileSync(join(esbuildBin, 'esbuild'), 'binary');
+    chmodSync(join(binDir, 'vitest'), 0o644);
+    chmodSync(join(esbuildBin, 'esbuild'), 0o644);
+
+    const { code } = runLauncher(setupLauncher, input(), stubEnv('0'));
+    expect(code).toBe(0);
+    expect(statMode(join(binDir, 'vitest'))).not.toBe(0);
+    expect(statMode(join(esbuildBin, 'esbuild'))).not.toBe(0);
+  });
+
+  it('setup: pnpm の symlink 構造でも非スコープパッケージの bin を復元する (issue #42)', () => {
+    // pnpm では node_modules/<pkg> は .pnpm 配下実体への symlink。
+    const pnpmImpl = join(workdir, 'node_modules', '.pnpm', 'tsx@1.0.0', 'node_modules', 'tsx');
+    mkdirSync(join(pnpmImpl, 'bin'), { recursive: true });
+    writeFileSync(join(pnpmImpl, 'bin', 'tsx'), '#!/usr/bin/env node\n');
+    chmodSync(join(pnpmImpl, 'bin', 'tsx'), 0o644);
+    const link = join(workdir, 'node_modules', 'tsx');
+    rmSync(link, { recursive: true, force: true });
+    symlinkSync(pnpmImpl, link);
+
+    const { code } = runLauncher(setupLauncher, input(), stubEnv('0'));
+    expect(code).toBe(0);
+    expect(statSync(join(pnpmImpl, 'bin', 'tsx')).mode & 0o111).not.toBe(0);
+  });
+
+  it('setup: workdir 外を指す symlink には chmod しない (封じ込め)', () => {
+    // 悪意あるリポジトリが node_modules/evil/bin/key -> workdir 外の秘密ファイル を仕込むケース
+    const outside = join(stubRoot, 'secret-key');
+    writeFileSync(outside, 'private');
+    chmodSync(outside, 0o600);
+    const evilBin = join(workdir, 'node_modules', 'evil', 'bin');
+    mkdirSync(evilBin, { recursive: true });
+    symlinkSync(outside, join(evilBin, 'key'));
+
+    const { code } = runLauncher(setupLauncher, input(), stubEnv('0'));
+    expect(code).toBe(0);
+    expect(statSync(outside).mode & 0o111).toBe(0);
+  });
+
+  it('setup: pnpm 失敗時は実行ビット復元を行わない', () => {
+    const binDir = join(workdir, 'node_modules', '.bin');
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(join(binDir, 'tsc'), '#!/usr/bin/env node\n');
+    chmodSync(join(binDir, 'tsc'), 0o644);
+
+    const { code } = runLauncher(setupLauncher, input(), stubEnv('1'));
+    expect(code).toBe(2);
+    expect(statSync(join(binDir, 'tsc')).mode & 0o111).toBe(0);
   });
 
   it('missing workdir -> exit 2', () => {
