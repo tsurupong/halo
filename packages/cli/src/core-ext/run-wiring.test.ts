@@ -99,6 +99,68 @@ describe('makeRunner (entry contract, ADR-0018)', () => {
       else process.env['AUTONOMY'] = previousAutonomy;
     }
   });
+
+  describe('executor git identity (#49)', () => {
+    it('injects default GIT_AUTHOR/COMMITTER NAME/EMAIL for the executor port only', async () => {
+      spawnCalls.length = 0;
+      const runner = makeRunner(ctx());
+      await runner(plugin({ port: 'executor' }), {});
+      await runner(plugin({ port: 'gate' }), {});
+
+      const execEnv = spawnCalls[0]!.options['env'] as Record<string, string>;
+      const gateEnv = spawnCalls[1]!.options['env'] as Record<string, string>;
+      expect(execEnv['GIT_AUTHOR_NAME']).toBe('halo');
+      expect(execEnv['GIT_AUTHOR_EMAIL']).toBe('halo@localhost');
+      expect(execEnv['GIT_COMMITTER_NAME']).toBe('halo');
+      expect(execEnv['GIT_COMMITTER_EMAIL']).toBe('halo@localhost');
+      expect(gateEnv['GIT_AUTHOR_NAME']).toBeUndefined();
+      expect(gateEnv['GIT_COMMITTER_NAME']).toBeUndefined();
+    });
+
+    it('honors HALO_GIT_NAME/EMAIL overrides', async () => {
+      spawnCalls.length = 0;
+      const prevName = process.env['HALO_GIT_NAME'];
+      const prevEmail = process.env['HALO_GIT_EMAIL'];
+      process.env['HALO_GIT_NAME'] = 'custom-bot';
+      process.env['HALO_GIT_EMAIL'] = 'custom-bot@example.test';
+      try {
+        const runner = makeRunner(ctx());
+        await runner(plugin({ port: 'executor' }), {});
+
+        const execEnv = spawnCalls[0]!.options['env'] as Record<string, string>;
+        expect(execEnv['GIT_AUTHOR_NAME']).toBe('custom-bot');
+        expect(execEnv['GIT_AUTHOR_EMAIL']).toBe('custom-bot@example.test');
+        expect(execEnv['GIT_COMMITTER_NAME']).toBe('custom-bot');
+        expect(execEnv['GIT_COMMITTER_EMAIL']).toBe('custom-bot@example.test');
+      } finally {
+        if (prevName === undefined) delete process.env['HALO_GIT_NAME'];
+        else process.env['HALO_GIT_NAME'] = prevName;
+        if (prevEmail === undefined) delete process.env['HALO_GIT_EMAIL'];
+        else process.env['HALO_GIT_EMAIL'] = prevEmail;
+      }
+    });
+
+    it('manifest env cannot override the injected git identity', async () => {
+      spawnCalls.length = 0;
+      const runner = makeRunner(ctx());
+      await runner(
+        plugin({
+          port: 'executor',
+          manifest: {
+            name: 'ex',
+            version: '1.0.0',
+            port: 'executor',
+            entry: 'dist/main.js',
+            env: { GIT_AUTHOR_NAME: 'manifest-injected' },
+          },
+        }),
+        {},
+      );
+
+      const execEnv = spawnCalls[0]!.options['env'] as Record<string, string>;
+      expect(execEnv['GIT_AUTHOR_NAME']).toBe('halo');
+    });
+  });
 });
 
 // issue #27: setup 失敗時のメッセージから実際の終了理由 (signal / timeout / stderr) が

@@ -57,18 +57,32 @@ if (run('git', ['-C', workdir, 'diff', '--cached', '--quiet']).code === 0) {
   process.exit(0);
 }
 
-const commit = run('git', [
-  '-C',
-  workdir,
-  '-c',
-  `user.name=${gitName}`,
-  '-c',
-  `user.email=${gitEmail}`,
-  'commit',
-  '-m',
-  `feat: complete task ${taskId} (halo)`,
-  '-m',
-  summary,
-]);
+// GIT_AUTHOR_*/GIT_COMMITTER_* 環境変数は `-c user.name/email` より git の優先順位が高い
+// (#49)。呼び出し元(executor 等)の環境が汚染されていても `-c` だけでは負けるため、ここで
+// 明示的に上書きする(二重の指定だが、`-c` は環境変数が無い場合の保険として残す)。
+const commit = run(
+  'git',
+  [
+    '-C',
+    workdir,
+    '-c',
+    `user.name=${gitName}`,
+    '-c',
+    `user.email=${gitEmail}`,
+    'commit',
+    '-m',
+    `feat: complete task ${taskId} (halo)`,
+    '-m',
+    summary,
+  ],
+  {
+    env: {
+      GIT_AUTHOR_NAME: gitName,
+      GIT_AUTHOR_EMAIL: gitEmail,
+      GIT_COMMITTER_NAME: gitName,
+      GIT_COMMITTER_EMAIL: gitEmail,
+    },
+  },
+);
 if (commit.code !== 0) diag(`sink-git-commit: コミット失敗: ${taskId}`);
 process.exit(0);
