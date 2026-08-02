@@ -45,6 +45,12 @@ export interface RunContext {
    * 配線が loop と全 runPort 呼び出しへ渡す。省略時はシグナル非対応 (旧挙動)。
    */
   abort?: AbortSignal;
+  /**
+   * ループ進捗の通知先 (issue #43)。配線がフェーズ境界・イテレーション確定の要約行を
+   * 渡す。省略時は無音 (旧挙動)。非TTYリダイレクトでも無人運用のログ監査ができるよう、
+   * run は --verbose 時にこれを stderr (io.debug) へ束ねる。
+   */
+  onProgress?: (line: string) => void;
 }
 
 export interface RunDeps {
@@ -191,7 +197,15 @@ export async function runCommand(parsed: ParsedArgs, io: Io, deps: RunDeps): Pro
     );
   }
 
-  const ctx: RunContext = { config, haloDir, cwd: io.flags.cwd, now: deps.now };
+  const ctx: RunContext = {
+    config,
+    haloDir,
+    cwd: io.flags.cwd,
+    now: deps.now,
+    // io.debug 自体が --verbose でゲートするので常に配線してよいが、
+    // 無指定時に配線側へ無駄な文字列組み立てをさせないため明示的に絞る。
+    ...(io.flags.verbose ? { onProgress: (line: string) => io.debug(line) } : {}),
+  };
 
   // ADR-0022: 1 回目は協調中断 (子プロセスを落として finally を通す)、2 回目は即時終了。
   // ハンドラ自身は fs を触らない — 後片付けは通常の巻き戻し経路が担う。

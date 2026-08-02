@@ -208,6 +208,40 @@ describe('run integration (real hooks, zero billing)', () => {
     expect(log.task.task_id).toBe('7');
   });
 
+  it('--verbose: 非TTYでもフェーズ進捗とイテレーション結果が stderr に出る (issue #43)', async () => {
+    const state = join(repo, '.halo', 'state');
+    plugin('task-source', 'ts', 'index.cjs', TASK_SOURCE, { STATE_DIR: state });
+    plugin('executor', 'ex', 'run.cjs', EXEC_DONE);
+    plugin('gate', '10-g', 'run.cjs', GATE_PASS);
+    git('add', '-A');
+    git('commit', '-q', '-m', 'fixtures');
+
+    const cap = captureStreams();
+    const verboseIo = createIo(cap.streams, { cwd: repo, json: false, quiet: false, verbose: true });
+    const code = await runCommand(parseArgs(['p'], RUN_FLAGS), verboseIo, deps());
+
+    expect(code).toBe(EXIT.OK);
+    expect(cap.err()).toContain('phase=next');
+    expect(cap.err()).toContain('phase=execute (task 7)');
+    expect(cap.err()).toContain('outcome=passed (task 7)');
+  });
+
+  it('verbose 無指定なら進捗行は出ない (旧挙動維持)', async () => {
+    const state = join(repo, '.halo', 'state');
+    plugin('task-source', 'ts', 'index.cjs', TASK_SOURCE, { STATE_DIR: state });
+    plugin('executor', 'ex', 'run.cjs', EXEC_DONE);
+    plugin('gate', '10-g', 'run.cjs', GATE_PASS);
+    git('add', '-A');
+    git('commit', '-q', '-m', 'fixtures');
+
+    const cap = captureStreams();
+    const code = await runCommand(parseArgs(['p'], RUN_FLAGS), io(cap), deps());
+
+    expect(code).toBe(EXIT.OK);
+    expect(cap.err()).not.toContain('phase=');
+    expect(cap.err()).not.toContain('outcome=');
+  });
+
   it('stale feature branch: 既存 feature/issue-<id> があっても worktree は最新 HEAD 起点', async () => {
     const state = join(repo, '.halo', 'state');
     plugin('task-source', 'ts', 'index.cjs', TASK_SOURCE, { STATE_DIR: state });
