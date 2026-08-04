@@ -292,7 +292,9 @@ kind is not a port script but a declaration in `.harness.yml`. From the Issue's 
         "properties": {
           "runtimes": { "type": "array", "minItems": 1, "items": { "type": "string" },
             "description": "Directory name under runtime.d" },
-          "prompt": { "type": "string", "description": "Path to the prompt template" }
+          "prompt": { "type": "string", "description": "Path to the prompt template" },
+          "executor": { "type": "string",
+            "description": "Optional. Explicit executor plugin name. Omitted -> the first enabled executor port plugin. A name that does not match any enabled executor plugin escalates the task to needs-human rather than silently falling back." }
         }
       }
     }
@@ -326,7 +328,7 @@ Used for ports that assume a single adapter (task-source / executor).
 | Item | Content |
 |---|---|
 | Arguments | `$1` = port name, `$2` = JSON to pass to stdin |
-| Target | The **first** plugin in numeric order within `<port>.d/` (only the first is run even if there are multiple) |
+| Target | The **first** plugin in numeric order within `<port>.d/` (only the first is run even if there are multiple; for executor, kind.executor 指定時は §2.8 の選択順序に従う) |
 | Return value (stdout) | Returns the plugin's stdout as-is |
 | Exit code | Propagates the plugin's exit as-is |
 | Error handling | If the plugin exits non-zero (an exit 0 intended by task-source next to mean "no task" is normal) → propagated to the caller, and the core decides. If the plugin is absent, exit 1 halts the core (configuration defect) |
