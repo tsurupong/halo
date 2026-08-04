@@ -77,6 +77,13 @@ export interface HarnessKind {
   runtimes: string[];
   /** Path to the prompt template. */
   prompt: string;
+  /**
+   * Explicit executor plugin name for this kind. Omitted → the first enabled
+   * `executor` port plugin (current default behavior). A name that does not
+   * match any enabled executor plugin is not a fallback: the task is routed
+   * to the needs-human escalation path instead of silently running elsewhere.
+   */
+  executor?: string;
 }
 
 /**

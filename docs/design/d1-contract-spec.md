@@ -588,7 +588,9 @@ A malformed value in either field stops the run with a configuration error (exit
         "properties": {
           "runtimes": { "type": "array", "minItems": 1, "items": { "type": "string" },
             "description": "directory name under runtime.d" },
-          "prompt": { "type": "string", "description": "path to the prompt template" }
+          "prompt": { "type": "string", "description": "path to the prompt template" },
+          "executor": { "type": "string",
+            "description": "explicit executor plugin name for this kind (issue #51). Optional; omitted keeps the first enabled executor port plugin" }
         }
       }
     },
@@ -599,6 +601,8 @@ A malformed value in either field stops the run with a configuration error (exit
   }
 }
 ```
+
+`executor` selection order (issue #51): 1) `.harness.yml`'s `kinds.<name>.executor`, when specified. 2) When unspecified, the first enabled `executor` port plugin (discovery order) — unchanged default behavior. 3) A specified name that matches no enabled `executor` plugin is never a silent fallback to (2): the task escalates to `needs-human` instead (D2 §7.2).
 
 ---
 

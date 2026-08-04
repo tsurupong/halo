@@ -98,7 +98,7 @@ The `loop` module implements the pseudocode of Requirements §4.3 as a TypeScrip
 | PreflightHeavy | Clean working tree / disk space / graph freshness sync (§4.2) | preflight | On anomaly, do not execute the task and record it |
 | Context | Run all of context.d, concatenate `fragments` in descending priority order, truncate at the token limit (§2.6) | runPort (each), discovery | Always treated as success (individual failures are skipped) |
 | BuildPrompt | Combine task info, concatenated context, and the reason/hint of the previous gate fail to generate a prompt | (pure function) | — |
-| Execute | Feed prompt/workdir/budget to the executor (first single one) | runPort | The `status` in stdout (§2.3) |
+| Execute | Feed prompt/workdir/budget to the executor (first single one; kind.executor 指定時は §7.2 の選択規則に従う) | runPort | The `status` in stdout (§2.3) |
 | Gate | Run all of gate.d; if even one exits 2, the whole fails (logical AND) | runPort (each) | Exit code (0/2) |
 | Sink | After the autonomy filter, execute side effects only on pass (best effort) | runPort (each), autonomy | Individual failures do not propagate to others |
 | Complete | Send `{"op":"complete", task_id, pr_url}` to the task-source | runPort | Side effects only |
@@ -242,7 +242,7 @@ The 4 strategies the loop realizes by combining runPort (single-shot). These cor
 
 | Strategy | Target ports | Behavior | Determination |
 |---|---|---|---|
-| Single | task-source / executor | Run only the first one by `order` | The loop interprets the returned JSON / status |
+| Single | task-source / executor | Run only the first one by `order`(executor は kind.executor 指定時 §7.2 の選択規則に従う) | The loop interprets the returned JSON / status |
 | Merge | context | Run all; concatenate fragments in descending priority order and truncate (§2.6) | Always success (individual failures are skipped) |
 | Logical AND | gate | Run all; if even one exits 2, the whole fails. Retain the reason of the first fail and re-inject | Exit code (0/2) |
 | Best effort | sink / on-fail | Run all; individual failures do not propagate to others. sink runs after the autonomy filter | Side effects only |
@@ -370,6 +370,7 @@ The reason is that the alternative is worse than a failed launch: dropping a rej
 2. Look up `.harness.yml`'s `kinds.<name>` and obtain `runtimes` (one or more) and `prompt` (template path).
 3. If the corresponding kind is undefined, or if any element of `runtimes` does not actually exist in `runtime.d/<name>/`, apply `needs-human` (reproducibility first).
 4. When `runtimes` are multiple, the gate execution order and the handling of partial failures are pending in Requirements §11.3. This design assumes a single runtime, and for multiple specifications it stays with a naive implementation that runs setup/check/test in array order.
+5. Resolve the kind's optional `executor` field (issue #51). Unspecified → the first enabled `executor` port plugin (unchanged default). Specified but not among the enabled `executor` plugins → `needs-human` for this task (the misconfiguration is task-level, not a run-level fault); this is never a silent fallback to the first enabled executor.
 
 ---
 

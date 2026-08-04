@@ -202,6 +202,48 @@ export function classifyExecutor(result: RunPortResult): ExecClassification {
   return { outcome: 'error' };
 }
 
+// ─── pure: executor selection (D1 §1.8 kind.executor, issue #51) ───────────
+
+/** Outcome of resolving a kind's optional `executor` name against the enabled plugins. */
+export type ExecutorSelection =
+  { status: 'selected'; executor: DiscoveredPlugin } | { status: 'needs-human'; reason: string };
+
+/**
+ * Select the executor plugin for a task (D1 §1.8, D2 §7): an unspecified `name`
+ * keeps the current default (first enabled `executor` port plugin, discovery
+ * order). A `name` that does not match any enabled executor plugin is not a
+ * fallback — it never silently switches to the first plugin — it yields
+ * `needs-human` so the caller can escalate the task instead. Pure; assumes
+ * `plugins` is non-empty (the caller guards the empty-port case separately).
+ */
+export function selectExecutor(
+  plugins: readonly DiscoveredPlugin[],
+  name?: string,
+): ExecutorSelection {
+  if (name == null || name === '') return { status: 'selected', executor: plugins[0]! };
+  const found = plugins.find((p) => p.name === name);
+  if (found) return { status: 'selected', executor: found };
+  const enabled = plugins.map((p) => p.name).join(', ') || 'none';
+  return {
+    status: 'needs-human',
+    reason: `kind declares executor '${name}' but it is not enabled (enabled: ${enabled})`,
+  };
+}
+
+/**
+ * The executor's process-level wall (D2 §3.3, M2): the budget `timeout_sec` is
+ * what the adapter uses to self-declare `status:"timeout"`; the process kill must
+ * sit a grace margin *past* it so it is the last resort, never a preemption. An
+ * explicit manifest `timeoutSec` (M1) wins when it is larger than that margin. Pure.
+ */
+export function execProcessTimeoutFor(
+  executor: DiscoveredPlugin,
+  execTimeout: number,
+  execGrace: number,
+): number {
+  return Math.max(executor.manifest.timeoutSec ?? 0, execTimeout + execGrace);
+}
+
 // ─── pure: gate logical-AND (D2 §3.6, §2.2) ─────────────────────────────────
 
 /** One gate execution result handed to {@link evaluateGates}. */
@@ -417,13 +459,6 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
   if (deps.ports.executor.length === 0)
     throw new LoopError("no enabled plugin for single port 'executor'");
 
-  const executor = deps.ports.executor[0]!;
-  // The executor's process-level wall (D2 §3.3, M2): the budget `timeout_sec` is
-  // what the adapter uses to self-declare `status:"timeout"`; the process kill must
-  // sit a grace margin *past* it so it is the last resort, never a preemption. An
-  // explicit manifest `timeoutSec` (M1) wins when it is larger than that margin.
-  const execProcessTimeout = Math.max(executor.manifest.timeoutSec ?? 0, execTimeout + execGrace);
-
   const startMs = deps.now();
   const iterations: IterationSummary[] = [];
   const taskStates = new Map<string, TaskState>();
@@ -559,6 +594,7 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
     // declaration error, so it escalates immediately rather than burning the retry
     // threshold. Resolved before the worktree exists: no point paying for one.
     let instructions: string | undefined;
+    let kindExecutorName: string | undefined;
     if (deps.kindPrompt) {
       const resolved = await deps.kindPrompt(task);
       if (resolved.status === 'needs-human') {
@@ -591,7 +627,46 @@ export async function runLoop(deps: LoopDeps): Promise<LoopResult> {
         continue;
       }
       instructions = resolved.instructions;
+      kindExecutorName = resolved.executor;
     }
+
+    // Executor selection (D1 §1.8 kind.executor, issue #51): an explicit but
+    // unenabled name is a task-level misconfiguration like an undeclared kind
+    // above — it escalates to a human rather than silently falling back to the
+    // first enabled executor. Resolved before the worktree exists, same reasoning
+    // as kind resolution.
+    const selection = selectExecutor(deps.ports.executor, kindExecutorName);
+    if (selection.status === 'needs-human') {
+      state.retryCount += 1;
+      taskStates.set(taskId, state);
+      await markPhase(taskId, 'on_fail');
+      await runBestEffort(
+        deps.ports.onFail,
+        deps.runner,
+        onFailInput(taskId, selection.reason, state.retryCount),
+        (plugin, result) => collect('on-fail', plugin, result),
+      );
+      await runTaskSourceFail(deps, taskId, selection.reason, state.retryCount, collect);
+      await record(deps, {
+        iter,
+        startedAt,
+        profile,
+        task,
+        outcome: 'escalated',
+        retryCount: state.retryCount,
+        diagnostics,
+      });
+      iterations.push({
+        iter,
+        taskId,
+        outcome: 'escalated',
+        gateFailure: { reason: selection.reason },
+        retryCount: state.retryCount,
+      });
+      continue;
+    }
+    const executor = selection.executor;
+    const execProcessTimeout = execProcessTimeoutFor(executor, execTimeout, execGrace);
 
     const workdir = await deps.createWorktree(task);
     try {

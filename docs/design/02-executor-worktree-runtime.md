@@ -156,6 +156,7 @@ kinds:
   <kind name>:                 # e.g. code, docs (corresponds to the Issue label kind:<name>)
     runtimes: [<runtime name>, ...] # references ports/runtime.d/<name>/. One or more
     prompt: <path>             # prompt template (repository-relative)
+    executor: <plugin name>    # optional (issue #51). Explicit executor plugin selection.
 ```
 
 Concrete example (from §4.2⑧ of the Requirements Specification):
@@ -178,12 +179,19 @@ kinds:
 | `kinds.<name>` | object | ○ | Kind definition. `<name>` matches the Issue label `kind:<name>` (an unspecified Issue resolves to `code`) |
 | `kinds.<name>.runtimes` | string[] | ○ | Array of adopted runtime names. Each element must exist under `ports/runtime.d/<name>/`. If it does not exist, needs-human |
 | `kinds.<name>.prompt` | string | ○ | Repository-relative path of the prompt template. The code family includes requirements such as mandatory tests, and the docs family includes conformance to the ADR format, use of glossary vocabulary, etc. (instruction separation) |
+| `kinds.<name>.executor` | string | – | Optional (issue #51). Explicit `executor` port plugin name for this kind. See §3.5 for the selection order. An empty string is rejected as `ConfigError` (`config.ts` `validateKind`) |
 
 ### 3.4 Resolution rules
 
 - If the Issue has no `kind:` label, `code` is the default (§4.2⑧).
 - A missing `.harness.yml`, an undefined kind, or a referenced runtime that does not exist all go to `needs-human` (reproducibility priority; ADR-0007 rejection reason for alternative 2).
 - The gate execution order and handling of partial failures when there are multiple `runtimes` is deferred in §11.3 of the Requirements Specification (to be decided when a monorepo case arises). This design assumes a single runtime, and for multiple specifications it stays with a naive implementation that runs setup/check/test in array order.
+
+### 3.5 Executor selection order (issue #51)
+
+1. `.harness.yml`'s `kinds.<name>.executor`, when specified.
+2. When unspecified, the first enabled `executor` port plugin (discovery order) — unchanged default behavior.
+3. A specified name that matches no enabled `executor` plugin is never a silent fallback to (2): the task escalates to `needs-human` (same task-level-misconfiguration handling as an undefined kind, §3.4), and the run continues with the next task.
 
 ---
 

@@ -280,7 +280,13 @@ export async function loadHarnessYml(
 
 /** The kind's prompt template, or the reason the loop must escalate to a human. */
 export type KindPrompt =
-  | { status: 'resolved'; kind: string; runtimes: string[]; instructions: string }
+  | {
+      status: 'resolved';
+      kind: string;
+      runtimes: string[];
+      instructions: string;
+      executor?: string;
+    }
   | { status: 'needs-human'; kind: string; reason: string };
 
 function dirnameOf(path: string): string {
@@ -316,7 +322,13 @@ export async function readKindPrompt(
   const promptPath = resolveRelative(dirnameOf(harnessPath), def.prompt);
   try {
     const instructions = await fs.readFile(promptPath);
-    return { status: 'resolved', kind, runtimes: [...def.runtimes], instructions };
+    return {
+      status: 'resolved',
+      kind,
+      runtimes: [...def.runtimes],
+      instructions,
+      ...(def.executor != null ? { executor: def.executor } : {}),
+    };
   } catch {
     return {
       status: 'needs-human',

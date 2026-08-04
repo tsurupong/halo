@@ -296,11 +296,15 @@ function validateKind(name: string, def: unknown): asserts def is HarnessKind {
   if (typeof prompt !== 'string' || prompt === '') {
     throw new ConfigError(`.harness.yml: kind '${name}' needs a non-empty string 'prompt'`);
   }
+  const { executor } = def as Record<string, unknown>;
+  if (executor !== undefined && (typeof executor !== 'string' || executor === '')) {
+    throw new ConfigError(`.harness.yml: kind '${name}' 'executor' must be a non-empty string`);
+  }
 }
 
 /** Sentinel outcome when a kind cannot be resolved (D1 §1.8 再現性優先). */
 export type KindResolution =
-  | { status: 'resolved'; kind: string; runtimes: string[]; prompt: string }
+  | { status: 'resolved'; kind: string; runtimes: string[]; prompt: string; executor?: string }
   | { status: 'needs-human'; kind: string; reason: string };
 
 /**
@@ -319,5 +323,11 @@ export function resolveKind(
   if (!def) {
     return { status: 'needs-human', kind, reason: `kind '${kind}' is not defined in .harness.yml` };
   }
-  return { status: 'resolved', kind, runtimes: [...def.runtimes], prompt: def.prompt };
+  return {
+    status: 'resolved',
+    kind,
+    runtimes: [...def.runtimes],
+    prompt: def.prompt,
+    ...(def.executor != null ? { executor: def.executor } : {}),
+  };
 }
