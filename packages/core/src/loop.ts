@@ -206,8 +206,7 @@ export function classifyExecutor(result: RunPortResult): ExecClassification {
 
 /** Outcome of resolving a kind's optional `executor` name against the enabled plugins. */
 export type ExecutorSelection =
-  | { status: 'selected'; executor: DiscoveredPlugin }
-  | { status: 'needs-human'; reason: string };
+  { status: 'selected'; executor: DiscoveredPlugin } | { status: 'needs-human'; reason: string };
 
 /**
  * Select the executor plugin for a task (D1 §1.8, D2 §7): an unspecified `name`
