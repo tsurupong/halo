@@ -96,11 +96,14 @@ describe('runtime-node-pnpm 自衛タイムアウト (issue #55)', () => {
     expect(spawnCalls[0]?.options['timeout']).toBe(30_000);
   });
 
-  it.each(['0', '-5', '1.5', 'abc', ''])('不正値 %j は既定 270 秒にフォールバックする', async (v) => {
-    process.env[envKey] = v;
-    expect(await run()).toBe(0);
-    expect(spawnCalls[0]?.options['timeout']).toBe(270_000);
-  });
+  it.each(['0', '-5', '1.5', 'abc', ''])(
+    '不正値 %j は既定 270 秒にフォールバックする',
+    async (v) => {
+      process.env[envKey] = v;
+      expect(await run()).toBe(0);
+      expect(spawnCalls[0]?.options['timeout']).toBe(270_000);
+    },
+  );
 
   it('timeout (ETIMEDOUT) で終了したら exit 2、stderr に timeout と秒数が残る', async () => {
     process.env[envKey] = '12';
