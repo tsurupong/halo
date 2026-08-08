@@ -74,6 +74,57 @@ export function describeSetupFailure(res: {
   return tail === '' ? reason : `${reason}; stderr: ${tail}`;
 }
 
+/** setup 由来のレコードを gate 値だけで抽出できるようにする識別子 (30-test 等と同じ位置)。 */
+export const SETUP_FAILURE_GATE = 'setup';
+
+/** on-fail-record と同じ既定 (.halo/failure-catalog.jsonl)。HALO_CATALOG_JSONL 優先。 */
+export function failureCatalogJsonlPath(haloDir: string): string {
+  return process.env['HALO_CATALOG_JSONL'] ?? join(haloDir, 'failure-catalog.jsonl');
+}
+
+function parentDir(path: string): string {
+  const idx = path.lastIndexOf('/');
+  return idx <= 0 ? '.' : path.slice(0, idx);
+}
+
+/**
+ * issue #54: setup 失敗は stderr 1 行に消えるだけで failure-catalog にも iteration ログにも
+ * 残らず、後段の gate 失敗 (30-test 等) に化けて原因が識別できず再発頻度も測れなかった。
+ * 成功時は完全な no-op、失敗時のみ従来の stderr 1 行に加えて on-fail-record と同じ JSONL
+ * 書式 (ts/task_id/gate/retry_count/reason、スキーマ変更なし) で 1 レコード追記する。
+ * retry_count はタスク再試行ではないので 0。記録はベストエフォートで、追記に失敗しても
+ * 例外は投げない (setup 失敗を致命化しない現行方針を維持する、D2 §8.2)。
+ */
+export async function recordSetupFailure(opts: {
+  result: { exitCode: number | null; signal: string | null; stderr: string; timedOut: boolean };
+  catalogPath: string;
+  fs: RunWiringSeams['logsFs'];
+  now: number;
+  taskId: string;
+  warn?: (message: string) => void;
+}): Promise<void> {
+  if (opts.result.exitCode === 0) return;
+  const reason = describeSetupFailure(opts.result);
+  const warn = opts.warn ?? ((message: string) => void process.stderr.write(message));
+  warn(`[halo] runtime setup failed (${reason}); gate will surface missing deps\n`);
+  const record = {
+    ts: new Date(opts.now).toISOString().replace(/\.\d{3}Z$/, 'Z'),
+    task_id: opts.taskId,
+    gate: SETUP_FAILURE_GATE,
+    retry_count: 0,
+    reason,
+  };
+  try {
+    await opts.fs.mkdir(parentDir(opts.catalogPath), { recursive: true });
+    const prev = (await opts.fs.exists(opts.catalogPath))
+      ? await opts.fs.readFile(opts.catalogPath)
+      : '';
+    await opts.fs.writeFile(opts.catalogPath, `${prev}${JSON.stringify(record)}\n`);
+  } catch {
+    // 記録できないこと自体は run を止める理由にならない (診断は stderr に残る)。
+  }
+}
+
 /** worktree 生成/破棄シーム (D2 §8 は CLI/createWorktree の責務と規定)。 */
 export interface WorktreeSeam {
   create(cwd: string, taskId: string): Promise<string>;
@@ -606,12 +657,14 @@ export function createRunHooks(seams: RunWiringSeams = nodeRunWiringSeams()): Ru
                 stdin: { workdir, changed_files: [] },
                 timeoutMs: DEFAULT_PORT_TIMEOUT_SEC * 1000,
               });
-              if (setupRes.exitCode !== 0) {
-                process.stderr.write(
-                  `[halo] runtime setup failed (${describeSetupFailure(setupRes)}); ` +
-                    `gate will surface missing deps\n`,
-                );
-              }
+              // issue #54: 失敗は stderr だけでなく failure-catalog にも残す (gate=setup)。
+              await recordSetupFailure({
+                result: setupRes,
+                catalogPath: failureCatalogJsonlPath(ctx.haloDir),
+                fs: seams.logsFs,
+                now: seams.now(),
+                taskId: String(task.task_id),
+              });
             }
             return workdir;
           },
