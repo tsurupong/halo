@@ -74,6 +74,32 @@ export function describeSetupFailure(res: {
   return tail === '' ? reason : `${reason}; stderr: ${tail}`;
 }
 
+/** 正の有限数だけを通す。env 由来の文字列は parseInt、manifest 由来は数値のまま検証する。 */
+function positiveSecOrNull(raw: string | number | undefined): number | null {
+  if (raw === undefined) return null;
+  const n = typeof raw === 'number' ? raw : Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/**
+ * SetUp 段 (D2 §8.2) のプロセス上限 (秒) を解決する純関数。
+ *
+ * setup (pnpm install 等) は cold store の WSL2 等で既定 300 秒を超えることがあるが、
+ * 通常ポートの `opts.timeoutSec` に相当する上書き経路が setup には無かった。
+ * 優先順位: env `RUNTIME_SETUP_TIMEOUT_SEC` → runtime manifest の `timeoutSec` → 既定。
+ * 不正値 (非数・0・負) は無視して次段へ落とす。
+ */
+export function resolveSetupTimeoutSec(
+  env: Record<string, string | undefined>,
+  manifestTimeoutSec?: number,
+): number {
+  return (
+    positiveSecOrNull(env['RUNTIME_SETUP_TIMEOUT_SEC']) ??
+    positiveSecOrNull(manifestTimeoutSec) ??
+    DEFAULT_PORT_TIMEOUT_SEC
+  );
+}
+
 /** worktree 生成/破棄シーム (D2 §8 は CLI/createWorktree の責務と規定)。 */
 export interface WorktreeSeam {
   create(cwd: string, taskId: string): Promise<string>;
@@ -604,7 +630,8 @@ export function createRunHooks(seams: RunWiringSeams = nodeRunWiringSeams()): Ru
                   HALO_PLUGIN_DIR: runtimePlugin.dir,
                 },
                 stdin: { workdir, changed_files: [] },
-                timeoutMs: DEFAULT_PORT_TIMEOUT_SEC * 1000,
+                timeoutMs:
+                  resolveSetupTimeoutSec(process.env, runtimePlugin.manifest.timeoutSec) * 1000,
               });
               if (setupRes.exitCode !== 0) {
                 process.stderr.write(
