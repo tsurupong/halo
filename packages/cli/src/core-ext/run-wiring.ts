@@ -74,6 +74,83 @@ export function describeSetupFailure(res: {
   return tail === '' ? reason : `${reason}; stderr: ${tail}`;
 }
 
+/** 正の有限数だけを通す。env 由来の文字列は parseInt、manifest 由来は数値のまま検証する。 */
+function positiveSecOrNull(raw: string | number | undefined): number | null {
+  if (raw === undefined) return null;
+  const n = typeof raw === 'number' ? raw : Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/**
+ * SetUp 段 (D2 §8.2) のプロセス上限 (秒) を解決する純関数。
+ *
+ * setup (pnpm install 等) は cold store の WSL2 等で既定 300 秒を超えることがあるが、
+ * 通常ポートの `opts.timeoutSec` に相当する上書き経路が setup には無かった。
+ * 優先順位: env `RUNTIME_SETUP_TIMEOUT_SEC` → runtime manifest の `timeoutSec` → 既定。
+ * 不正値 (非数・0・負) は無視して次段へ落とす。
+ */
+export function resolveSetupTimeoutSec(
+  env: Record<string, string | undefined>,
+  manifestTimeoutSec?: number,
+): number {
+  return (
+    positiveSecOrNull(env['RUNTIME_SETUP_TIMEOUT_SEC']) ??
+    positiveSecOrNull(manifestTimeoutSec) ??
+    DEFAULT_PORT_TIMEOUT_SEC
+  );
+}
+
+/** setup 由来のレコードを gate 値だけで抽出できるようにする識別子 (30-test 等と同じ位置)。 */
+export const SETUP_FAILURE_GATE = 'setup';
+
+/** on-fail-record と同じ既定 (.halo/failure-catalog.jsonl)。HALO_CATALOG_JSONL 優先。 */
+export function failureCatalogJsonlPath(haloDir: string): string {
+  return process.env['HALO_CATALOG_JSONL'] ?? join(haloDir, 'failure-catalog.jsonl');
+}
+
+function parentDir(path: string): string {
+  const idx = path.lastIndexOf('/');
+  return idx <= 0 ? '.' : path.slice(0, idx);
+}
+
+/**
+ * issue #54: setup 失敗は stderr 1 行に消えるだけで failure-catalog にも iteration ログにも
+ * 残らず、後段の gate 失敗 (30-test 等) に化けて原因が識別できず再発頻度も測れなかった。
+ * 成功時は完全な no-op、失敗時のみ従来の stderr 1 行に加えて on-fail-record と同じ JSONL
+ * 書式 (ts/task_id/gate/retry_count/reason、スキーマ変更なし) で 1 レコード追記する。
+ * retry_count はタスク再試行ではないので 0。記録はベストエフォートで、追記に失敗しても
+ * 例外は投げない (setup 失敗を致命化しない現行方針を維持する、D2 §8.2)。
+ */
+export async function recordSetupFailure(opts: {
+  result: { exitCode: number | null; signal: string | null; stderr: string; timedOut: boolean };
+  catalogPath: string;
+  fs: RunWiringSeams['logsFs'];
+  now: number;
+  taskId: string;
+  warn?: (message: string) => void;
+}): Promise<void> {
+  if (opts.result.exitCode === 0) return;
+  const reason = describeSetupFailure(opts.result);
+  const warn = opts.warn ?? ((message: string) => void process.stderr.write(message));
+  warn(`[halo] runtime setup failed (${reason}); gate will surface missing deps\n`);
+  const record = {
+    ts: new Date(opts.now).toISOString().replace(/\.\d{3}Z$/, 'Z'),
+    task_id: opts.taskId,
+    gate: SETUP_FAILURE_GATE,
+    retry_count: 0,
+    reason,
+  };
+  try {
+    await opts.fs.mkdir(parentDir(opts.catalogPath), { recursive: true });
+    const prev = (await opts.fs.exists(opts.catalogPath))
+      ? await opts.fs.readFile(opts.catalogPath)
+      : '';
+    await opts.fs.writeFile(opts.catalogPath, `${prev}${JSON.stringify(record)}\n`);
+  } catch {
+    // 記録できないこと自体は run を止める理由にならない (診断は stderr に残る)。
+  }
+}
+
 /** worktree 生成/破棄シーム (D2 §8 は CLI/createWorktree の責務と規定)。 */
 export interface WorktreeSeam {
   create(cwd: string, taskId: string): Promise<string>;
@@ -604,14 +681,17 @@ export function createRunHooks(seams: RunWiringSeams = nodeRunWiringSeams()): Ru
                   HALO_PLUGIN_DIR: runtimePlugin.dir,
                 },
                 stdin: { workdir, changed_files: [] },
-                timeoutMs: DEFAULT_PORT_TIMEOUT_SEC * 1000,
+                timeoutMs:
+                  resolveSetupTimeoutSec(process.env, runtimePlugin.manifest.timeoutSec) * 1000,
               });
-              if (setupRes.exitCode !== 0) {
-                process.stderr.write(
-                  `[halo] runtime setup failed (${describeSetupFailure(setupRes)}); ` +
-                    `gate will surface missing deps\n`,
-                );
-              }
+              // issue #54: 失敗は stderr だけでなく failure-catalog にも残す (gate=setup)。
+              await recordSetupFailure({
+                result: setupRes,
+                catalogPath: failureCatalogJsonlPath(ctx.haloDir),
+                fs: seams.logsFs,
+                now: seams.now(),
+                taskId: String(task.task_id),
+              });
             }
             return workdir;
           },
