@@ -3,7 +3,7 @@ import { stringFlag, type ParsedArgs } from '../args.js';
 import type { ExitCode } from '../exit-codes.js';
 import { EXIT } from '../exit-codes.js';
 import type { Io } from '../io.js';
-import type { CliFs } from '../core-ext/fs.js';
+import type { CliFs } from '@tsurupong/halo-core';
 import type { IterationLog } from '@tsurupong/halo-core';
 import { classifyFailure, loadRuns, DEFAULT_SUMMARY_WINDOW_DAYS } from './status.js';
 

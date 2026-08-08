@@ -17,7 +17,7 @@ import { historyCommand } from './commands/history.js';
 import { watchdogCommand } from './commands/watchdog.js';
 import { doctorCommand } from './commands/doctor.js';
 import { enableCommand } from './commands/enable.js';
-import { createNodeCliFs } from './core-ext/fs.js';
+import { createNodeCliFs } from '@tsurupong/halo-core';
 import {
   nodeSpawnAdapter,
   nodeDoctorProbes,

@@ -7,8 +7,8 @@ import { arrayFlag, boolFlag, stringFlag, type ParsedArgs } from '../args.js';
 import type { ExitCode } from '../exit-codes.js';
 import { EXIT } from '../exit-codes.js';
 import type { Io } from '../io.js';
-import type { CliFs } from '../core-ext/fs.js';
-import { scaffold } from '../core-ext/scaffold.js';
+import type { CliFs } from '@tsurupong/halo-core';
+import { scaffold } from '@tsurupong/halo-core';
 import { BUNDLED_PLUGINS, DEFAULT_ENABLED_PLUGINS } from '@tsurupong/halo-plugins/registry';
 import { defaultResolvePluginsPackageJson, materializeManifest } from './enable.js';
 

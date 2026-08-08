@@ -1,11 +1,11 @@
-// `halo doctor` (T28, D3 §4): core-ext/doctor.runAll の結果を OK/WARN/FAIL 集計 →
+// `halo doctor` (T28, D3 §4): core (doctor.runAll) の結果を OK/WARN/FAIL 集計 →
 // 終了コード写像 (D3 §5.2)。--fix は scaffold.repair で骨格欠損のみ補完。
 import { boolFlag, type ParsedArgs } from '../args.js';
 import type { ExitCode } from '../exit-codes.js';
 import type { Io } from '../io.js';
-import { runAll, type DoctorProbes } from '../core-ext/doctor.js';
-import { repairSkeleton } from '../core-ext/scaffold.js';
-import type { CliFs } from '../core-ext/fs.js';
+import { runAll, type DoctorProbes } from '@tsurupong/halo-core';
+import { repairSkeleton } from '@tsurupong/halo-core';
+import type { CliFs } from '@tsurupong/halo-core';
 
 export interface DoctorDeps {
   probes: DoctorProbes;

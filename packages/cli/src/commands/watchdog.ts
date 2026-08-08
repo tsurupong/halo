@@ -10,7 +10,7 @@
 import { stringFlag, type ParsedArgs } from '../args.js';
 import { EXIT, CliError, type ExitCode } from '../exit-codes.js';
 import type { Io } from '../io.js';
-import type { CliFs } from '../core-ext/fs.js';
+import type { CliFs } from '@tsurupong/halo-core';
 import {
   defaultLockPath,
   parseLockFile,

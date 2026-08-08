@@ -4,7 +4,7 @@ import { createIo } from '../io.js';
 import { doctorCommand } from './doctor.js';
 import { EXIT } from '../exit-codes.js';
 import { memFs, captureStreams, type MemFs } from '../testkit.js';
-import type { CommandProbe, DoctorProbes } from '../core-ext/doctor.js';
+import type { CommandProbe, DoctorProbes } from '@tsurupong/halo-core';
 import { buildExecutorSettings, serializeExecutorSettings } from '@tsurupong/halo-core';
 
 function io(cap: ReturnType<typeof captureStreams>, json = false) {
