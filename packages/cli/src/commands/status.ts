@@ -3,8 +3,8 @@ import { stringFlag, type ParsedArgs } from '../args.js';
 import type { ExitCode } from '../exit-codes.js';
 import { EXIT } from '../exit-codes.js';
 import type { Io } from '../io.js';
-import type { CliFs } from '../core-ext/fs.js';
-import { listTriggers, type SpawnAdapter } from '../core-ext/triggers.js';
+import type { CliFs } from '@tsurupong/halo-core';
+import { listTriggers, type SpawnAdapter } from '@tsurupong/halo-core';
 import {
   checkBudget,
   isIterationLogName,

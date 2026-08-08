@@ -4,7 +4,7 @@ import { createIo } from '../io.js';
 import { triggerCommand } from './trigger.js';
 import { EXIT, CliError } from '../exit-codes.js';
 import { memFs, captureStreams } from '../testkit.js';
-import type { SpawnResult } from '../core-ext/triggers.js';
+import type { SpawnResult } from '@tsurupong/halo-core';
 
 function io(cap: ReturnType<typeof captureStreams>, json = false) {
   return createIo(cap.streams, { cwd: '/repo', json, quiet: false, verbose: false });
