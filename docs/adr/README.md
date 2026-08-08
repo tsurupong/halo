@@ -34,3 +34,7 @@ The current top-level authority is Requirements Specification v1.8, and ADR-0009
 | [0025](0025-task-source-claim-semantics.md) | task-source 契約への claim/release セマンティクス追加 | accepted (implemented 2026-07-29, PR #29) | 2026-07-29 |
 | [0026](0026-executor-egress-prohibition.md) | executor の外部送信禁止 (egress deny) | accepted (implemented 2026-07-29, PR #28) | 2026-07-29 |
 | [0027](0027-default-failure-feedback-plugins.md) | `project init` での on-fail-record + context-recent-failures 既定有効化 | accepted (implemented 2026-08-01, PR #31) | 2026-08-01 |
+| [0028](0028-sink-create-pr.md) | sink-create-pr の前倒し実装 | accepted (implemented 2026-08-02, issue #45) | 2026-08-02 |
+| [0029](0029-kind-executor-selection.md) | .harness.yml kind への executor 明示指定 | accepted (implemented 2026-08-04, issue #51) | 2026-08-04 |
+| [0030](0030-doctor-executor-port-driven.md) | doctor の executor 検査ポート駆動化と SINGLE_PORTS の扱い | proposed | 2026-08-08 |
+| [0031](0031-deny-injection-vendor-neutral.md) | deny 注入のベンダ中立化 | proposed | 2026-08-08 |
