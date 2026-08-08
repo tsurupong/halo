@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseArgs } from '../args.js';
 import { createIo } from '../io.js';
 import { captureStreams } from '../testkit.js';
-import { createNodeCliFs } from '../core-ext/fs.js';
+import { createNodeCliFs } from '@tsurupong/halo-core';
 import { loadHarnessYml, createNodeDiscoveryFs } from '@tsurupong/halo-core';
 import { createRunHooks } from '../core-ext/run-wiring.js';
 import { runCommand } from './run.js';

@@ -5,7 +5,7 @@ import { type ParsedArgs } from '../args.js';
 import type { ExitCode } from '../exit-codes.js';
 import { EXIT, usageError, runtimeError } from '../exit-codes.js';
 import type { Io } from '../io.js';
-import type { CliFs } from '../core-ext/fs.js';
+import type { CliFs } from '@tsurupong/halo-core';
 import {
   installTrigger,
   uninstallTrigger,
@@ -13,7 +13,7 @@ import {
   isSafeName,
   type SpawnAdapter,
   type TriggerContext,
-} from '../core-ext/triggers.js';
+} from '@tsurupong/halo-core';
 
 export interface TriggerDeps {
   fs: CliFs;

@@ -1,5 +1,5 @@
 // テスト専用の in-memory CliFs とストリームキャプチャ。実 I/O を排し写像テストに徹する。
-import type { CliFs } from './core-ext/fs.js';
+import type { CliFs } from '@tsurupong/halo-core';
 import type { Streams } from './io.js';
 
 export interface MemFs extends CliFs {

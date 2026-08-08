@@ -3,8 +3,8 @@ import { stringFlag, type ParsedArgs } from '../args.js';
 import type { ExitCode } from '../exit-codes.js';
 import { EXIT } from '../exit-codes.js';
 import type { Io } from '../io.js';
-import type { CliFs } from '../core-ext/fs.js';
-import { setStop, clearStop } from '../core-ext/killswitch.js';
+import type { CliFs } from '@tsurupong/halo-core';
+import { setStop, clearStop } from '@tsurupong/halo-core';
 
 export interface StopDeps {
   fs: CliFs;

@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { expect, test, describe, afterEach } from 'vitest';
 import { parseArgs } from '../args.js';
 import { createIo } from '../io.js';
-import { createNodeCliFs } from '../core-ext/fs.js';
+import { createNodeCliFs } from '@tsurupong/halo-core';
 import { enableCommand, materializeManifest } from './enable.js';
 import { BUNDLED_PLUGINS } from '@tsurupong/halo-plugins/registry';
 import { EXIT } from '../exit-codes.js';

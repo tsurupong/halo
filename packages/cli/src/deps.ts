@@ -1,9 +1,9 @@
 // 既定の実 I/O 配線 (D3 §0)。コマンドは全てシーム注入で書かれており、ここが唯一
 // 実 fs / spawn / 外部コマンド probe を束ねる場所。テストはこの配線を使わず自前で注入する。
 import { spawn as nodeSpawn } from 'node:child_process';
-import type { CliFs } from './core-ext/fs.js';
-import type { SpawnAdapter, SpawnResult, TriggerContext } from './core-ext/triggers.js';
-import type { CommandProbe, DoctorProbes } from './core-ext/doctor.js';
+import type { CliFs } from '@tsurupong/halo-core';
+import type { SpawnAdapter, SpawnResult, TriggerContext } from '@tsurupong/halo-core';
+import type { CommandProbe, DoctorProbes } from '@tsurupong/halo-core';
 import type { RunHooks, SignalSeam } from './commands/run.js';
 import type { SchedulerSeam } from './commands/watchdog.js';
 import { schedulerInstall, schedulerUninstall } from '@tsurupong/halo-plugins/lib/scheduler';
